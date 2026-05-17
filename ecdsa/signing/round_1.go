@@ -91,20 +91,23 @@ func (round *round1) Start() *tss.Error {
 }
 
 func (round *round1) Update() (bool, *tss.Error) {
+	ret := true
 	for j, msg1 := range round.temp.signRound1Message1s {
 		if round.ok[j] {
 			continue
 		}
 		if msg1 == nil || !round.CanAccept(msg1) {
-			return false, nil
+			ret = false
+			continue
 		}
 		msg2 := round.temp.signRound1Message2s[j]
 		if msg2 == nil || !round.CanAccept(msg2) {
-			return false, nil
+			ret = false
+			continue
 		}
 		round.ok[j] = true
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round1) CanAccept(msg tss.ParsedMessage) bool {

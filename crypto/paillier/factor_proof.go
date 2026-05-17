@@ -89,6 +89,22 @@ func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int, session ...[]byte) (bo
 	if common.AnyIsNil(pf.P, pf.Q, pf.A, pf.B, pf.T, pf.Sigma, pf.Z1, pf.Z2, pf.W1, pf.W2, pf.V) {
 		return false, fmt.Errorf("fac proof verify: nil bigint present in proof")
 	}
+	if N.Sign() <= 0 {
+		return false, fmt.Errorf("fac proof verify: invalid modulus %x", N)
+	}
+	for name, base := range map[string]*big.Int{
+		"s": s,
+		"t": t,
+		"P": pf.P,
+		"Q": pf.Q,
+		"A": pf.A,
+		"B": pf.B,
+		"T": pf.T,
+	} {
+		if !common.IsInInterval(base, N) || !common.Coprime(base, N) {
+			return false, fmt.Errorf("fac proof verify: base %s = %x is not invertible modulo N", name, base)
+		}
+	}
 
 	e := FactorChallenge(N, s, t, pkN, pf.P, pf.Q, pf.A, pf.B, pf.T, pf.Sigma, session...)
 

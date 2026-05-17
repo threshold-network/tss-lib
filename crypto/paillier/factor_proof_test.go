@@ -135,6 +135,19 @@ func TestFactorProofVerifyFail3(t *testing.T) {
 	assert.False(t, res, "proof verify result must be false")
 }
 
+func TestFactorProofVerifyRejectsNonInvertibleBase(t *testing.T) {
+	facSetUp(t)
+	proof := privateKey.FactorProof(auxPrime.N, s, tt)
+	proof.Q = big.NewInt(0)
+	proof.Z1 = big.NewInt(-1)
+
+	assert.NotPanics(t, func() {
+		res, err := proof.FactorVerify(publicKey.N, auxPrime.N, s, tt)
+		assert.Error(t, err)
+		assert.False(t, res, "proof verify result must be false")
+	})
+}
+
 func TestFactorProofVerifyFailBadFactors(t *testing.T) {
 	facSetUp(t)
 	proof := badPrivateKey.FactorProof(auxPrime.N, s, tt)

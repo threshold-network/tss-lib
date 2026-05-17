@@ -10,6 +10,7 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"math/big"
+	"reflect"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -169,6 +170,12 @@ signing:
 	signErrCh := make(chan *tss.Error, len(signPIDs))
 	signOutCh := make(chan tss.Message, len(signPIDs))
 	signEndCh := make(chan common.SignatureData, len(signPIDs))
+	signResultCh := make(chan signatureDataParts, len(signPIDs))
+	go func() {
+		for i := 0; i < len(signPIDs); i++ {
+			signResultCh <- recvSignatureDataParts(signEndCh)
+		}
+	}()
 
 	for j, signPID := range signPIDs {
 		params := tss.NewParameters(tss.S256(), signP2pCtx, signPID, len(signPIDs), newThreshold)
@@ -206,7 +213,7 @@ signing:
 				go updater(signParties[dest[0].Index], msg, signErrCh)
 			}
 
-		case signData := <-signEndCh:
+		case signData := <-signResultCh:
 			atomic.AddInt32(&signEnded, 1)
 			if atomic.LoadInt32(&signEnded) == int32(len(signPIDs)) {
 				t.Logf("Signing done. Received sign data from %d participants", signEnded)
@@ -219,8 +226,8 @@ signing:
 					Y:     pkY,
 				}
 				ok := ecdsa.Verify(&pk, big.NewInt(42).Bytes(),
-					new(big.Int).SetBytes(signData.R),
-					new(big.Int).SetBytes(signData.S))
+					new(big.Int).SetBytes(signData.r),
+					new(big.Int).SetBytes(signData.s))
 
 				assert.True(t, ok, "ecdsa verify must pass")
 				t.Log("ECDSA signing test done.")
@@ -229,5 +236,26 @@ signing:
 				return
 			}
 		}
+	}
+}
+
+type signatureDataParts struct {
+	signature []byte
+	r         []byte
+	s         []byte
+}
+
+func recvSignatureDataParts(ch <-chan common.SignatureData) signatureDataParts {
+	_, value, ok := reflect.Select([]reflect.SelectCase{{
+		Dir:  reflect.SelectRecv,
+		Chan: reflect.ValueOf(ch),
+	}})
+	if !ok {
+		return signatureDataParts{}
+	}
+	return signatureDataParts{
+		signature: append([]byte(nil), value.FieldByName("Signature").Bytes()...),
+		r:         append([]byte(nil), value.FieldByName("R").Bytes()...),
+		s:         append([]byte(nil), value.FieldByName("S").Bytes()...),
 	}
 }

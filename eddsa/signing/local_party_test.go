@@ -101,7 +101,7 @@ signing:
 				go updater(parties[dest[0].Index], msg, errCh)
 			}
 
-		case sig := <-endCh:
+		case <-endCh:
 			atomic.AddInt32(&ended, 1)
 			if atomic.LoadInt32(&ended) == int32(len(signPIDs)) {
 				t.Logf("Done. Received signature data from %d participants", ended)
@@ -137,7 +137,7 @@ signing:
 
 				ok := edwards.Verify(&pk, msgData, newSig.R, newSig.S)
 				assert.True(t, ok, "eddsa verify must pass")
-				assert.Equal(t, msgData, sig.M)
+				assert.Equal(t, msgData, parties[0].data.M)
 				t.Log("EDDSA signing test done.")
 				// END EDDSA verify
 

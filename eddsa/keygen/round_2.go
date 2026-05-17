@@ -8,9 +8,11 @@ package keygen
 
 import (
 	"errors"
+	"math/big"
 
 	errors2 "github.com/pkg/errors"
 
+	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto/schnorr"
 	"github.com/bnb-chain/tss-lib/tss"
 )
@@ -45,7 +47,8 @@ func (round *round2) Start() *tss.Error {
 	}
 
 	// 5. compute Schnorr prove
-	pii, err := schnorr.NewZKProof(round.temp.ui, round.temp.vs[0])
+	contextI := common.AppendBigIntToBytesSlice(round.temp.ssid, big.NewInt(int64(i)))
+	pii, err := schnorr.NewZKProofWithSession(contextI, round.temp.ui, round.temp.vs[0])
 	if err != nil {
 		return round.WrapError(errors2.Wrapf(err, "NewZKProof(ui, vi0)"))
 	}

@@ -100,18 +100,22 @@ func (round *round3) Start() *tss.Error {
 			ok, err = FacProof.FactorVerify(pkN, NTilde, H1i, H2i, contextJ)
 			if err != nil {
 				ch <- vssOut{err, nil}
+				return
 			}
 			if !ok {
 				ch <- vssOut{errors.New("factor proof verify failed"), nil}
+				return
 			}
 			FacProofTilde := r2msg1.UnmarshalFactorProofTilde()
 			NTildej := round.save.NTildej[j]
 			ok, err = FacProofTilde.FactorVerify(NTildej, NTilde, H1i, H2i, contextJ)
 			if err != nil {
 				ch <- vssOut{err, nil}
+				return
 			}
 			if !ok {
 				ch <- vssOut{errors.New("factor proof verify failed"), nil}
+				return
 			}
 			// (9) handled above
 			ch <- vssOut{nil, PjVs}

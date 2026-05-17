@@ -9,6 +9,7 @@ package signing
 import (
 	"errors"
 	"fmt"
+	"math/big"
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
@@ -31,6 +32,17 @@ func (round *round1) Start() *tss.Error {
 	round.number = 1
 	round.started = true
 	round.resetOK()
+
+	if nonce := round.Params().SessionNonce(); nonce != nil {
+		round.temp.ssidNonce = new(big.Int).Set(nonce)
+	} else {
+		round.temp.ssidNonce = new(big.Int).Set(round.temp.m)
+	}
+	ssid, err := round.getSSID()
+	if err != nil {
+		return round.WrapError(err)
+	}
+	round.temp.ssid = ssid
 
 	// 1. select ri
 	ri := common.GetRandomPositiveInt(round.Params().EC().Params().N)

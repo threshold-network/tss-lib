@@ -21,9 +21,10 @@ func LiterallyJustMod(q *big.Int, eHash *big.Int) *big.Int { // e' = eHash
 	return e
 }
 
-// RejectionSample implements the upstream challenge reduction name. For the
-// secp256k1 and ed25519 group orders used here this has the same behavior as
-// LiterallyJustMod.
+// RejectionSample preserves the upstream challenge-reduction function name.
+// This implementation reduces the hash modulo q rather than looping with fresh
+// hash material, so callers must only use it where modular-reduction bias is
+// acceptable for the proof challenge.
 func RejectionSample(q *big.Int, eHash *big.Int) *big.Int {
 	return LiterallyJustMod(q, eHash)
 }

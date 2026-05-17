@@ -60,6 +60,9 @@ type (
 
 		// round 3
 		r *big.Int
+
+		ssid      []byte
+		ssidNonce *big.Int
 	}
 )
 
