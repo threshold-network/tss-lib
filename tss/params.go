@@ -8,6 +8,7 @@ package tss
 
 import (
 	"crypto/elliptic"
+	"math/big"
 	"runtime"
 	"time"
 )
@@ -21,6 +22,10 @@ type (
 		threshold           int
 		concurrency         int
 		safePrimeGenTimeout time.Duration
+		// sessionNonce provides per-session SSID uniqueness for GG20
+		// proof binding. Signing falls back to the message hash; keygen
+		// and resharing require callers to coordinate a shared nonce.
+		sessionNonce *big.Int
 	}
 
 	ReSharingParameters struct {
@@ -83,6 +88,21 @@ func (params *Parameters) SetConcurrency(concurrency int) {
 
 func (params *Parameters) SetSafePrimeGenTimeout(timeout time.Duration) {
 	params.safePrimeGenTimeout = timeout
+}
+
+// SessionNonce returns the optional per-session nonce used in proof challenges.
+func (params *Parameters) SessionNonce() *big.Int {
+	return params.sessionNonce
+}
+
+// SetSessionNonce sets a per-session nonce that all parties in a protocol run
+// must agree on.
+func (params *Parameters) SetSessionNonce(nonce *big.Int) {
+	if nonce == nil {
+		params.sessionNonce = nil
+		return
+	}
+	params.sessionNonce = new(big.Int).Set(nonce)
 }
 
 // ----- //

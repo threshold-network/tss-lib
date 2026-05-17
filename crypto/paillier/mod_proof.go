@@ -25,7 +25,7 @@ type (
 // Canetti, R., Gennaro, R., Goldfeder, S., Makriyannis, N., Peled, U.:
 // UC Non-Interactive, Proactive, Threshold ECDSA with Identifiable Aborts.
 // In: Cryptology ePrint Archive 2021/060
-func (privateKey *PrivateKey) ModProof() *ModProof {
+func (privateKey *PrivateKey) ModProof(session ...[]byte) *ModProof {
 	N := privateKey.PublicKey.N
 	phiN := privateKey.PhiN
 	p, q := privateKey.GetPQ()
@@ -35,7 +35,7 @@ func (privateKey *PrivateKey) ModProof() *ModProof {
 		w = common.GetRandomPositiveInt(N)
 	}
 
-	y := ModChallenge(N, w)
+	y := ModChallenge(N, w, session...)
 
 	var x [PARAM_M]*big.Int
 	var a [PARAM_M]bool
@@ -67,7 +67,7 @@ func (privateKey *PrivateKey) ModProof() *ModProof {
 // – N is an odd composite number.
 // – z_i^N = y_i for every i ∈ [m]
 // – x_i^4 = (-1)^a_i * w^b_i * y_i mod N and a_i, b_i ∈ {0, 1} for every i ∈ [m].
-func (pf ModProof) ModVerify(N *big.Int) (bool, error) {
+func (pf ModProof) ModVerify(N *big.Int, session ...[]byte) (bool, error) {
 	if common.AnyIsNil(pf.W) || common.AnyIsNil(pf.X[:]...) || common.AnyIsNil(pf.Z[:]...) {
 		return false, fmt.Errorf("mod proof verify: nil inputs in proof")
 	}
@@ -91,7 +91,7 @@ func (pf ModProof) ModVerify(N *big.Int) (bool, error) {
 		return false, fmt.Errorf("mod proof verify: w %d exceeds N %d", pf.W, N)
 	}
 
-	y := ModChallenge(N, pf.W)
+	y := ModChallenge(N, pf.W, session...)
 
 	for i, yi := range y {
 		if !common.Lt(pf.X[i], N) {
@@ -125,11 +125,16 @@ func (pf ModProof) ModVerify(N *big.Int) (bool, error) {
 }
 
 // Standard Fiat-Shamir transform
-func ModChallenge(N, w *big.Int) [PARAM_M]*big.Int {
+func ModChallenge(N, w *big.Int, session ...[]byte) [PARAM_M]*big.Int {
 	var y [PARAM_M]*big.Int
 
 	for i := range y {
-		y[i] = common.HashToN(N, w, big.NewInt(int64(i)))
+		if len(session) == 0 {
+			y[i] = common.HashToN(N, w, big.NewInt(int64(i)))
+			continue
+		}
+		ei := common.SHA512_256i_TAGGED(session[0], append([]*big.Int{w, N}, y[:i]...)...)
+		y[i] = common.RejectionSample(N, ei)
 	}
 
 	return y

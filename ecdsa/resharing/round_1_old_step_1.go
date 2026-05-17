@@ -89,16 +89,22 @@ func (round *round1) Update() (bool, *tss.Error) {
 	if !round.ReSharingParameters.IsNewCommittee() {
 		return true, nil
 	}
+	ret := true
 	// accept messages from old -> new committee
 	for j, msg := range round.temp.dgRound1Messages {
 		if round.oldOK[j] {
 			continue
 		}
 		if msg == nil || !round.CanAccept(msg) {
-			return false, nil
+			ret = false
+			continue
 		}
 		round.oldOK[j] = true
 
+		if round.temp.dgRound1Messages[0] == nil {
+			ret = false
+			continue
+		}
 		// save the ecdsa pub received from the old committee
 		r1msg := round.temp.dgRound1Messages[0].Content().(*DGRound1Message)
 		candidate, err := r1msg.UnmarshalECDSAPub(round.Params().EC())
@@ -112,7 +118,7 @@ func (round *round1) Update() (bool, *tss.Error) {
 		}
 		round.save.ECDSAPub = candidate
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round1) NextRound() tss.Round {

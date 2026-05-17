@@ -61,6 +61,8 @@ type (
 		newXi     *big.Int
 		newKs     []*big.Int
 		newBigXjs []*crypto.ECPoint // Xj to save in round 5
+		ssid      []byte
+		ssidNonce *big.Int
 	}
 )
 

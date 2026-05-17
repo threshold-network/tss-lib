@@ -41,7 +41,9 @@ func (round *round4) Start() *tss.Error {
 
 	// compute the multiplicative inverse thelta mod q
 	thetaInverse = modN.ModInverse(thetaInverse)
-	piGamma, err := schnorr.NewZKProof(round.temp.gamma, round.temp.pointGamma)
+	i := round.PartyID().Index
+	contextI := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(i)))
+	piGamma, err := schnorr.NewZKProofWithSession(contextI, round.temp.gamma, round.temp.pointGamma)
 	if err != nil {
 		return round.WrapError(errors2.Wrapf(err, "NewZKProof(gamma, bigGamma)"))
 	}
@@ -54,16 +56,18 @@ func (round *round4) Start() *tss.Error {
 }
 
 func (round *round4) Update() (bool, *tss.Error) {
+	ret := true
 	for j, msg := range round.temp.signRound4Messages {
 		if round.ok[j] {
 			continue
 		}
 		if msg == nil || !round.CanAccept(msg) {
-			return false, nil
+			ret = false
+			continue
 		}
 		round.ok[j] = true
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round4) CanAccept(msg tss.ParsedMessage) bool {

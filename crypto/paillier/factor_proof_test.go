@@ -91,6 +91,24 @@ func TestFactorProofVerify(t *testing.T) {
 	assert.True(t, res, "proof verify result must be true")
 }
 
+func TestFactorProofSessionBinding(t *testing.T) {
+	facSetUp(t)
+	session := []byte("factor-proof-session-a")
+	proof := privateKey.FactorProof(auxPrime.N, s, tt, session)
+
+	res, err := proof.FactorVerify(publicKey.N, auxPrime.N, s, tt, session)
+	assert.NoError(t, err)
+	assert.True(t, res, "proof verify result must be true")
+
+	res, err = proof.FactorVerify(publicKey.N, auxPrime.N, s, tt, []byte("factor-proof-session-b"))
+	assert.Error(t, err)
+	assert.False(t, res, "proof verify result must be false")
+
+	res, err = proof.FactorVerify(publicKey.N, auxPrime.N, s, tt)
+	assert.Error(t, err)
+	assert.False(t, res, "session-bound proof must not verify without its session")
+}
+
 func TestFactorProofVerifyFail1(t *testing.T) {
 	facSetUp(t)
 	badN := new(big.Int).Mul(publicKey.N, big.NewInt(3))

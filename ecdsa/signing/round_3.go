@@ -38,6 +38,7 @@ func (round *round3) Start() *tss.Error {
 		if j == i {
 			continue
 		}
+		contextJ := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(j)))
 		// Alice_end
 		go func(j int, Pj *tss.PartyID) {
 			defer wg.Done()
@@ -56,7 +57,8 @@ func (round *round3) Start() *tss.Error {
 				round.temp.cis[j],
 				new(big.Int).SetBytes(r2msg.GetC1()),
 				round.key.NTildej[i],
-				round.key.PaillierSK)
+				round.key.PaillierSK,
+				contextJ)
 			alphas[j] = alphaIj
 			if err != nil {
 				errChs <- round.WrapError(err, Pj)
@@ -81,7 +83,8 @@ func (round *round3) Start() *tss.Error {
 				round.key.NTildej[i],
 				round.key.H1j[i],
 				round.key.H2j[i],
-				round.key.PaillierSK)
+				round.key.PaillierSK,
+				contextJ)
 			us[j] = uIj
 			if err != nil {
 				errChs <- round.WrapError(err, Pj)
@@ -122,16 +125,18 @@ func (round *round3) Start() *tss.Error {
 }
 
 func (round *round3) Update() (bool, *tss.Error) {
+	ret := true
 	for j, msg := range round.temp.signRound3Messages {
 		if round.ok[j] {
 			continue
 		}
 		if msg == nil || !round.CanAccept(msg) {
-			return false, nil
+			ret = false
+			continue
 		}
 		round.ok[j] = true
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round3) CanAccept(msg tss.ParsedMessage) bool {

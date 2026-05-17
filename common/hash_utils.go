@@ -21,6 +21,13 @@ func LiterallyJustMod(q *big.Int, eHash *big.Int) *big.Int { // e' = eHash
 	return e
 }
 
+// RejectionSample implements the upstream challenge reduction name. For the
+// secp256k1 and ed25519 group orders used here this has the same behavior as
+// LiterallyJustMod.
+func RejectionSample(q *big.Int, eHash *big.Int) *big.Int {
+	return LiterallyJustMod(q, eHash)
+}
+
 // Return a big.Int between 0 and N
 func HashToN(N *big.Int, in ...*big.Int) *big.Int {
 	bitCnt := N.BitLen()

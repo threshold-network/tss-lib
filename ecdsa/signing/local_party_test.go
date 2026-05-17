@@ -8,6 +8,7 @@ package signing
 
 import (
 	"crypto/ecdsa"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"runtime"
@@ -56,11 +57,15 @@ func TestE2EConcurrent(t *testing.T) {
 
 	updater := test.SharedPartyUpdater
 
+	msgData, err := hex.DecodeString("00f163ee51bcaeff9cdff5e0e3c1a646abd19885fffbab0b3b4236e0cf95c9f5")
+	assert.NoError(t, err)
+	msgInt := new(big.Int).SetBytes(msgData)
+
 	// init the parties
 	for i := 0; i < len(signPIDs); i++ {
 		params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[i], len(signPIDs), threshold)
 
-		P := NewLocalParty(big.NewInt(42), params, keys[i], outCh, endCh).(*LocalParty)
+		P := NewLocalParty(msgInt, params, keys[i], outCh, endCh, len(msgData)).(*LocalParty)
 		parties = append(parties, P)
 		go func(P *LocalParty) {
 			if err := P.Start(); err != nil {
@@ -95,7 +100,7 @@ signing:
 				go updater(parties[dest[0].Index], msg, errCh)
 			}
 
-		case <-endCh:
+		case sig := <-endCh:
 			atomic.AddInt32(&ended, 1)
 			if atomic.LoadInt32(&ended) == int32(len(signPIDs)) {
 				t.Logf("Done. Received signature data from %d participants", ended)
@@ -120,8 +125,9 @@ signing:
 					X:     pkX,
 					Y:     pkY,
 				}
-				ok := ecdsa.Verify(&pk, big.NewInt(42).Bytes(), R.X(), sumS)
+				ok := ecdsa.Verify(&pk, msgData, R.X(), sumS)
 				assert.True(t, ok, "ecdsa verify must pass")
+				assert.Equal(t, msgData, sig.M)
 				t.Log("ECDSA signing test done.")
 				// END ECDSA verify
 

@@ -50,10 +50,10 @@ func (round *round3) Start() *tss.Error {
 		}
 
 		Rj, err := crypto.NewECPoint(round.Params().EC(), coordinates[0], coordinates[1])
-		Rj = Rj.EightInvEight()
 		if err != nil {
 			return round.WrapError(errors.Wrapf(err, "NewECPoint(Rj)"), Pj)
 		}
+		Rj = Rj.EightInvEight()
 		proof, err := r2msg.UnmarshalZKProof(round.Params().EC())
 		if err != nil {
 			return round.WrapError(errors.New("failed to unmarshal Rj proof"), Pj)
@@ -77,7 +77,13 @@ func (round *round3) Start() *tss.Error {
 	h.Reset()
 	h.Write(encodedR[:])
 	h.Write(encodedPubKey[:])
-	h.Write(round.temp.m.Bytes())
+	if round.temp.fullBytesLen == 0 {
+		h.Write(round.temp.m.Bytes())
+	} else {
+		mBytes := make([]byte, round.temp.fullBytesLen)
+		round.temp.m.FillBytes(mBytes)
+		h.Write(mBytes)
+	}
 
 	var lambda [64]byte
 	h.Sum(lambda[:0])
@@ -101,16 +107,18 @@ func (round *round3) Start() *tss.Error {
 }
 
 func (round *round3) Update() (bool, *tss.Error) {
+	ret := true
 	for j, msg := range round.temp.signRound3Messages {
 		if round.ok[j] {
 			continue
 		}
 		if msg == nil || !round.CanAccept(msg) {
-			return false, nil
+			ret = false
+			continue
 		}
 		round.ok[j] = true
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round3) CanAccept(msg tss.ParsedMessage) bool {

@@ -83,34 +83,35 @@ func (round *round4) Start() *tss.Error {
 		}(j, msg, r2msg1)
 		_j := j
 		_msg := msg
+		contextJ := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(j)))
 		verifier.VerifyDLNProof1(r2msg1, H1j, H2j, NTildej, func(isValid bool) {
 			if !isValid {
 				dlnProof1FailCulprits[_j] = _msg.GetFrom()
 				common.Logger.Warningf("dln proof 1 verify failed for party %s", _msg.GetFrom())
 			}
 			wg.Done()
-		})
+		}, round.temp.ssid)
 		verifier.VerifyDLNProof2(r2msg1, H2j, H1j, NTildej, func(isValid bool) {
 			if !isValid {
 				dlnProof2FailCulprits[_j] = _msg.GetFrom()
 				common.Logger.Warningf("dln proof 2 verify failed for party %s", _msg.GetFrom())
 			}
 			wg.Done()
-		})
+		}, round.temp.ssid)
 		verifier.VerifyModProof(r2msg1, paiPK.N, func(isValid bool) {
 			if !isValid {
 				modProofFailCulprits[_j] = _msg.GetFrom()
 				common.Logger.Warningf("mod proof verify failed for party %s", _msg.GetFrom())
 			}
 			wg.Done()
-		})
+		}, contextJ)
 		verifier.VerifyModProofTilde(r2msg1, NTildej, func(isValid bool) {
 			if !isValid {
-				modProofFailCulprits[_j] = _msg.GetFrom()
+				modProofTildeFailCulprits[_j] = _msg.GetFrom()
 				common.Logger.Warningf("mod proof tilde verify failed for party %s", _msg.GetFrom())
 			}
 			wg.Done()
-		})
+		}, contextJ)
 	}
 	wg.Wait()
 	for _, culprit := range append(append(paiProofCulprits, dlnProof1FailCulprits...), dlnProof2FailCulprits...) {
@@ -217,6 +218,7 @@ func (round *round4) Start() *tss.Error {
 		return round.WrapError(errors2.Wrapf(err, "newBigXj.Add(Vc[c].ScalarMult(z))"), paiProofCulprits...)
 	}
 
+	contextI := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(i)))
 	for j, Pj := range round.NewParties().IDs() {
 
 		if common.Eq(Pi.KeyInt(), Pj.KeyInt()) {
@@ -225,8 +227,8 @@ func (round *round4) Start() *tss.Error {
 
 		// Add factor proofs
 		H1j, H2j, NTildej := round.save.H1j[j], round.save.H2j[j], round.save.NTildej[j]
-		facProof := round.save.LocalPreParams.PaillierSK.FactorProof(NTildej, H1j, H2j)
-		facProofTilde := round.temp.skTilde.FactorProof(NTildej, H1j, H2j)
+		facProof := round.save.LocalPreParams.PaillierSK.FactorProof(NTildej, H1j, H2j, contextI)
+		facProofTilde := round.temp.skTilde.FactorProof(NTildej, H1j, H2j, contextI)
 
 		r4msg1 := NewDGRound4Message1(Pj, Pi, facProof, facProofTilde)
 		round.out <- r4msg1

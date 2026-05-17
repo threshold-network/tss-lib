@@ -147,9 +147,9 @@ keygen:
 
 					// fails if threshold cannot be satisfied (bad share)
 					{
-						badShares := pShares[:threshold]
+						badShares := pShares[:threshold+1]
 						badShares[len(badShares)-1].Share.Set(big.NewInt(0))
-						uj, err := pShares[:threshold].ReConstruct(tss.Edwards())
+						uj, err := pShares[:threshold+1].ReConstruct(tss.Edwards())
 						assert.NoError(t, err)
 						assert.NotEqual(t, parties[j].temp.ui, uj)
 						BigXjX, BigXjY := tss.Edwards().ScalarBaseMult(uj.Bytes())

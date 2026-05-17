@@ -100,6 +100,16 @@ func (mi *modInt) i() *big.Int {
 	return (*big.Int)(mi)
 }
 
+func IsInInterval(b *big.Int, bound *big.Int) bool {
+	return b != nil && bound != nil && b.Cmp(bound) < 0 && b.Cmp(zero) >= 0
+}
+
+func AppendBigIntToBytesSlice(commonBytes []byte, appended *big.Int) []byte {
+	resultBytes := make([]byte, len(commonBytes), len(commonBytes)+len(appended.Bytes()))
+	copy(resultBytes, commonBytes)
+	return append(resultBytes, appended.Bytes()...)
+}
+
 // Marshal the given bigint into bytes.
 // with the sign stored in the first byte and the absolute value in the rest.
 // `nil` or 0 is stored as the byte 0x00.

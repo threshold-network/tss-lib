@@ -32,7 +32,8 @@ type (
 )
 
 // ProveRangeAlice implements Alice's range proof used in the MtA and MtAwc protocols from GG18Spec (9) Fig. 9.
-func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h2, m, r *big.Int) (*RangeProofAlice, error) {
+func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h2, m, r *big.Int, session ...[]byte) (*RangeProofAlice, error) {
+	Session := optionalProofSession(session)
 	if pk == nil || NTilde == nil || h1 == nil || h2 == nil || c == nil || m == nil || r == nil {
 		return nil, errors.New("ProveRangeAlice constructor received nil value(s)")
 	}
@@ -69,7 +70,8 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 	w = modNTilde.Mul(w, modNTilde.Exp(h2, gamma))
 
 	// 8-9. e'
-	e := common.HashToN(q, append(pk.AsInts(), c, z, u, w)...)
+	eHash := common.SHA512_256i_TAGGED(Session, append(pk.AsInts(), NTilde, h1, h2, c, z, u, w)...)
+	e := common.RejectionSample(q, eHash)
 
 	modN := common.ModInt(pk.N)
 	s := modN.Exp(r, e)
@@ -100,8 +102,12 @@ func RangeProofAliceFromBytes(bzs [][]byte) (*RangeProofAlice, error) {
 	}, nil
 }
 
-func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c *big.Int) bool {
+func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c *big.Int, session ...[]byte) bool {
+	Session := optionalProofSession(session)
 	if pf == nil || !pf.ValidateBasic() || pk == nil || NTilde == nil || h1 == nil || h2 == nil || c == nil {
+		return false
+	}
+	if new(big.Int).GCD(nil, nil, c, pk.N).Cmp(one) != 0 {
 		return false
 	}
 
@@ -109,13 +115,51 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 	q3 := new(big.Int).Mul(q, q)
 	q3 = new(big.Int).Mul(q, q3)
 
+	if !common.IsInInterval(pf.Z, NTilde) {
+		return false
+	}
+	if !common.IsInInterval(pf.U, pk.NSquare()) {
+		return false
+	}
+	if !common.IsInInterval(pf.W, NTilde) {
+		return false
+	}
+	if !common.IsInInterval(pf.S, pk.N) {
+		return false
+	}
+	if new(big.Int).GCD(nil, nil, pf.Z, NTilde).Cmp(one) != 0 {
+		return false
+	}
+	if new(big.Int).GCD(nil, nil, pf.U, pk.NSquare()).Cmp(one) != 0 {
+		return false
+	}
+	if new(big.Int).GCD(nil, nil, pf.W, NTilde).Cmp(one) != 0 {
+		return false
+	}
+	if pf.S1.Cmp(q) == -1 {
+		return false
+	}
+	if pf.S2.Cmp(q) == -1 {
+		return false
+	}
+	if pf.S.Cmp(one) == 0 {
+		return false
+	}
+	if pf.Z.Cmp(one) == 0 {
+		return false
+	}
+	if pf.S1.Cmp(pf.S2) == 0 {
+		return false
+	}
+
 	// 3.
 	if pf.S1.Cmp(q3) == 1 {
 		return false
 	}
 
 	// 1-2. e'
-	e := common.HashToN(q, append(pk.AsInts(), c, pf.Z, pf.U, pf.W)...)
+	eHash := common.SHA512_256i_TAGGED(Session, append(pk.AsInts(), NTilde, h1, h2, c, pf.Z, pf.U, pf.W)...)
+	e := common.RejectionSample(q, eHash)
 
 	var products *big.Int // for the following conditionals
 	minusE := new(big.Int).Sub(zero, e)

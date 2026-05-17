@@ -51,12 +51,13 @@ func (round *round7) Start() *tss.Error {
 			return round.WrapError(errors2.Wrapf(err, "NewECPoint(bigAj)"), Pj)
 		}
 		bigAjs[j] = bigAj
+		contextJ := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(j)))
 		pijA, err := r6msg.UnmarshalZKProof(round.Params().EC())
-		if err != nil || !pijA.Verify(bigAj) {
+		if err != nil || !pijA.VerifyWithSession(contextJ, bigAj) {
 			return round.WrapError(errors.New("schnorr verify for Aj failed"), Pj)
 		}
 		pijV, err := r6msg.UnmarshalZKVProof(round.Params().EC())
-		if err != nil || !pijV.Verify(bigVj, round.temp.bigR) {
+		if err != nil || !pijV.VerifyWithSession(contextJ, bigVj, round.temp.bigR) {
 			return round.WrapError(errors.New("vverify for Vj failed"), Pj)
 		}
 	}
@@ -92,16 +93,18 @@ func (round *round7) Start() *tss.Error {
 }
 
 func (round *round7) Update() (bool, *tss.Error) {
+	ret := true
 	for j, msg := range round.temp.signRound7Messages {
 		if round.ok[j] {
 			continue
 		}
 		if msg == nil || !round.CanAccept(msg) {
-			return false, nil
+			ret = false
+			continue
 		}
 		round.ok[j] = true
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round7) CanAccept(msg tss.ParsedMessage) bool {

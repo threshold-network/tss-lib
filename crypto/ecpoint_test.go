@@ -120,6 +120,15 @@ func TestUnFlattenECPoints(t *testing.T) {
 	}
 }
 
+func TestNewECPointRejectsNonCanonicalCoordinates(t *testing.T) {
+	curve := tss.EC()
+	gx, gy := curve.ScalarBaseMult(big.NewInt(1).Bytes())
+	nonCanonicalX := new(big.Int).Add(gx, curve.Params().P)
+
+	_, err := NewECPoint(curve, nonCanonicalX, gy)
+	assert.Error(t, err)
+}
+
 func TestS256EcpointJsonSerialization(t *testing.T) {
 	ec := btcec.S256()
 	tss.RegisterCurve("secp256k1", ec)

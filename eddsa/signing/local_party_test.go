@@ -7,6 +7,7 @@
 package signing
 
 import (
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"sync/atomic"
@@ -59,12 +60,14 @@ func TestE2EConcurrent(t *testing.T) {
 
 	updater := test.SharedPartyUpdater
 
-	msg := big.NewInt(200)
+	msgData, err := hex.DecodeString("00f163ee51bcaeff9cdff5e0e3c1a646abd19885fffbab0b3b4236e0cf95c9f5")
+	assert.NoError(t, err)
+	msg := new(big.Int).SetBytes(msgData)
 	// init the parties
 	for i := 0; i < len(signPIDs); i++ {
 		params := tss.NewParameters(tss.Edwards(), p2pCtx, signPIDs[i], len(signPIDs), threshold)
 
-		P := NewLocalParty(msg, params, keys[i], outCh, endCh).(*LocalParty)
+		P := NewLocalParty(msg, params, keys[i], outCh, endCh, len(msgData)).(*LocalParty)
 		parties = append(parties, P)
 		go func(P *LocalParty) {
 			if err := P.Start(); err != nil {
@@ -98,7 +101,7 @@ signing:
 				go updater(parties[dest[0].Index], msg, errCh)
 			}
 
-		case <-endCh:
+		case sig := <-endCh:
 			atomic.AddInt32(&ended, 1)
 			if atomic.LoadInt32(&ended) == int32(len(signPIDs)) {
 				t.Logf("Done. Received signature data from %d participants", ended)
@@ -132,8 +135,9 @@ signing:
 					println("new sig error, ", err.Error())
 				}
 
-				ok := edwards.Verify(&pk, msg.Bytes(), newSig.R, newSig.S)
+				ok := edwards.Verify(&pk, msgData, newSig.R, newSig.S)
 				assert.True(t, ok, "eddsa verify must pass")
+				assert.Equal(t, msgData, sig.M)
 				t.Log("EDDSA signing test done.")
 				// END EDDSA verify
 

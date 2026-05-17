@@ -8,6 +8,7 @@ package resharing
 
 import (
 	"errors"
+	"math/big"
 
 	"github.com/hashicorp/go-multierror"
 
@@ -49,6 +50,7 @@ func (round *round5) Start() *tss.Error {
 		if common.Eq(Pi.KeyInt(), Pj.KeyInt()) {
 			continue
 		}
+		contextJ := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(j)))
 		go func(j int, ch chan<- proofOut) {
 			r4msg1 := round.temp.dgRound4Message1s[j].Content().(*DGRound4Message1)
 
@@ -59,7 +61,7 @@ func (round *round5) Start() *tss.Error {
 			pkN := pk.N
 			NTilde := round.save.LocalPreParams.NTildei
 			H1i, H2i := round.save.LocalPreParams.H1i, round.save.LocalPreParams.H2i
-			ok, err := FacProof.FactorVerify(pkN, NTilde, H1i, H2i)
+			ok, err := FacProof.FactorVerify(pkN, NTilde, H1i, H2i, contextJ)
 			if err != nil {
 				ch <- proofOut{err}
 			}
@@ -68,7 +70,7 @@ func (round *round5) Start() *tss.Error {
 			}
 			FacProofTilde := r4msg1.UnmarshalFactorProofTilde()
 			NTildej := round.save.NTildej[j]
-			ok, err = FacProofTilde.FactorVerify(NTildej, NTilde, H1i, H2i)
+			ok, err = FacProofTilde.FactorVerify(NTildej, NTilde, H1i, H2i, contextJ)
 			if err != nil {
 				ch <- proofOut{err}
 			}

@@ -93,6 +93,56 @@ func SHA512_256i(in ...*big.Int) *big.Int {
 	return new(big.Int).SetBytes(state.Sum(nil))
 }
 
+// SHA512_256i_TAGGED is a domain-separated variant of SHA512_256i. The tag is
+// hashed and prepended twice, matching the tagged-hash construction used by BNB
+// upstream for proof challenges.
+func SHA512_256i_TAGGED(tag []byte, in ...*big.Int) *big.Int {
+	tagBz := SHA512_256(tag)
+	state := crypto.SHA512_256.New()
+	if _, err := state.Write(tagBz); err != nil {
+		Logger.Errorf("SHA512_256i_TAGGED Write(tag) failed: %v", err)
+		return nil
+	}
+	if _, err := state.Write(tagBz); err != nil {
+		Logger.Errorf("SHA512_256i_TAGGED Write(tag) failed: %v", err)
+		return nil
+	}
+
+	inLen := len(in)
+	if inLen == 0 {
+		return nil
+	}
+
+	bzSize := 0
+	inLenBz := make([]byte, 64/8)
+	binary.LittleEndian.PutUint64(inLenBz, uint64(inLen))
+	ptrs := make([][]byte, inLen)
+	for i, n := range in {
+		if n == nil {
+			ptrs[i] = zero.Bytes()
+		} else {
+			ptrs[i] = n.Bytes()
+		}
+		bzSize += len(ptrs[i])
+	}
+
+	dataCap := len(inLenBz) + bzSize + inLen + (inLen * 8)
+	data := make([]byte, 0, dataCap)
+	data = append(data, inLenBz...)
+	for i := range in {
+		data = append(data, ptrs[i]...)
+		data = append(data, hashInputDelimiter)
+		dataLen := make([]byte, 8)
+		binary.LittleEndian.PutUint64(dataLen, uint64(len(ptrs[i])))
+		data = append(data, dataLen...)
+	}
+	if _, err := state.Write(data); err != nil {
+		Logger.Errorf("SHA512_256i_TAGGED Write(data) failed: %v", err)
+		return nil
+	}
+	return new(big.Int).SetBytes(state.Sum(nil))
+}
+
 func SHA512_256iOne(in *big.Int) *big.Int {
 	var data []byte
 	state := crypto.SHA512_256.New()

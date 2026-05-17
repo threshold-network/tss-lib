@@ -30,6 +30,24 @@ func TestModProofVerify(t *testing.T) {
 	assert.True(t, res, "proof verify result must be true")
 }
 
+func TestModProofSessionBinding(t *testing.T) {
+	modSetUp(t)
+	session := []byte("mod-proof-session-a")
+	proof := privateKey.ModProof(session)
+
+	res, err := proof.ModVerify(publicKey.N, session)
+	assert.NoError(t, err)
+	assert.True(t, res, "proof verify result must be true")
+
+	res, err = proof.ModVerify(publicKey.N, []byte("mod-proof-session-b"))
+	assert.Error(t, err)
+	assert.False(t, res, "proof verify result must be false")
+
+	res, err = proof.ModVerify(publicKey.N)
+	assert.Error(t, err)
+	assert.False(t, res, "session-bound proof must not verify without its session")
+}
+
 func TestModProofVerifyFail(t *testing.T) {
 	modSetUp(t)
 	proof := privateKey.ModProof()

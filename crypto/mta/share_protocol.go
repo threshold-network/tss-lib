@@ -20,12 +20,13 @@ func AliceInit(
 	ec elliptic.Curve,
 	pkA *paillier.PublicKey,
 	a, NTildeB, h1B, h2B *big.Int,
+	session ...[]byte,
 ) (cA *big.Int, pf *RangeProofAlice, err error) {
 	cA, rA, err := pkA.EncryptAndReturnRandomness(a)
 	if err != nil {
 		return nil, nil, err
 	}
-	pf, err = ProveRangeAlice(ec, pkA, cA, NTildeB, h1B, h2B, a, rA)
+	pf, err = ProveRangeAlice(ec, pkA, cA, NTildeB, h1B, h2B, a, rA, session...)
 	return cA, pf, err
 }
 
@@ -34,13 +35,17 @@ func BobMid(
 	pkA *paillier.PublicKey,
 	pf *RangeProofAlice,
 	b, cA, NTildeA, h1A, h2A, NTildeB, h1B, h2B *big.Int,
+	session ...[]byte,
 ) (beta, cB, betaPrm *big.Int, piB *ProofBob, err error) {
-	if !pf.Verify(ec, pkA, NTildeB, h1B, h2B, cA) {
+	if !pf.Verify(ec, pkA, NTildeB, h1B, h2B, cA, session...) {
 		err = errors.New("RangeProofAlice.Verify() returned false")
 		return
 	}
 	q := ec.Params().N
-	betaPrm = common.GetRandomPositiveInt(pkA.N)
+	q5 := new(big.Int).Mul(q, q)
+	q5 = new(big.Int).Mul(q5, q5)
+	q5 = new(big.Int).Mul(q5, q)
+	betaPrm = common.GetRandomPositiveInt(q5)
 	cBetaPrm, cRand, err := pkA.EncryptAndReturnRandomness(betaPrm)
 	if err != nil {
 		return
@@ -54,7 +59,7 @@ func BobMid(
 		return
 	}
 	beta = common.ModInt(q).Sub(zero, betaPrm)
-	piB, err = ProveBob(ec, pkA, NTildeA, h1A, h2A, cA, cB, b, betaPrm, cRand)
+	piB, err = ProveBob(ec, pkA, NTildeA, h1A, h2A, cA, cB, b, betaPrm, cRand, session...)
 	return
 }
 
@@ -64,13 +69,17 @@ func BobMidWC(
 	pf *RangeProofAlice,
 	b, cA, NTildeA, h1A, h2A, NTildeB, h1B, h2B *big.Int,
 	B *crypto.ECPoint,
+	session ...[]byte,
 ) (beta, cB, betaPrm *big.Int, piB *ProofBobWC, err error) {
-	if !pf.Verify(ec, pkA, NTildeB, h1B, h2B, cA) {
+	if !pf.Verify(ec, pkA, NTildeB, h1B, h2B, cA, session...) {
 		err = errors.New("RangeProofAlice.Verify() returned false")
 		return
 	}
 	q := ec.Params().N
-	betaPrm = common.GetRandomPositiveInt(pkA.N)
+	q5 := new(big.Int).Mul(q, q)
+	q5 = new(big.Int).Mul(q5, q5)
+	q5 = new(big.Int).Mul(q5, q)
+	betaPrm = common.GetRandomPositiveInt(q5)
 	cBetaPrm, cRand, err := pkA.EncryptAndReturnRandomness(betaPrm)
 	if err != nil {
 		return
@@ -84,7 +93,7 @@ func BobMidWC(
 		return
 	}
 	beta = common.ModInt(q).Sub(zero, betaPrm)
-	piB, err = ProveBobWC(ec, pkA, NTildeA, h1A, h2A, cA, cB, b, betaPrm, cRand, B)
+	piB, err = ProveBobWC(ec, pkA, NTildeA, h1A, h2A, cA, cB, b, betaPrm, cRand, B, session...)
 	return
 }
 
@@ -94,8 +103,9 @@ func AliceEnd(
 	pf *ProofBob,
 	h1A, h2A, cA, cB, NTildeA *big.Int,
 	sk *paillier.PrivateKey,
+	session ...[]byte,
 ) (*big.Int, error) {
-	if !pf.Verify(ec, pkA, NTildeA, h1A, h2A, cA, cB) {
+	if !pf.Verify(ec, pkA, NTildeA, h1A, h2A, cA, cB, session...) {
 		return nil, errors.New("ProofBob.Verify() returned false")
 	}
 	alphaPrm, err := sk.Decrypt(cB)
@@ -113,8 +123,9 @@ func AliceEndWC(
 	B *crypto.ECPoint,
 	cA, cB, NTildeA, h1A, h2A *big.Int,
 	sk *paillier.PrivateKey,
+	session ...[]byte,
 ) (*big.Int, error) {
-	if !pf.Verify(ec, pkA, NTildeA, h1A, h2A, cA, cB, B) {
+	if !pf.Verify(ec, pkA, NTildeA, h1A, h2A, cA, cB, B, session...) {
 		return nil, errors.New("ProofBobWC.Verify() returned false")
 	}
 	alphaPrm, err := sk.Decrypt(cB)
