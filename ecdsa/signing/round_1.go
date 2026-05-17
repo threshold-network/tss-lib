@@ -48,7 +48,7 @@ func (round *round1) Start() *tss.Error {
 	if nonce := round.Params().SessionNonce(); nonce != nil {
 		round.temp.ssidNonce = new(big.Int).Set(nonce)
 	} else {
-		round.temp.ssidNonce = new(big.Int).Set(round.temp.m)
+		round.temp.ssidNonce = round.messageSessionNonce()
 	}
 	ssid, err := round.getSSID()
 	if err != nil {
@@ -73,7 +73,7 @@ func (round *round1) Start() *tss.Error {
 		if j == i {
 			continue
 		}
-		contextJ := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(j)))
+		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		cA, pi, err := mta.AliceInit(round.Params().EC(), round.key.PaillierPKs[i], k, round.key.NTildej[j], round.key.H1j[j], round.key.H2j[j], contextJ)
 		if err != nil {
 			return round.WrapError(fmt.Errorf("failed to init mta: %v", err))

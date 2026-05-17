@@ -8,7 +8,6 @@ package signing
 
 import (
 	"errors"
-	"math/big"
 
 	errors2 "github.com/pkg/errors"
 
@@ -47,7 +46,7 @@ func (round *round5) Start() *tss.Error {
 		if err != nil {
 			return round.WrapError(errors.New("failed to unmarshal bigGamma proof"), Pj)
 		}
-		contextJ := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(j)))
+		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		ok = proof.VerifyWithSession(contextJ, bigGammaJPoint)
 		if !ok {
 			return round.WrapError(errors.New("failed to prove bigGamma"), Pj)

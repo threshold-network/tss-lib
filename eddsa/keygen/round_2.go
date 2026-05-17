@@ -8,7 +8,6 @@ package keygen
 
 import (
 	"errors"
-	"math/big"
 
 	errors2 "github.com/pkg/errors"
 
@@ -47,7 +46,7 @@ func (round *round2) Start() *tss.Error {
 	}
 
 	// 5. compute Schnorr prove
-	contextI := common.AppendBigIntToBytesSlice(round.temp.ssid, big.NewInt(int64(i)))
+	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 	pii, err := schnorr.NewZKProofWithSession(contextI, round.temp.ui, round.temp.vs[0])
 	if err != nil {
 		return round.WrapError(errors2.Wrapf(err, "NewZKProof(ui, vi0)"))

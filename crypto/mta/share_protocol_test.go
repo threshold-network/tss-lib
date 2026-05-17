@@ -59,6 +59,36 @@ func TestShareProtocol(t *testing.T) {
 	assert.Equal(t, 0, alpha.Cmp(aTimesBPlusBetaModQ))
 }
 
+func TestProofBobSessionBinding(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	sk, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	assert.NoError(t, err)
+
+	q := tss.EC().Params().N
+	a := common.GetRandomPositiveInt(q)
+	b := common.GetRandomPositiveInt(q)
+
+	NTildei, h1i, h2i, err := keygen.LoadNTildeH1H2FromTestFixture(0)
+	assert.NoError(t, err)
+	NTildej, h1j, h2j, err := keygen.LoadNTildeH1H2FromTestFixture(1)
+	assert.NoError(t, err)
+
+	session := []byte("proof-bob-session-a")
+	cA, pf, err := AliceInit(tss.EC(), pk, a, NTildej, h1j, h2j, session)
+	assert.NoError(t, err)
+	_, cB, _, pfB, err := BobMid(tss.EC(), pk, pf, b, cA, NTildei, h1i, h2i, NTildej, h1j, h2j, session)
+	assert.NoError(t, err)
+
+	assert.True(t, pfB.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, session), "proof must verify with the original session")
+	assert.False(t, pfB.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, []byte("proof-bob-session-b")), "proof must not replay across sessions")
+	assert.False(t, pfB.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB), "session-bound proof must not verify without its session")
+
+	_, err = AliceEnd(tss.EC(), pk, pfB, h1i, h2i, cA, cB, NTildei, sk, []byte("proof-bob-session-b"))
+	assert.Error(t, err)
+}
+
 func TestShareProtocolWC(t *testing.T) {
 	q := tss.EC().Params().N
 
@@ -105,6 +135,39 @@ func TestShareProtocolWC(t *testing.T) {
 	aTimesBPlusBeta := new(big.Int).Add(aTimesB, betaPrm)
 	aTimesBPlusBetaModQ := new(big.Int).Mod(aTimesBPlusBeta, q)
 	assert.Equal(t, 0, alpha.Cmp(aTimesBPlusBetaModQ))
+}
+
+func TestProofBobWCSessionBinding(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	sk, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	assert.NoError(t, err)
+
+	q := tss.EC().Params().N
+	a := common.GetRandomPositiveInt(q)
+	b := common.GetRandomPositiveInt(q)
+	gBX, gBY := tss.EC().ScalarBaseMult(b.Bytes())
+	gBPoint, err := crypto.NewECPoint(tss.EC(), gBX, gBY)
+	assert.NoError(t, err)
+
+	NTildei, h1i, h2i, err := keygen.LoadNTildeH1H2FromTestFixture(0)
+	assert.NoError(t, err)
+	NTildej, h1j, h2j, err := keygen.LoadNTildeH1H2FromTestFixture(1)
+	assert.NoError(t, err)
+
+	session := []byte("proof-bob-wc-session-a")
+	cA, pf, err := AliceInit(tss.EC(), pk, a, NTildej, h1j, h2j, session)
+	assert.NoError(t, err)
+	_, cB, _, pfB, err := BobMidWC(tss.EC(), pk, pf, b, cA, NTildei, h1i, h2i, NTildej, h1j, h2j, gBPoint, session)
+	assert.NoError(t, err)
+
+	assert.True(t, pfB.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint, session), "proof must verify with the original session")
+	assert.False(t, pfB.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint, []byte("proof-bob-wc-session-b")), "proof must not replay across sessions")
+	assert.False(t, pfB.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "session-bound proof must not verify without its session")
+
+	_, err = AliceEndWC(tss.EC(), pk, pfB, gBPoint, cA, cB, NTildei, h1i, h2i, sk, []byte("proof-bob-wc-session-b"))
+	assert.Error(t, err)
 }
 
 func cloneProofBobWC(pf *ProofBobWC) *ProofBobWC {

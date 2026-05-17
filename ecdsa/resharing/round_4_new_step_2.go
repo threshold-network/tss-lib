@@ -83,7 +83,7 @@ func (round *round4) Start() *tss.Error {
 		}(j, msg, r2msg1)
 		_j := j
 		_msg := msg
-		contextJ := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(j)))
+		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		verifier.VerifyDLNProof1(r2msg1, H1j, H2j, NTildej, func(isValid bool) {
 			if !isValid {
 				dlnProof1FailCulprits[_j] = _msg.GetFrom()
@@ -218,7 +218,7 @@ func (round *round4) Start() *tss.Error {
 		return round.WrapError(errors2.Wrapf(err, "newBigXj.Add(Vc[c].ScalarMult(z))"), paiProofCulprits...)
 	}
 
-	contextI := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(i)))
+	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 	for j, Pj := range round.NewParties().IDs() {
 
 		if common.Eq(Pi.KeyInt(), Pj.KeyInt()) {

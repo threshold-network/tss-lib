@@ -90,7 +90,7 @@ func (round *round1) Start() *tss.Error {
 		round.temp.ssidNonce = new(big.Int).SetUint64(0)
 	}
 	round.temp.ssid = round.getSSID()
-	contextI := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(i)))
+	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 
 	// generate the dlnproofs for keygen
 	h1i, h2i, alpha, beta, p, q, NTildei :=

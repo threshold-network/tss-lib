@@ -8,7 +8,6 @@ package signing
 
 import (
 	"errors"
-	"math/big"
 
 	errors2 "github.com/pkg/errors"
 
@@ -26,7 +25,7 @@ func (round *round6) Start() *tss.Error {
 	round.resetOK()
 
 	i := round.PartyID().Index
-	contextI := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(i)))
+	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 	piAi, err := schnorr.NewZKProofWithSession(contextI, round.temp.roi, round.temp.bigAi)
 	if err != nil {
 		return round.WrapError(errors2.Wrapf(err, "NewZKProof(roi, bigAi)"))

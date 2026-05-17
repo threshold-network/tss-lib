@@ -65,7 +65,7 @@ func (round *round3) Start() *tss.Error {
 		if j == PIdx {
 			continue
 		}
-		contextJ := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(j)))
+		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		// 6-8.
 		go func(j int, ch chan<- vssOut) {
 			// 4-9.

@@ -9,7 +9,6 @@ package keygen
 import (
 	"encoding/hex"
 	"errors"
-	"math/big"
 	"sync"
 
 	"github.com/bnb-chain/tss-lib/common"
@@ -72,7 +71,7 @@ func (round *round2) Start() *tss.Error {
 		wg.Add(4)
 		_j := j
 		_msg := msg
-		contextJ := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(j)))
+		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 
 		verifier.VerifyDLNProof1(r1msg, H1j, H2j, NTildej, func(isValid bool) {
 			if !isValid {
@@ -130,7 +129,7 @@ func (round *round2) Start() *tss.Error {
 
 	// 5. p2p send share ij to Pj
 	shares := round.temp.shares
-	contextI := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(i)))
+	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 	for j, Pj := range round.Parties().IDs() {
 		// do not send to this Pj, but store for round 3
 		if j == i {

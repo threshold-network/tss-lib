@@ -38,7 +38,7 @@ func (round *round3) Start() *tss.Error {
 		if j == i {
 			continue
 		}
-		contextJ := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(j)))
+		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		// Alice_end
 		go func(j int, Pj *tss.PartyID) {
 			defer wg.Done()

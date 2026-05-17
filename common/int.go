@@ -7,6 +7,7 @@
 package common
 
 import (
+	"encoding/binary"
 	"math/big"
 )
 
@@ -108,6 +109,14 @@ func AppendBigIntToBytesSlice(commonBytes []byte, appended *big.Int) []byte {
 	resultBytes := make([]byte, len(commonBytes), len(commonBytes)+len(appended.Bytes()))
 	copy(resultBytes, commonBytes)
 	return append(resultBytes, appended.Bytes()...)
+}
+
+func AppendUint64ToBytesSlice(commonBytes []byte, appended uint64) []byte {
+	resultBytes := make([]byte, len(commonBytes), len(commonBytes)+8)
+	copy(resultBytes, commonBytes)
+	idxBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(idxBytes, appended)
+	return append(resultBytes, idxBytes...)
 }
 
 // Marshal the given bigint into bytes.

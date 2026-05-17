@@ -79,7 +79,7 @@ func (round *round2) Start() *tss.Error {
 	dlnProof1 := dlnproof.NewDLNProof(h1i, h2i, alpha, p, q, NTildei, round.temp.ssid)
 	dlnProof2 := dlnproof.NewDLNProof(h2i, h1i, beta, p, q, NTildei, round.temp.ssid)
 
-	contextI := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(i)))
+	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 	modProof := preParams.PaillierSK.ModProof(contextI)
 
 	// NTildei = (2p+1) * (2q+1)

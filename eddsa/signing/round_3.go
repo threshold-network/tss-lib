@@ -8,7 +8,6 @@ package signing
 
 import (
 	"crypto/sha512"
-	"math/big"
 
 	"github.com/agl/ed25519/edwards25519"
 	"github.com/pkg/errors"
@@ -40,7 +39,7 @@ func (round *round3) Start() *tss.Error {
 			continue
 		}
 
-		contextJ := common.AppendBigIntToBytesSlice(round.temp.ssid, big.NewInt(int64(j)))
+		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		msg := round.temp.signRound2Messages[j]
 		r2msg := msg.Content().(*SignRound2Message)
 		cmtDeCmt := commitments.HashCommitDecommit{C: round.temp.cjs[j], D: r2msg.UnmarshalDeCommitment()}

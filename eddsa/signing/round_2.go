@@ -8,7 +8,6 @@ package signing
 
 import (
 	"errors"
-	"math/big"
 
 	errors2 "github.com/pkg/errors"
 
@@ -34,7 +33,7 @@ func (round *round2) Start() *tss.Error {
 	}
 
 	// 2. compute Schnorr prove
-	contextI := common.AppendBigIntToBytesSlice(round.temp.ssid, big.NewInt(int64(i)))
+	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 	pir, err := schnorr.NewZKProofWithSession(contextI, round.temp.ri, round.temp.pointRi)
 	if err != nil {
 		return round.WrapError(errors2.Wrapf(err, "NewZKProof(ri, pointRi)"))

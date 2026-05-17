@@ -26,6 +26,7 @@ This is a protocol/wire compatibility break for proof transcripts. Proofs whose 
 - `fc38979`, GG20 SSID uniqueness: ported `tss.Parameters.SessionNonce` / `SetSessionNonce` and ECDSA/EdDSA keygen/signing/resharing SSID derivation. Signing defaults to message hash as nonce; keygen/resharing support caller-provided nonce and otherwise preserve BNB's zero fallback.
 - `685c2af`, canonical EC coordinates: ported rejection of EC coordinates outside `[0, P)`.
 - `5d0d0f3`, EdDSA nil-pointer fix: ported by checking `NewECPoint` errors before `EightInvEight()`.
+- Post-review cleanup: party-specific proof contexts now append fixed-width uint64 party indexes so party 0 does not collapse to the bare SSID, and signing default SSID nonces are derived from full message bytes when `fullBytesLen` is provided.
 
 ## Already Covered Or Superseded
 
@@ -66,6 +67,7 @@ Added or updated focused tests cover:
 - Non-invertible malformed factor-proof bases returning errors instead of panicking.
 - MtA range-proof malformed ciphertext and proof-value boundary failures.
 - ProofBobWC malformed lower-bound, zero-value, and curve-mismatch failures.
+- ProofBob and ProofBobWC session mismatch/replay failures.
 - VSS `threshold+1` verification/reconstruction behavior.
 - Non-canonical EC coordinate rejection.
 - ECDSA and EdDSA leading-zero message signing.

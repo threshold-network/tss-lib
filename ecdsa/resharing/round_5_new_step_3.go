@@ -8,7 +8,6 @@ package resharing
 
 import (
 	"errors"
-	"math/big"
 
 	"github.com/hashicorp/go-multierror"
 
@@ -50,7 +49,7 @@ func (round *round5) Start() *tss.Error {
 		if common.Eq(Pi.KeyInt(), Pj.KeyInt()) {
 			continue
 		}
-		contextJ := common.AppendBigIntToBytesSlice(round.temp.ssid, new(big.Int).SetUint64(uint64(j)))
+		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		go func(j int, ch chan<- proofOut) {
 			r4msg1 := round.temp.dgRound4Message1s[j].Content().(*DGRound4Message1)
 

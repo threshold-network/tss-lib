@@ -36,7 +36,7 @@ func (round *round1) Start() *tss.Error {
 	if nonce := round.Params().SessionNonce(); nonce != nil {
 		round.temp.ssidNonce = new(big.Int).Set(nonce)
 	} else {
-		round.temp.ssidNonce = new(big.Int).Set(round.temp.m)
+		round.temp.ssidNonce = round.messageSessionNonce()
 	}
 	ssid, err := round.getSSID()
 	if err != nil {
