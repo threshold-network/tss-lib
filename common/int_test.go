@@ -144,3 +144,37 @@ func TestAnyIsNil(t *testing.T) {
 	assert.True(common.AnyIsNil(nil, big.NewInt(2)))
 	assert.False(common.AnyIsNil(big.NewInt(1), big.NewInt(2)))
 }
+
+// TestAppendUint64ToBytesSlice_PartyContextSeparation pins the invariant that
+// per-party Fiat-Shamir context derivation depends on: appending a party index
+// (including 0) must always produce a value distinct from the bare SSID, and
+// distinct party indices must produce distinct contexts. If this invariant
+// regresses (e.g. via a future "skip leading zeros" optimization), party 0's
+// proof transcripts would collapse back to the untagged SSID.
+func TestAppendUint64ToBytesSlice_PartyContextSeparation(t *testing.T) {
+	assert := assert.New(t)
+
+	ssid := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+
+	ctx0 := common.AppendUint64ToBytesSlice(ssid, 0)
+	ctx1 := common.AppendUint64ToBytesSlice(ssid, 1)
+	ctx256 := common.AppendUint64ToBytesSlice(ssid, 256)
+
+	assert.NotEqual(ssid, ctx0, "party-0 context must not collapse to bare SSID")
+	assert.NotEqual(ctx0, ctx1, "party-0 and party-1 contexts must differ")
+	assert.NotEqual(ctx0, ctx256, "party-0 and party-256 contexts must differ")
+	assert.NotEqual(ctx1, ctx256, "party-1 and party-256 contexts must differ")
+
+	assert.Equal(len(ssid)+8, len(ctx0), "appended index must be a fixed 8 bytes")
+	assert.Equal(len(ssid)+8, len(ctx1), "appended index must be a fixed 8 bytes")
+	assert.Equal(ssid, ctx0[:len(ssid)], "SSID prefix must be preserved")
+
+	expectedCtx0 := append(append([]byte{}, ssid...), 0, 0, 0, 0, 0, 0, 0, 0)
+	assert.Equal(expectedCtx0, ctx0, "party-0 must append 8 zero bytes (big-endian uint64)")
+
+	// nil and empty SSID must still yield distinct, non-collapsing contexts.
+	emptyCtx0 := common.AppendUint64ToBytesSlice(nil, 0)
+	emptyCtx1 := common.AppendUint64ToBytesSlice(nil, 1)
+	assert.Equal(8, len(emptyCtx0), "empty SSID + index 0 must still produce 8 bytes")
+	assert.NotEqual(emptyCtx0, emptyCtx1, "indices must differ even with empty SSID")
+}
