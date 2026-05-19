@@ -11,6 +11,8 @@ import (
 	"math/big"
 	"runtime"
 	"time"
+
+	"github.com/bnb-chain/tss-lib/common"
 )
 
 type (
@@ -103,6 +105,13 @@ func (params *Parameters) SetSessionNonce(nonce *big.Int) {
 		return
 	}
 	params.sessionNonce = new(big.Int).Set(nonce)
+}
+
+// SetSessionNonceBytes hashes an application-level session ID into the
+// per-session nonce. All parties must call it with the same non-empty session ID
+// before constructing local parties for a protocol run.
+func (params *Parameters) SetSessionNonceBytes(sessionID []byte) {
+	params.SetSessionNonce(new(big.Int).SetBytes(common.SHA512_256(sessionID)))
 }
 
 // ----- //

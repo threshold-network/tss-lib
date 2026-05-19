@@ -34,6 +34,29 @@ const (
 	testThreshold    = TestThreshold
 )
 
+func TestSSIDIncludesSessionNonce(t *testing.T) {
+	pIDs := tss.GenerateTestPartyIDs(3)
+
+	ssidA := testKeygenSSID(pIDs, []byte("session-a"))
+	ssidAAgain := testKeygenSSID(pIDs, []byte("session-a"))
+	ssidB := testKeygenSSID(pIDs, []byte("session-b"))
+
+	assert.Equal(t, ssidA, ssidAAgain)
+	assert.NotEqual(t, ssidA, ssidB)
+}
+
+func testKeygenSSID(pIDs tss.SortedPartyIDs, sessionID []byte) []byte {
+	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)
+	params.SetSessionNonceBytes(sessionID)
+
+	round := &base{
+		Parameters: params,
+		temp:       &localTempData{ssidNonce: params.SessionNonce()},
+		number:     1,
+	}
+	return round.getSSID()
+}
+
 func setUp(level string) {
 	if err := log.SetLogLevel("tss-lib", level); err != nil {
 		panic(err)

@@ -23,7 +23,7 @@ This is a protocol/wire compatibility break for proof transcripts. Proofs whose 
 - `5d01446` / PR `#289`, range-proof update: ported MtA range-proof GCD, interval, lower-bound, non-one, and tagged challenge checks.
 - `4878da5` / PR `#324`, VSS reconstruction fix: ported `threshold+1` reconstruction requirement and updated ECDSA/EdDSA keygen fixture tests.
 - `b59ed36`, session context for DLN and MtA proofs: manually adapted with optional session contexts and focused replay/session-mismatch tests.
-- `fc38979`, GG20 SSID uniqueness: ported `tss.Parameters.SessionNonce` / `SetSessionNonce` and ECDSA/EdDSA keygen/signing/resharing SSID derivation. Signing defaults to message hash as nonce; keygen/resharing support caller-provided nonce and otherwise preserve BNB's zero fallback.
+- `fc38979`, GG20 SSID uniqueness: ported `tss.Parameters.SessionNonce` / `SetSessionNonce`, added `SetSessionNonceBytes`, and wired ECDSA/EdDSA keygen/signing/resharing SSID derivation. Signing defaults to message hash as nonce; keygen/resharing support caller-provided nonce and otherwise preserve BNB's zero fallback.
 - `685c2af`, canonical EC coordinates: ported rejection of EC coordinates outside `[0, P)`.
 - `5d0d0f3`, EdDSA nil-pointer fix: ported by checking `NewECPoint` errors before `EightInvEight()`.
 - Post-review cleanup: party-specific proof contexts now append fixed-width uint64 party indexes so party 0 does not collapse to the bare SSID, and signing default SSID nonces are derived from full message bytes when `fullBytesLen` is provided.
@@ -47,7 +47,7 @@ This is a protocol/wire compatibility break for proof transcripts. Proofs whose 
 
 - Threshold's Paillier/NTilde `ModProof` and `FactorProof` remediation was retained. No BNB no-proof escape hatches were introduced.
 - Session parameters were added as variadic arguments to preserve existing public call sites. This is API source-compatible for callers, but not wire-compatible for proof transcripts.
-- Keygen and resharing SSIDs are locally derived and use `Parameters.SessionNonce()` when set. This avoids protobuf/module churn, but callers must provide a unique agreed nonce for keygen/resharing sessions that need cross-session replay resistance.
+- Keygen and resharing SSIDs are locally derived and use `Parameters.SessionNonce()` when set. This avoids protobuf/module churn, but callers must provide a unique agreed nonce, for example via `SetSessionNonceBytes`, for keygen/resharing sessions that need distinct proof transcripts.
 - ECDSA resharing SSID binding was adapted without adding BNB's newer wire-level SSID message fields.
 - `common.RejectionSample` keeps BNB's function name for porting clarity, but this implementation is modular reduction rather than a looping rejection sampler.
 - Constant-time operations are not included and remain a residual follow-up.
@@ -74,6 +74,6 @@ Added or updated focused tests cover:
 
 ## Residual Risks
 
-- Applications must call `SetSessionNonce` for keygen/resharing if they need unique SSIDs across otherwise identical party sets.
+- Applications must call `SetSessionNonce` or `SetSessionNonceBytes` for keygen/resharing if they need unique SSIDs across otherwise identical party sets.
 - The optional constant-time upstream work is not integrated.
 - Resharing SSID binding is adapted locally rather than wire-compatible with BNB's latest protocol messages.
