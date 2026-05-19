@@ -48,6 +48,51 @@ func TestModProofSessionBinding(t *testing.T) {
 	assert.False(t, res, "session-bound proof must not verify without its session")
 }
 
+// TestModChallenge_SessionPath_NotTruncated pins the invariant that the
+// session-tagged ModChallenge path produces challenges with the full
+// ~N.BitLen() of entropy, not the 256-bit truncated form that would result
+// from a single SHA512_256i_TAGGED → Mod N reduction against a 2048-bit
+// Paillier N. A regression to truncation here would weaken the
+// session-tagged proof to a strictly smaller challenge space than the
+// legacy HashToN path it shares the verifier with.
+func TestModChallenge_SessionPath_NotTruncated(t *testing.T) {
+	modSetUp(t)
+	N := publicKey.N
+	w := big.NewInt(7)
+	session := []byte("mod-challenge-bitwidth-pin")
+
+	y := ModChallenge(N, w, session)
+
+	// For uniform y_i in [0, N) with N.BitLen() ≈ 2048, the probability that
+	// y_i.BitLen() ≤ 1024 is ≈ 2^-1024. A pass here means no truncation path
+	// is silently capping the challenge to 256 bits.
+	bound := N.BitLen() / 2
+	for i, yi := range y {
+		assert.NotNil(t, yi, "y_%d must be non-nil", i)
+		assert.True(t, yi.Sign() >= 0, "y_%d must be non-negative", i)
+		assert.True(t, yi.Cmp(N) < 0, "y_%d must be < N", i)
+		assert.True(t, yi.BitLen() > bound,
+			"y_%d.BitLen()=%d must exceed %d (regression to 256-bit truncation)", i, yi.BitLen(), bound)
+	}
+}
+
+// TestModChallenge_SessionPath_ChainsPreviousChallenges pins that each
+// session-tagged y_i mixes y[:i] into its derivation, so a single-iteration
+// collision cannot be replayed across all PARAM_M iterations.
+func TestModChallenge_SessionPath_ChainsPreviousChallenges(t *testing.T) {
+	modSetUp(t)
+	N := publicKey.N
+	w := big.NewInt(7)
+	session := []byte("mod-challenge-chaining-pin")
+
+	y := ModChallenge(N, w, session)
+
+	for i := 1; i < PARAM_M; i++ {
+		assert.NotEqual(t, y[0].Cmp(y[i]), 0,
+			"y_0 and y_%d must differ — chaining of y[:i] in derivation broken", i)
+	}
+}
+
 func TestModProofVerifyFail(t *testing.T) {
 	modSetUp(t)
 	proof := privateKey.ModProof()

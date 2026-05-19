@@ -124,7 +124,16 @@ func (pf ModProof) ModVerify(N *big.Int, session ...[]byte) (bool, error) {
 	return true, nil
 }
 
-// Standard Fiat-Shamir transform
+// Standard Fiat-Shamir transform.
+//
+// The session-tagged path uses HashToNTagged to derive each y_i with at least
+// N.BitLen() + 256 bits of entropy before reducing mod N. Reducing a single
+// 256-bit SHA512_256i_TAGGED output mod ~2^2048 would emit challenges in
+// [0, 2^256) instead of [0, N), giving the session-tagged path a strictly
+// weaker challenge distribution than the legacy HashToN path it shares the
+// verifier with. Each iteration also chains the previously-derived challenges
+// (y[:i]) into the hash inputs, preserving the sequential-challenge property of
+// the original session-tagged construction.
 func ModChallenge(N, w *big.Int, session ...[]byte) [PARAM_M]*big.Int {
 	var y [PARAM_M]*big.Int
 
@@ -133,8 +142,8 @@ func ModChallenge(N, w *big.Int, session ...[]byte) [PARAM_M]*big.Int {
 			y[i] = common.HashToN(N, w, big.NewInt(int64(i)))
 			continue
 		}
-		ei := common.SHA512_256i_TAGGED(session[0], append([]*big.Int{w, N}, y[:i]...)...)
-		y[i] = common.RejectionSample(N, ei)
+		inputs := append([]*big.Int{w, N}, y[:i]...)
+		y[i] = common.HashToNTagged(session[0], N, inputs...)
 	}
 
 	return y
