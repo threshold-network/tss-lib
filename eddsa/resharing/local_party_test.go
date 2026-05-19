@@ -170,8 +170,10 @@ signing:
 		}
 	}()
 
+	signCeremonyNonce := big.NewInt(1)
 	for j, signPID := range signPIDs {
 		params := tss.NewParameters(tss.Edwards(), signP2pCtx, signPID, len(signPIDs), newThreshold)
+		params.SetSessionNonce(signCeremonyNonce)
 		P := signing.NewLocalParty(big.NewInt(42), params, signKeys[j], signOutCh, signEndCh).(*signing.LocalParty)
 		signParties = append(signParties, P)
 		go func(P *signing.LocalParty) {

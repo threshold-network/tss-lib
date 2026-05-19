@@ -25,12 +25,10 @@ func (round *round2) Start() *tss.Error {
 	round.started = true
 	round.resetOK() // resets both round.oldOK and round.newOK
 	round.allOldOK()
-	if nonce := round.Params().SessionNonce(); nonce != nil {
-		round.temp.ssidNonce = new(big.Int).Set(nonce)
-	} else {
-		round.temp.ssidNonce = new(big.Int).SetUint64(0)
-	}
-	round.temp.ssid = round.getSSID()
+	// round.temp.ssid and round.temp.ssidNonce were set in round 1 (for both
+	// old and new committees) so the old committee could broadcast SSID and
+	// the new committee could cross-verify. Reusing the round-1 value here
+	// keeps proof contexts consistent across rounds.
 
 	if !round.ReSharingParams().IsNewCommittee() {
 		return nil

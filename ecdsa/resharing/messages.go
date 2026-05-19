@@ -39,6 +39,7 @@ func NewDGRound1Message(
 	from *tss.PartyID,
 	ecdsaPub *crypto.ECPoint,
 	vct cmt.HashCommitment,
+	ssid []byte,
 ) tss.ParsedMessage {
 	meta := tss.MessageRouting{
 		From:             from,
@@ -50,6 +51,7 @@ func NewDGRound1Message(
 		EcdsaPubX:   ecdsaPub.X().Bytes(),
 		EcdsaPubY:   ecdsaPub.Y().Bytes(),
 		VCommitment: vct.Bytes(),
+		Ssid:        append([]byte(nil), ssid...),
 	}
 	msg := tss.NewMessageWrapper(meta, content)
 	return tss.NewMessage(meta, content, msg)
@@ -59,7 +61,8 @@ func (m *DGRound1Message) ValidateBasic() bool {
 	return m != nil &&
 		common.NonEmptyBytes(m.EcdsaPubX) &&
 		common.NonEmptyBytes(m.EcdsaPubY) &&
-		common.NonEmptyBytes(m.VCommitment)
+		common.NonEmptyBytes(m.VCommitment) &&
+		common.NonEmptyBytes(m.Ssid)
 }
 
 func (m *DGRound1Message) UnmarshalECDSAPub(ec elliptic.Curve) (*crypto.ECPoint, error) {
