@@ -7,7 +7,11 @@
 package resharing
 
 import (
+	"math/big"
+	"strings"
 	"testing"
+
+	"github.com/bnb-chain/tss-lib/tss"
 )
 
 // TestDGRound1Message_ValidateBasic_RequiresSsid pins the wire-format
@@ -46,5 +50,61 @@ func TestDGRound1Message_ValidateBasic_RequiresSsid(t *testing.T) {
 	}
 	if emptySsid.ValidateBasic() {
 		t.Fatal("ValidateBasic must reject a DGRound1Message with zero-length Ssid")
+	}
+}
+
+// TestRound1Update_RejectsMismatchedSsidBeforePartyZero pins that every old
+// committee broadcast is SSID-checked before being marked accepted. In
+// particular, old party j>0 may arrive before old party 0; that ordering must
+// not bypass the SSID mismatch check.
+func TestRound1Update_RejectsMismatchedSsidBeforePartyZero(t *testing.T) {
+	oldPIDs := tss.GenerateTestPartyIDs(2)
+	newPIDs := tss.GenerateTestPartyIDs(2)
+	oldCtx := tss.NewPeerContext(oldPIDs)
+	newCtx := tss.NewPeerContext(newPIDs)
+
+	params := tss.NewReSharingParameters(tss.S256(), oldCtx, newCtx, newPIDs[0], len(oldPIDs), 1, len(newPIDs), 1)
+	params.SetSessionNonce(big.NewInt(7))
+
+	round := &round1{
+		base: &base{
+			ReSharingParameters: params,
+			temp: &localTempData{
+				localMessageStore: localMessageStore{
+					dgRound1Messages: make([]tss.ParsedMessage, len(oldPIDs)),
+				},
+				ssidNonce: params.SessionNonce(),
+			},
+			oldOK:   make([]bool, len(oldPIDs)),
+			newOK:   make([]bool, len(newPIDs)),
+			started: true,
+			number:  1,
+		},
+	}
+	round.allNewOK()
+	round.temp.ssid = round.getSSID()
+
+	content := &DGRound1Message{
+		EcdsaPubX:   []byte{0x01},
+		EcdsaPubY:   []byte{0x02},
+		VCommitment: []byte{0x03},
+		Ssid:        []byte("wrong-ssid"),
+	}
+	routing := tss.MessageRouting{
+		From:        oldPIDs[1],
+		To:          newPIDs,
+		IsBroadcast: true,
+	}
+	round.temp.dgRound1Messages[1] = tss.NewMessage(routing, content, tss.NewMessageWrapper(routing, content))
+
+	_, tssErr := round.Update()
+	if tssErr == nil {
+		t.Fatal("expected mismatched SSID to be rejected even when old party 0 has not arrived")
+	}
+	if !strings.Contains(tssErr.Error(), "ssid does not match") {
+		t.Fatalf("unexpected error: %v", tssErr)
+	}
+	if round.oldOK[1] {
+		t.Fatal("old party 1 must not be marked accepted after SSID mismatch")
 	}
 }

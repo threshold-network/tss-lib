@@ -120,12 +120,6 @@ func (round *round1) Update() (bool, *tss.Error) {
 			ret = false
 			continue
 		}
-		round.oldOK[j] = true
-
-		if round.temp.dgRound1Messages[0] == nil {
-			ret = false
-			continue
-		}
 		// Verify the sender's broadcast SSID matches our locally-derived SSID
 		// before consuming any field of the message. A mismatch means either
 		// (a) this old-committee party is corrupted and broadcasting an
@@ -136,6 +130,12 @@ func (round *round1) Update() (bool, *tss.Error) {
 		senderMsg := round.temp.dgRound1Messages[j].Content().(*DGRound1Message)
 		if !bytes.Equal(senderMsg.GetSsid(), round.temp.ssid) {
 			return false, round.WrapError(errors.New("DGRound1Message ssid does not match locally-derived ssid — old-committee party broadcast inconsistent SSID"), msg.GetFrom())
+		}
+		round.oldOK[j] = true
+
+		if round.temp.dgRound1Messages[0] == nil {
+			ret = false
+			continue
 		}
 
 		// save the ecdsa pub received from the old committee
