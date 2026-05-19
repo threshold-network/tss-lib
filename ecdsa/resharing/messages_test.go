@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bnb-chain/tss-lib/crypto"
+	"github.com/bnb-chain/tss-lib/ecdsa/keygen"
 	"github.com/bnb-chain/tss-lib/tss"
 )
 
@@ -106,5 +108,65 @@ func TestRound1Update_RejectsMismatchedSsidBeforePartyZero(t *testing.T) {
 	}
 	if round.oldOK[1] {
 		t.Fatal("old party 1 must not be marked accepted after SSID mismatch")
+	}
+}
+
+// TestRound1Update_RejectsMismatchedECDSAPubBeforePartyZero pins that
+// DGRound1Message ECDSAPub is checked per sender. A non-zero old party may
+// arrive before old party 0, and its public key copy must not be silently
+// skipped by waiting for party 0 as a canonical source.
+func TestRound1Update_RejectsMismatchedECDSAPubBeforePartyZero(t *testing.T) {
+	oldPIDs := tss.GenerateTestPartyIDs(2)
+	newPIDs := tss.GenerateTestPartyIDs(2)
+	oldCtx := tss.NewPeerContext(oldPIDs)
+	newCtx := tss.NewPeerContext(newPIDs)
+
+	params := tss.NewReSharingParameters(tss.S256(), oldCtx, newCtx, newPIDs[0], len(oldPIDs), 1, len(newPIDs), 1)
+	params.SetSessionNonce(big.NewInt(7))
+	save := keygen.NewLocalPartySaveData(len(newPIDs))
+
+	round := &round1{
+		base: &base{
+			ReSharingParameters: params,
+			temp: &localTempData{
+				localMessageStore: localMessageStore{
+					dgRound1Messages: make([]tss.ParsedMessage, len(oldPIDs)),
+				},
+				ssidNonce: params.SessionNonce(),
+			},
+			save:    &save,
+			oldOK:   make([]bool, len(oldPIDs)),
+			newOK:   make([]bool, len(newPIDs)),
+			started: true,
+			number:  1,
+		},
+	}
+	round.allNewOK()
+	round.temp.ssid = round.getSSID()
+	round.save.ECDSAPub = crypto.ScalarBaseMult(tss.S256(), big.NewInt(1))
+
+	differentECDSAPub := crypto.ScalarBaseMult(tss.S256(), big.NewInt(2))
+	content := &DGRound1Message{
+		EcdsaPubX:   differentECDSAPub.X().Bytes(),
+		EcdsaPubY:   differentECDSAPub.Y().Bytes(),
+		VCommitment: []byte{0x03},
+		Ssid:        round.temp.ssid,
+	}
+	routing := tss.MessageRouting{
+		From:        oldPIDs[1],
+		To:          newPIDs,
+		IsBroadcast: true,
+	}
+	round.temp.dgRound1Messages[1] = tss.NewMessage(routing, content, tss.NewMessageWrapper(routing, content))
+
+	_, tssErr := round.Update()
+	if tssErr == nil {
+		t.Fatal("expected mismatched ECDSA public key to be rejected even when old party 0 has not arrived")
+	}
+	if !strings.Contains(tssErr.Error(), "ecdsa pub key did not match") {
+		t.Fatalf("unexpected error: %v", tssErr)
+	}
+	if round.oldOK[1] {
+		t.Fatal("old party 1 must not be marked accepted after ECDSA public key mismatch")
 	}
 }

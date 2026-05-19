@@ -131,16 +131,9 @@ func (round *round1) Update() (bool, *tss.Error) {
 		if !bytes.Equal(senderMsg.GetSsid(), round.temp.ssid) {
 			return false, round.WrapError(errors.New("DGRound1Message ssid does not match locally-derived ssid — old-committee party broadcast inconsistent SSID"), msg.GetFrom())
 		}
-		round.oldOK[j] = true
-
-		if round.temp.dgRound1Messages[0] == nil {
-			ret = false
-			continue
-		}
 
 		// save the ecdsa pub received from the old committee
-		r1msg := round.temp.dgRound1Messages[0].Content().(*DGRound1Message)
-		candidate, err := r1msg.UnmarshalECDSAPub(round.Params().EC())
+		candidate, err := senderMsg.UnmarshalECDSAPub(round.Params().EC())
 		if err != nil {
 			return false, round.WrapError(errors.New("unable to unmarshal the ecdsa pub key"), msg.GetFrom())
 		}
@@ -150,6 +143,7 @@ func (round *round1) Update() (bool, *tss.Error) {
 			return false, round.WrapError(errors.New("ecdsa pub key did not match what we received previously"), msg.GetFrom())
 		}
 		round.save.ECDSAPub = candidate
+		round.oldOK[j] = true
 	}
 	return ret, nil
 }

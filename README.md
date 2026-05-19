@@ -153,7 +153,7 @@ params := tss.NewParameters(curve, ctx, thisParty, len(parties), threshold)
 params.SetSessionNonceBytes([]byte(sessionID))
 ```
 
-All parties in the run must use the same non-empty session ID. Signing derives a compatibility nonce from the message if none is set, but applications that already maintain a transport session ID should still pass it through. Keygen and re-sharing preserve the historical zero default when unset, so callers should set the nonce explicitly for distinct protocol runs.
+All parties in the run must use the same non-empty session ID, and it must be unique to the ceremony. Keygen, signing, and ECDSA re-sharing fail closed if no session nonce is set; reusing a session ID across otherwise identical ceremonies reintroduces transcript-splicing risk.
 
 Additionally, there should be a mechanism in your transport to allow for "reliable broadcasts", meaning parties can broadcast a message to other parties such that it's guaranteed that each one receives the same message. There are several examples of algorithms online that do this by sharing and comparing hashes of received messages.
 
