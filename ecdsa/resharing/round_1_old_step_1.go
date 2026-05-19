@@ -41,11 +41,16 @@ func (round *round1) Start() *tss.Error {
 	// public inputs (party IDs, curve, round number, ssidNonce); broadcasting
 	// adds early detection of a corrupted old-committee party who would
 	// otherwise emit divergent SSIDs across new-committee members.
-	if nonce := round.Params().SessionNonce(); nonce != nil {
-		round.temp.ssidNonce = new(big.Int).Set(nonce)
-	} else {
-		round.temp.ssidNonce = new(big.Int).SetUint64(0)
+	//
+	// Resharing fails closed if no SessionNonce is set. The previous zero
+	// fallback neutralised the SSID binding for any caller that forgot
+	// SetSessionNonce — two resharing ceremonies over identical committees
+	// would derive the same SSID, breaking session binding.
+	nonce := round.Params().SessionNonce()
+	if nonce == nil {
+		return round.WrapError(errors.New("resharing requires tss.Parameters.SetSessionNonce(<unique per-ceremony nonce>) before Start"))
 	}
+	round.temp.ssidNonce = new(big.Int).Set(nonce)
 	round.temp.ssid = round.getSSID()
 
 	if !round.ReSharingParams().IsOldCommittee() {

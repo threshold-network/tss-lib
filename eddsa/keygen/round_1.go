@@ -38,11 +38,16 @@ func (round *round1) Start() *tss.Error {
 	Pi := round.PartyID()
 	i := Pi.Index
 
-	if nonce := round.Params().SessionNonce(); nonce != nil {
-		round.temp.ssidNonce = new(big.Int).Set(nonce)
-	} else {
-		round.temp.ssidNonce = new(big.Int).SetUint64(0)
+	// Keygen fails closed if no SessionNonce is set. The previous zero
+	// fallback neutralised the SSID binding for any caller that forgot
+	// SetSessionNonce — two keygen ceremonies over otherwise identical
+	// committees would derive the same SSID, exposing proof transcripts
+	// to splicing between runs.
+	nonce := round.Params().SessionNonce()
+	if nonce == nil {
+		return round.WrapError(errors.New("keygen requires tss.Parameters.SetSessionNonce(<unique per-ceremony nonce>) before Start"), Pi)
 	}
+	round.temp.ssidNonce = new(big.Int).Set(nonce)
 	ssid, err := round.getSSID()
 	if err != nil {
 		return round.WrapError(err)

@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"os"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -37,6 +38,30 @@ func setUp(level string) {
 	}
 }
 
+// TestKeygen_Start_RequiresSessionNonce pins that keygen fails closed when
+// no SessionNonce is set. Previously, round 1 fell back to a zero nonce,
+// neutralising the SSID binding for any caller that forgot
+// SetSessionNonce.
+func TestKeygen_Start_RequiresSessionNonce(t *testing.T) {
+	tss.SetCurve(tss.Edwards())
+	pIDs := tss.GenerateTestPartyIDs(1)
+	p2pCtx := tss.NewPeerContext(pIDs)
+	params := tss.NewParameters(tss.Edwards(), p2pCtx, pIDs[0], len(pIDs), 0)
+	// Deliberately do NOT call params.SetSessionNonce — Start must fail closed.
+
+	out := make(chan tss.Message, 1)
+	end := make(chan LocalPartySaveData, 1)
+	lp := NewLocalParty(params, out, end).(*LocalParty)
+
+	tssErr := lp.Start()
+	if tssErr == nil {
+		t.Fatal("Start must return an error without SessionNonce")
+	}
+	if !strings.Contains(tssErr.Error(), "SetSessionNonce") {
+		t.Fatalf("error must reference SetSessionNonce, got: %v", tssErr)
+	}
+}
+
 func TestE2EConcurrentAndSaveFixtures(t *testing.T) {
 	setUp("info")
 
@@ -59,9 +84,11 @@ func TestE2EConcurrentAndSaveFixtures(t *testing.T) {
 	startGR := runtime.NumGoroutine()
 
 	// init the parties
+	ceremonyNonce := big.NewInt(1)
 	for i := 0; i < len(pIDs); i++ {
 		var P *LocalParty
 		params := tss.NewParameters(tss.Edwards(), p2pCtx, pIDs[i], len(pIDs), threshold)
+		params.SetSessionNonce(ceremonyNonce)
 		if i < len(fixtures) {
 			P = NewLocalParty(params, outCh, endCh).(*LocalParty)
 		} else {

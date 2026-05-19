@@ -100,16 +100,13 @@ func (params *Parameters) SessionNonce() *big.Int {
 // SetSessionNonce sets a per-session nonce that all parties in a protocol run
 // must agree on. It must be called before Start.
 //
-// Signing requires this: round 1 fails closed if no nonce is set, because the
-// previous SHA512_256(messageBytes) fallback caused two concurrent ceremonies
-// on the same canonical message to collide on SSID and proof contexts. For
-// signing, the caller must supply a per-ceremony unique nonce; reusing the
-// same nonce across distinct ceremonies on the same payload reintroduces
+// Keygen, resharing, and signing all fail closed if no nonce is set. The
+// previous zero (keygen/resharing) and SHA512_256(messageBytes) (signing)
+// fallbacks caused two ceremonies with otherwise-identical inputs to derive
+// the same SSID, breaking the session-binding property that the proofs rely
+// on. The caller must supply a per-ceremony unique nonce; reusing the same
+// nonce across distinct ceremonies on the same inputs reintroduces
 // transcript-splicing risk.
-//
-// Keygen and resharing still tolerate an unset nonce (falling back to zero),
-// but applications that need unique SSIDs across otherwise identical
-// keygen/resharing party sets should also set it explicitly.
 func (params *Parameters) SetSessionNonce(nonce *big.Int) {
 	if nonce == nil {
 		params.sessionNonce = nil
