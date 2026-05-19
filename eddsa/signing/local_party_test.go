@@ -65,8 +65,10 @@ func TestE2EConcurrent(t *testing.T) {
 	assert.NoError(t, err)
 	msg := new(big.Int).SetBytes(msgData)
 	// init the parties
+	ceremonyNonce := big.NewInt(1)
 	for i := 0; i < len(signPIDs); i++ {
 		params := tss.NewParameters(tss.Edwards(), p2pCtx, signPIDs[i], len(signPIDs), threshold)
+		params.SetSessionNonce(ceremonyNonce)
 
 		P := NewLocalParty(msg, params, keys[i], outCh, endCh, len(msgData)).(*LocalParty)
 		parties = append(parties, P)
@@ -145,6 +147,34 @@ signing:
 				break signing
 			}
 		}
+	}
+}
+
+// TestSigning_Start_RequiresSessionNonce pins that signing fails closed
+// when no SessionNonce is set. Previously the round-1 code fell back to
+// SHA512_256(messageBytes), making two concurrent ceremonies on the same
+// canonical message reuse the same SSID and enabling Fiat-Shamir
+// transcript splicing across runs. The fix removes the fallback and
+// requires the caller to provide a per-ceremony nonce.
+func TestSigning_Start_RequiresSessionNonce(t *testing.T) {
+	setUp("info")
+	keys, signPIDs, err := keygen.LoadKeygenTestFixturesRandomSet(testThreshold+1, testParticipants)
+	assert.NoError(t, err, "should load keygen fixtures")
+
+	p2pCtx := tss.NewPeerContext(signPIDs)
+	outCh := make(chan tss.Message, len(signPIDs))
+	endCh := make(chan common.SignatureData, len(signPIDs))
+
+	params := tss.NewParameters(tss.Edwards(), p2pCtx, signPIDs[0], len(signPIDs), testThreshold)
+	// Deliberately do NOT call params.SetSessionNonce — Start must fail closed.
+
+	P := NewLocalParty(big.NewInt(42), params, keys[0], outCh, endCh).(*LocalParty)
+	tssErr := P.Start()
+	if tssErr == nil {
+		t.Fatal("Start must return an error without SessionNonce")
+	}
+	if !strings.Contains(tssErr.Error(), "SetSessionNonce") {
+		t.Fatalf("error must reference SetSessionNonce, got: %v", tssErr)
 	}
 }
 

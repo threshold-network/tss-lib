@@ -33,11 +33,16 @@ func (round *round1) Start() *tss.Error {
 	round.started = true
 	round.resetOK()
 
-	if nonce := round.Params().SessionNonce(); nonce != nil {
-		round.temp.ssidNonce = new(big.Int).Set(nonce)
-	} else {
-		round.temp.ssidNonce = round.messageSessionNonce()
+	// Signing fails closed if no SessionNonce is set. The previous fallback
+	// (SHA512_256 of the message) made two concurrent ceremonies on the same
+	// canonical message reuse the same SSID, which would have enabled
+	// Fiat-Shamir transcript splicing across the runs. The caller must now
+	// supply a per-ceremony nonce via tss.Parameters.SetSessionNonce.
+	nonce := round.Params().SessionNonce()
+	if nonce == nil {
+		return round.WrapError(errors.New("signing requires tss.Parameters.SetSessionNonce(<unique per-ceremony nonce>) before Start"))
 	}
+	round.temp.ssidNonce = new(big.Int).Set(nonce)
 	ssid, err := round.getSSID()
 	if err != nil {
 		return round.WrapError(err)

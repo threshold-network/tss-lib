@@ -125,19 +125,6 @@ func (round *base) resetOK() {
 	}
 }
 
-func (round *base) messageBytes() []byte {
-	if round.temp.fullBytesLen == 0 {
-		return round.temp.m.Bytes()
-	}
-	mBytes := make([]byte, round.temp.fullBytesLen)
-	round.temp.m.FillBytes(mBytes)
-	return mBytes
-}
-
-func (round *base) messageSessionNonce() *big.Int {
-	return new(big.Int).SetBytes(common.SHA512_256(round.messageBytes()))
-}
-
 func (round *base) getSSID() ([]byte, error) {
 	ssidList := []*big.Int{
 		round.EC().Params().P,
