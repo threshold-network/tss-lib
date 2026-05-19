@@ -109,8 +109,12 @@ func (params *Parameters) SetSessionNonce(nonce *big.Int) {
 
 // SetSessionNonceBytes hashes an application-level session ID into the
 // per-session nonce. All parties must call it with the same non-empty session ID
-// before constructing local parties for a protocol run.
+// before constructing local parties for a protocol run. It panics if the
+// session ID is empty.
 func (params *Parameters) SetSessionNonceBytes(sessionID []byte) {
+	if len(sessionID) == 0 {
+		panic("tss: session ID must be non-empty")
+	}
 	params.SetSessionNonce(new(big.Int).SetBytes(common.SHA512_256(sessionID)))
 }
 

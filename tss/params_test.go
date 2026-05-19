@@ -36,3 +36,15 @@ func TestSetSessionNonceBytesHashesSessionID(t *testing.T) {
 	expected := new(big.Int).SetBytes(common.SHA512_256(sessionID))
 	assert.Equal(t, expected, params.SessionNonce())
 }
+
+func TestSetSessionNonceBytesRejectsEmptySessionID(t *testing.T) {
+	pIDs := GenerateTestPartyIDs(1)
+	params := NewParameters(S256(), NewPeerContext(pIDs), pIDs[0], 1, 0)
+
+	assert.Panics(t, func() {
+		params.SetSessionNonceBytes(nil)
+	})
+	assert.Panics(t, func() {
+		params.SetSessionNonceBytes([]byte{})
+	})
+}
