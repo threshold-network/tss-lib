@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math/big"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -243,6 +244,53 @@ signing:
 			}
 		}
 	}
+}
+
+// TestNewLocalPartyWithKDD_FullBytesLen_Negative pins constructor-side
+// validation for fullBytesLen. Previously, a negative fullBytesLen passed
+// through to the round-1 code path, where `make([]byte, fullBytesLen)`
+// panicked inside a protocol goroutine, bypassing tss.Error reporting and
+// crossing goroutine boundaries. The constructor now panics synchronously
+// at the caller's call site with a clear message.
+func TestNewLocalPartyWithKDD_FullBytesLen_Negative(t *testing.T) {
+	msg := big.NewInt(1)
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for negative fullBytesLen")
+		}
+		err, ok := r.(error)
+		if !ok {
+			t.Fatalf("panic value must be an error, got %T: %v", r, r)
+		}
+		if !strings.Contains(err.Error(), "fullBytesLen must be non-negative") {
+			t.Fatalf("unexpected panic message: %v", err)
+		}
+	}()
+	_ = NewLocalPartyWithKDD(msg, nil, keygen.LocalPartySaveData{}, nil, nil, nil, -1)
+}
+
+// TestNewLocalPartyWithKDD_FullBytesLen_TooSmall pins that a fullBytesLen
+// smaller than the message's byte width is rejected at the constructor
+// rather than later inside (*big.Int).FillBytes (which would panic with
+// "big.Int.FillBytes: insufficient length" inside a protocol goroutine).
+func TestNewLocalPartyWithKDD_FullBytesLen_TooSmall(t *testing.T) {
+	// 16-bit msg needs at least 2 bytes; pass fullBytesLen=1 to trigger.
+	msg := big.NewInt(0xABCD)
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for fullBytesLen smaller than msg byte width")
+		}
+		err, ok := r.(error)
+		if !ok {
+			t.Fatalf("panic value must be an error, got %T: %v", r, r)
+		}
+		if !strings.Contains(err.Error(), "fullBytesLen=1 is too small") {
+			t.Fatalf("unexpected panic message: %v", err)
+		}
+	}()
+	_ = NewLocalPartyWithKDD(msg, nil, keygen.LocalPartySaveData{}, nil, nil, nil, 1)
 }
 
 func TestFillTo32BytesInPlace(t *testing.T) {

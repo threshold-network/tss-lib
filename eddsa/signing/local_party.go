@@ -66,6 +66,12 @@ type (
 	}
 )
 
+// NewLocalParty returns a signing party. Optional fullBytesLen, if provided,
+// fixes the byte width used to encode the message in round-1 SSID derivation
+// (preserving leading zero bytes). The value must be non-negative and, when
+// non-zero, must be at least ceil(msg.BitLen()/8); violating either
+// constraint is a caller bug and the constructor panics at the call site
+// rather than later inside a protocol goroutine.
 func NewLocalParty(
 	msg *big.Int,
 	params *tss.Parameters,
@@ -74,6 +80,16 @@ func NewLocalParty(
 	end chan<- common.SignatureData,
 	fullBytesLen ...int,
 ) tss.Party {
+	if len(fullBytesLen) > 0 {
+		if fullBytesLen[0] < 0 {
+			panic(fmt.Errorf("NewLocalParty: fullBytesLen must be non-negative, got %d", fullBytesLen[0]))
+		}
+		if fullBytesLen[0] > 0 && msg != nil && msg.BitLen() > 8*fullBytesLen[0] {
+			panic(fmt.Errorf("NewLocalParty: fullBytesLen=%d is too small for a %d-bit message (need at least %d bytes)",
+				fullBytesLen[0], msg.BitLen(), (msg.BitLen()+7)/8))
+		}
+	}
+
 	partyCount := len(params.Parties().IDs())
 	p := &LocalParty{
 		BaseParty: new(tss.BaseParty),
