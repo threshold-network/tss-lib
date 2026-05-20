@@ -28,7 +28,7 @@ func TestDGRound1Message_ValidateBasic_RequiresSsid(t *testing.T) {
 		EcdsaPubX:   []byte{0x01},
 		EcdsaPubY:   []byte{0x02},
 		VCommitment: []byte{0x03},
-		Ssid:        []byte{0x04},
+		Ssid:        make([]byte, 32),
 	}
 	if !withSsid.ValidateBasic() {
 		t.Fatal("ValidateBasic must accept a complete DGRound1Message")
@@ -52,6 +52,16 @@ func TestDGRound1Message_ValidateBasic_RequiresSsid(t *testing.T) {
 	}
 	if emptySsid.ValidateBasic() {
 		t.Fatal("ValidateBasic must reject a DGRound1Message with zero-length Ssid")
+	}
+
+	shortSsid := &DGRound1Message{
+		EcdsaPubX:   []byte{0x01},
+		EcdsaPubY:   []byte{0x02},
+		VCommitment: []byte{0x03},
+		Ssid:        []byte("short-ssid"),
+	}
+	if shortSsid.ValidateBasic() {
+		t.Fatal("ValidateBasic must reject a DGRound1Message with short Ssid")
 	}
 }
 

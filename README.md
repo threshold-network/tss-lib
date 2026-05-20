@@ -89,7 +89,8 @@ Use the `signing.LocalParty` for signing and provide it with a `message` to sign
 Please note that `t+1` signers are required to sign a message and for optimal usage no more than this should be involved. Each signer should have the same view of who the `t+1` signers are.
 
 ```go
-party := signing.NewLocalParty(message, params, ourKeyData, outCh, endCh)
+fullBytesLen := (params.EC().Params().N.BitLen() + 7) / 8
+party := signing.NewLocalParty(message, params, ourKeyData, outCh, endCh, fullBytesLen)
 go func() {
     err := party.Start()
     // handle err ...
@@ -153,7 +154,7 @@ params := tss.NewParameters(curve, ctx, thisParty, len(parties), threshold)
 params.SetSessionNonceBytes([]byte(sessionID))
 ```
 
-All parties in the run must use the same non-empty session ID, and it must be unique to the ceremony. Keygen, signing, and ECDSA re-sharing fail closed if no session nonce is set; reusing a session ID across otherwise identical ceremonies reintroduces transcript-splicing risk.
+All parties in the run must use the same high-entropy session ID of at least 16 bytes, and it must be unique to the ceremony. Keygen, signing, and ECDSA re-sharing fail closed if no session nonce is set; reusing a session ID across otherwise identical ceremonies reintroduces transcript-splicing risk.
 
 Additionally, there should be a mechanism in your transport to allow for "reliable broadcasts", meaning parties can broadcast a message to other parties such that it's guaranteed that each one receives the same message. There are several examples of algorithms online that do this by sharing and comparing hashes of received messages.
 

@@ -38,9 +38,9 @@ const (
 func TestSSIDIncludesSessionNonce(t *testing.T) {
 	pIDs := tss.GenerateTestPartyIDs(3)
 
-	ssidA := testKeygenSSID(pIDs, []byte("session-a"))
-	ssidAAgain := testKeygenSSID(pIDs, []byte("session-a"))
-	ssidB := testKeygenSSID(pIDs, []byte("session-b"))
+	ssidA := testKeygenSSID(pIDs, []byte("session-a-with-128-bits"))
+	ssidAAgain := testKeygenSSID(pIDs, []byte("session-a-with-128-bits"))
+	ssidB := testKeygenSSID(pIDs, []byte("session-b-with-128-bits"))
 
 	assert.Equal(t, ssidA, ssidAAgain)
 	assert.NotEqual(t, ssidA, ssidB)

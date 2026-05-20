@@ -25,6 +25,12 @@ const (
 	testSafePrimeBits = 1024
 )
 
+func TestProofSessionRejectsEmptyTag(t *testing.T) {
+	assert.Panics(t, func() {
+		_, _ = ProveRangeAlice(nil, nil, nil, nil, nil, nil, nil, nil, []byte{})
+	})
+}
+
 func TestProveRangeAlice(t *testing.T) {
 	q := tss.EC().Params().N
 
@@ -151,6 +157,19 @@ func TestRangeProofAliceRejectsMalformedInputs(t *testing.T) {
 	badS := *proof
 	badS.S = big.NewInt(1)
 	assert.False(t, badS.Verify(tss.EC(), pk, NTildei, h1i, h2i, c), "S equal to one must fail")
+
+	badSZero := *proof
+	badSZero.S = big.NewInt(0)
+	assert.False(t, badSZero.Verify(tss.EC(), pk, NTildei, h1i, h2i, c), "S equal to zero must fail")
+
+	q3 := new(big.Int).Mul(q, q)
+	q3.Mul(q3, q)
+	tooLargeS2 := new(big.Int).Mul(q3, NTildei)
+	tooLargeS2.Lsh(tooLargeS2, 1)
+	tooLargeS2.Add(tooLargeS2, big.NewInt(1))
+	badS2 := *proof
+	badS2.S2 = tooLargeS2
+	assert.False(t, badS2.Verify(tss.EC(), pk, NTildei, h1i, h2i, c), "overwide S2 must fail before exponentiation")
 
 	badZ := *proof
 	badZ.Z = big.NewInt(1)

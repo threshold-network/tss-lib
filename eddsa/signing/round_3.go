@@ -79,13 +79,9 @@ func (round *round3) Start() *tss.Error {
 	h.Reset()
 	h.Write(encodedR[:])
 	h.Write(encodedPubKey[:])
-	if round.temp.fullBytesLen == 0 {
-		h.Write(round.temp.m.Bytes())
-	} else {
-		mBytes := make([]byte, round.temp.fullBytesLen)
-		round.temp.m.FillBytes(mBytes)
-		h.Write(mBytes)
-	}
+	mBytes := make([]byte, round.temp.fullBytesLen)
+	round.temp.m.FillBytes(mBytes)
+	h.Write(mBytes)
 
 	var lambda [64]byte
 	h.Sum(lambda[:0])

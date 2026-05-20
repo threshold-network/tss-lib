@@ -62,7 +62,7 @@ func (m *DGRound1Message) ValidateBasic() bool {
 		common.NonEmptyBytes(m.EcdsaPubX) &&
 		common.NonEmptyBytes(m.EcdsaPubY) &&
 		common.NonEmptyBytes(m.VCommitment) &&
-		common.NonEmptyBytes(m.Ssid)
+		len(m.Ssid) == 32
 }
 
 func (m *DGRound1Message) UnmarshalECDSAPub(ec elliptic.Curve) (*crypto.ECPoint, error) {

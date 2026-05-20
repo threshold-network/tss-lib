@@ -108,5 +108,5 @@ func (round *base) getSSID() []byte {
 	ssidList = append(ssidList, round.Parties().IDs().Keys()...)
 	ssidList = append(ssidList, big.NewInt(int64(round.number)))
 	ssidList = append(ssidList, round.temp.ssidNonce)
-	return common.SHA512_256i(ssidList...).Bytes()
+	return common.SHA512_256i(ssidList...).FillBytes(make([]byte, 32))
 }

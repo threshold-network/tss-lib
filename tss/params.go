@@ -24,9 +24,9 @@ type (
 		threshold           int
 		concurrency         int
 		safePrimeGenTimeout time.Duration
-		// sessionNonce provides per-session SSID uniqueness for GG20
-		// proof binding. Signing falls back to the message hash; keygen
-		// and resharing require callers to coordinate a shared nonce.
+		// sessionNonce provides per-session SSID uniqueness for GG20 proof
+		// binding. Keygen, signing, and resharing require callers to coordinate
+		// a shared positive nonce before Start.
 		sessionNonce *big.Int
 	}
 
@@ -106,22 +106,23 @@ func (params *Parameters) SessionNonce() *big.Int {
 // the same SSID, breaking the session-binding property that the proofs rely
 // on. The caller must supply a per-ceremony unique nonce; reusing the same
 // nonce across distinct ceremonies on the same inputs reintroduces
-// transcript-splicing risk.
+// transcript-splicing risk. Set the nonce before Start on the same goroutine
+// that constructs the party; do not mutate Parameters concurrently with a
+// running protocol.
 func (params *Parameters) SetSessionNonce(nonce *big.Int) {
-	if nonce == nil {
-		params.sessionNonce = nil
-		return
+	if nonce == nil || nonce.Sign() <= 0 {
+		panic("tss: session nonce must be positive")
 	}
 	params.sessionNonce = new(big.Int).Set(nonce)
 }
 
 // SetSessionNonceBytes hashes an application-level session ID into the
-// per-session nonce. All parties must call it with the same non-empty session ID
-// before constructing local parties for a protocol run. It panics if the
-// session ID is empty.
+// per-session nonce. All parties must call it with the same high-entropy
+// session ID before constructing local parties for a protocol run. It panics if
+// the session ID is shorter than 16 bytes.
 func (params *Parameters) SetSessionNonceBytes(sessionID []byte) {
-	if len(sessionID) == 0 {
-		panic("tss: session ID must be non-empty")
+	if len(sessionID) < 16 {
+		panic("tss: session ID must be at least 16 bytes")
 	}
 	params.SetSessionNonce(new(big.Int).SetBytes(common.SHA512_256(sessionID)))
 }

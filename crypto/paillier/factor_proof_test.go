@@ -114,6 +114,13 @@ func TestFactorProofSessionBinding(t *testing.T) {
 	assert.False(t, res, "session-bound proof must not verify without its session")
 }
 
+func TestFactorChallengeRejectsEmptySessionTag(t *testing.T) {
+	assert.Panics(t, func() {
+		_ = FactorChallenge(big.NewInt(11), big.NewInt(2), big.NewInt(3), big.NewInt(5),
+			big.NewInt(7), big.NewInt(11), big.NewInt(13), big.NewInt(17), big.NewInt(19), big.NewInt(23), []byte{})
+	})
+}
+
 func TestFactorProofVerifyFail1(t *testing.T) {
 	facSetUp(t)
 	badN := new(big.Int).Mul(publicKey.N, big.NewInt(3))

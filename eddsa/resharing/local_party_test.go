@@ -174,7 +174,7 @@ signing:
 	for j, signPID := range signPIDs {
 		params := tss.NewParameters(tss.Edwards(), signP2pCtx, signPID, len(signPIDs), newThreshold)
 		params.SetSessionNonce(signCeremonyNonce)
-		P := signing.NewLocalParty(big.NewInt(42), params, signKeys[j], signOutCh, signEndCh).(*signing.LocalParty)
+		P := signing.NewLocalParty(big.NewInt(42), params, signKeys[j], signOutCh, signEndCh, 32).(*signing.LocalParty)
 		signParties = append(signParties, P)
 		go func(P *signing.LocalParty) {
 			if err := P.Start(); err != nil {
@@ -225,8 +225,9 @@ signing:
 					println("new sig error, ", err.Error())
 				}
 
-				ok := edwards.Verify(&pk, big.NewInt(42).Bytes(),
-					newSig.R, newSig.S)
+				msgBytes := make([]byte, 32)
+				big.NewInt(42).FillBytes(msgBytes)
+				ok := edwards.Verify(&pk, msgBytes, newSig.R, newSig.S)
 
 				assert.True(t, ok, "eddsa verify must pass")
 				t.Log("EDDSA signing test done.")

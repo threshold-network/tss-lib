@@ -208,6 +208,9 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	q3 = new(big.Int).Mul(q, q3)
 	q7 := new(big.Int).Mul(q3, q3)
 	q7 = new(big.Int).Mul(q7, q)
+	q3NTilde := new(big.Int).Mul(q3, NTilde)
+	maxS2 := new(big.Int).Lsh(q3NTilde, 1)
+	maxT2 := new(big.Int).Set(maxS2)
 
 	if !common.IsInInterval(pf.Z, NTilde) {
 		return false
@@ -272,7 +275,13 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	if pf.S1.Cmp(q3) > 0 {
 		return false
 	}
+	if pf.S2.Cmp(maxS2) > 0 {
+		return false
+	}
 	if pf.T1.Cmp(q7) > 0 {
+		return false
+	}
+	if pf.T2.Cmp(maxT2) > 0 {
 		return false
 	}
 
@@ -359,6 +368,9 @@ func (pf *ProofBob) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1
 func optionalProofSession(session [][]byte) []byte {
 	if len(session) == 0 {
 		return nil
+	}
+	if len(session[0]) == 0 {
+		panic("mta: proof session tag must be non-empty")
 	}
 	return session[0]
 }

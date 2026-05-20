@@ -90,8 +90,8 @@ func (round *round1) Start() *tss.Error {
 	// committees would derive the same SSID, exposing proof transcripts
 	// to splicing between runs.
 	nonce := round.Params().SessionNonce()
-	if nonce == nil {
-		return round.WrapError(errors.New("keygen requires tss.Parameters.SetSessionNonce(<unique per-ceremony nonce>) before Start"), Pi)
+	if nonce == nil || nonce.Sign() <= 0 {
+		return round.WrapError(errors.New("keygen requires tss.Parameters.SetSessionNonce(<unique positive per-ceremony nonce>) before Start"), Pi)
 	}
 	round.temp.ssidNonce = new(big.Int).Set(nonce)
 	round.temp.ssid = round.getSSID()

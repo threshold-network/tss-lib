@@ -51,8 +51,8 @@ func (round *round1) Start() *tss.Error {
 	// Fiat-Shamir transcript splicing across the runs. The caller must now
 	// supply a per-ceremony nonce via tss.Parameters.SetSessionNonce.
 	nonce := round.Params().SessionNonce()
-	if nonce == nil {
-		return round.WrapError(errors.New("signing requires tss.Parameters.SetSessionNonce(<unique per-ceremony nonce>) before Start"))
+	if nonce == nil || nonce.Sign() <= 0 {
+		return round.WrapError(errors.New("signing requires tss.Parameters.SetSessionNonce(<unique positive per-ceremony nonce>) before Start"))
 	}
 	round.temp.ssidNonce = new(big.Int).Set(nonce)
 	ssid, err := round.getSSID()

@@ -29,7 +29,7 @@ func TestSetSessionNonceCopiesInput(t *testing.T) {
 func TestSetSessionNonceBytesHashesSessionID(t *testing.T) {
 	pIDs := GenerateTestPartyIDs(1)
 	params := NewParameters(S256(), NewPeerContext(pIDs), pIDs[0], 1, 0)
-	sessionID := []byte("session-1")
+	sessionID := []byte("session-1-with-128-bits")
 
 	params.SetSessionNonceBytes(sessionID)
 
@@ -37,7 +37,7 @@ func TestSetSessionNonceBytesHashesSessionID(t *testing.T) {
 	assert.Equal(t, expected, params.SessionNonce())
 }
 
-func TestSetSessionNonceBytesRejectsEmptySessionID(t *testing.T) {
+func TestSetSessionNonceBytesRejectsShortSessionID(t *testing.T) {
 	pIDs := GenerateTestPartyIDs(1)
 	params := NewParameters(S256(), NewPeerContext(pIDs), pIDs[0], 1, 0)
 
@@ -46,5 +46,23 @@ func TestSetSessionNonceBytesRejectsEmptySessionID(t *testing.T) {
 	})
 	assert.Panics(t, func() {
 		params.SetSessionNonceBytes([]byte{})
+	})
+	assert.Panics(t, func() {
+		params.SetSessionNonceBytes([]byte("short-session"))
+	})
+}
+
+func TestSetSessionNonceRejectsNonPositiveNonce(t *testing.T) {
+	pIDs := GenerateTestPartyIDs(1)
+	params := NewParameters(S256(), NewPeerContext(pIDs), pIDs[0], 1, 0)
+
+	assert.Panics(t, func() {
+		params.SetSessionNonce(nil)
+	})
+	assert.Panics(t, func() {
+		params.SetSessionNonce(big.NewInt(0))
+	})
+	assert.Panics(t, func() {
+		params.SetSessionNonce(big.NewInt(-1))
 	})
 }

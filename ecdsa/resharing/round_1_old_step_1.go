@@ -47,8 +47,8 @@ func (round *round1) Start() *tss.Error {
 	// SetSessionNonce — two resharing ceremonies over identical committees
 	// would derive the same SSID, breaking session binding.
 	nonce := round.Params().SessionNonce()
-	if nonce == nil {
-		return round.WrapError(errors.New("resharing requires tss.Parameters.SetSessionNonce(<unique per-ceremony nonce>) before Start"))
+	if nonce == nil || nonce.Sign() <= 0 {
+		return round.WrapError(errors.New("resharing requires tss.Parameters.SetSessionNonce(<unique positive per-ceremony nonce>) before Start"))
 	}
 	round.temp.ssidNonce = new(big.Int).Set(nonce)
 	round.temp.ssid = round.getSSID()

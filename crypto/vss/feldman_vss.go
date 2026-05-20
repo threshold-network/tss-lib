@@ -113,6 +113,9 @@ func (share *Share) Verify(ec elliptic.Curve, threshold int, vs Vs) bool {
 }
 
 func (shares Shares) ReConstruct(ec elliptic.Curve) (secret *big.Int, err error) {
+	if len(shares) == 0 {
+		return nil, ErrNumSharesBelowThreshold
+	}
 	if shares != nil && shares[0].Threshold+1 > len(shares) {
 		return nil, ErrNumSharesBelowThreshold
 	}

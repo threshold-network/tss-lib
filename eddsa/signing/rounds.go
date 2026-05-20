@@ -112,5 +112,5 @@ func (round *base) getSSID() ([]byte, error) {
 	ssidList = append(ssidList, bigXjList...)
 	ssidList = append(ssidList, big.NewInt(int64(round.number)))
 	ssidList = append(ssidList, round.temp.ssidNonce)
-	return common.SHA512_256i(ssidList...).Bytes(), nil
+	return common.SHA512_256i(ssidList...).FillBytes(make([]byte, 32)), nil
 }

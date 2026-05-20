@@ -154,6 +154,9 @@ func FactorChallenge(N, s, t, pkN, P, Q, A, B, T, sigma *big.Int, session ...[]b
 	qDoubleMinus1 := new(big.Int).Add(q, qMinus1) // q+q-1 = 2q-1
 
 	if len(session) > 0 {
+		if len(session[0]) == 0 {
+			panic("paillier: factor proof session tag must be non-empty")
+		}
 		eHash := common.SHA512_256i_TAGGED(session[0], N, s, t, pkN, P, Q, A, B, T, sigma)
 		return common.RejectionSample(q, eHash)
 	}

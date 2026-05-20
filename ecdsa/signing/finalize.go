@@ -61,13 +61,9 @@ func (round *finalization) Start() *tss.Error {
 	round.data.S = padToLengthBytesInPlace(sumS.Bytes(), bitSizeInBytes)
 	round.data.Signature = append(round.data.R, round.data.S...)
 	round.data.SignatureRecovery = []byte{byte(recid)}
-	if round.temp.fullBytesLen == 0 {
-		round.data.M = round.temp.m.Bytes()
-	} else {
-		mBytes := make([]byte, round.temp.fullBytesLen)
-		round.temp.m.FillBytes(mBytes)
-		round.data.M = mBytes
-	}
+	mBytes := make([]byte, round.temp.fullBytesLen)
+	round.temp.m.FillBytes(mBytes)
+	round.data.M = mBytes
 
 	pk := ecdsa.PublicKey{
 		Curve: round.Params().EC(),

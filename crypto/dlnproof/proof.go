@@ -77,14 +77,16 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 		return false
 	}
 	for i := range p.T {
-		a := new(big.Int).Mod(p.T[i], N)
-		if a.Cmp(one) != 1 || a.Cmp(N) != -1 {
+		if p.T[i] == nil || p.T[i].Cmp(one) <= 0 || p.T[i].Cmp(N) >= 0 {
 			return false
 		}
 	}
 	for i := range p.Alpha {
+		if p.Alpha[i] == nil {
+			return false
+		}
 		a := new(big.Int).Mod(p.Alpha[i], N)
-		if a.Cmp(one) != 1 || a.Cmp(N) != -1 {
+		if a.Cmp(one) <= 0 || a.Cmp(N) >= 0 {
 			return false
 		}
 	}
@@ -110,6 +112,9 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 func optionalSession(session [][]byte) []byte {
 	if len(session) == 0 {
 		return nil
+	}
+	if len(session[0]) == 0 {
+		panic("dlnproof: session tag must be non-empty")
 	}
 	return session[0]
 }

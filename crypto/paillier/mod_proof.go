@@ -142,6 +142,9 @@ func ModChallenge(N, w *big.Int, session ...[]byte) [PARAM_M]*big.Int {
 			y[i] = common.HashToN(N, w, big.NewInt(int64(i)))
 			continue
 		}
+		if len(session[0]) == 0 {
+			panic("paillier: mod proof session tag must be non-empty")
+		}
 		inputs := append([]*big.Int{w, N}, y[:i]...)
 		y[i] = common.HashToNTagged(session[0], N, inputs...)
 	}

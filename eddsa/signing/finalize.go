@@ -43,13 +43,9 @@ func (round *finalization) Start() *tss.Error {
 	round.data.Signature = append(bigIntToEncodedBytes(round.temp.r)[:], sumS[:]...)
 	round.data.R = round.temp.r.Bytes()
 	round.data.S = s.Bytes()
-	if round.temp.fullBytesLen == 0 {
-		round.data.M = round.temp.m.Bytes()
-	} else {
-		mBytes := make([]byte, round.temp.fullBytesLen)
-		round.temp.m.FillBytes(mBytes)
-		round.data.M = mBytes
-	}
+	mBytes := make([]byte, round.temp.fullBytesLen)
+	round.temp.m.FillBytes(mBytes)
+	round.data.M = mBytes
 
 	pk := edwards.PublicKey{
 		Curve: round.Params().EC(),

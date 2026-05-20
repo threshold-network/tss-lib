@@ -50,6 +50,12 @@ func TestModProofSessionBinding(t *testing.T) {
 	assert.False(t, res, "session-bound proof must not verify without its session")
 }
 
+func TestModChallengeRejectsEmptySessionTag(t *testing.T) {
+	assert.Panics(t, func() {
+		_ = ModChallenge(big.NewInt(11), big.NewInt(2), []byte{})
+	})
+}
+
 // TestModChallenge_SessionPath_NotTruncated pins the invariant that the
 // session-tagged ModChallenge path produces challenges with the full
 // ~N.BitLen() of entropy, not the 256-bit truncated form that would result

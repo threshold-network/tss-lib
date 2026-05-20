@@ -180,7 +180,7 @@ func TestE2EWithHDKeyDerivation(t *testing.T) {
 		params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[i], len(signPIDs), threshold)
 		params.SetSessionNonce(ceremonyNonce)
 
-		P := NewLocalPartyWithKDD(big.NewInt(42), params, keys[i], keyDerivationDelta, outCh, endCh).(*LocalParty)
+		P := NewLocalPartyWithKDD(big.NewInt(42), params, keys[i], keyDerivationDelta, outCh, endCh, 32).(*LocalParty)
 		parties = append(parties, P)
 		go func(P *LocalParty) {
 			if err := P.Start(); err != nil {
@@ -268,7 +268,7 @@ func TestSigning_Start_RequiresSessionNonce(t *testing.T) {
 	params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[0], len(signPIDs), testThreshold)
 	// Deliberately do NOT call params.SetSessionNonce — Start must fail closed.
 
-	P := NewLocalParty(big.NewInt(42), params, keys[0], outCh, endCh).(*LocalParty)
+	P := NewLocalParty(big.NewInt(42), params, keys[0], outCh, endCh, 32).(*LocalParty)
 	tssErr := P.Start()
 	if tssErr == nil {
 		t.Fatal("Start must return an error without SessionNonce")
@@ -278,28 +278,32 @@ func TestSigning_Start_RequiresSessionNonce(t *testing.T) {
 	}
 }
 
-// TestNewLocalPartyWithKDD_FullBytesLen_Negative pins constructor-side
+// TestNewLocalPartyWithKDD_FullBytesLen_NonPositive pins constructor-side
 // validation for fullBytesLen. Previously, a negative fullBytesLen passed
 // through to the round-1 code path, where `make([]byte, fullBytesLen)`
 // panicked inside a protocol goroutine, bypassing tss.Error reporting and
 // crossing goroutine boundaries. The constructor now panics synchronously
 // at the caller's call site with a clear message.
-func TestNewLocalPartyWithKDD_FullBytesLen_Negative(t *testing.T) {
+func TestNewLocalPartyWithKDD_FullBytesLen_NonPositive(t *testing.T) {
 	msg := big.NewInt(1)
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for negative fullBytesLen")
-		}
-		err, ok := r.(error)
-		if !ok {
-			t.Fatalf("panic value must be an error, got %T: %v", r, r)
-		}
-		if !strings.Contains(err.Error(), "fullBytesLen must be non-negative") {
-			t.Fatalf("unexpected panic message: %v", err)
-		}
-	}()
-	_ = NewLocalPartyWithKDD(msg, nil, keygen.LocalPartySaveData{}, nil, nil, nil, -1)
+	for _, length := range []int{-1, 0} {
+		func() {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("expected panic for fullBytesLen=%d", length)
+				}
+				err, ok := r.(error)
+				if !ok {
+					t.Fatalf("panic value must be an error, got %T: %v", r, r)
+				}
+				if !strings.Contains(err.Error(), "fullBytesLen must be positive") {
+					t.Fatalf("unexpected panic message: %v", err)
+				}
+			}()
+			_ = NewLocalPartyWithKDD(msg, nil, keygen.LocalPartySaveData{}, nil, nil, nil, length)
+		}()
+	}
 }
 
 // TestNewLocalPartyWithKDD_FullBytesLen_TooSmall pins that a fullBytesLen
@@ -323,6 +327,42 @@ func TestNewLocalPartyWithKDD_FullBytesLen_TooSmall(t *testing.T) {
 		}
 	}()
 	_ = NewLocalPartyWithKDD(msg, nil, keygen.LocalPartySaveData{}, nil, nil, nil, 1)
+}
+
+func TestNewLocalPartyWithKDD_FullBytesLen_Required(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic when fullBytesLen is omitted")
+		}
+		err, ok := r.(error)
+		if !ok {
+			t.Fatalf("panic value must be an error, got %T: %v", r, r)
+		}
+		if !strings.Contains(err.Error(), "fullBytesLen is required") {
+			t.Fatalf("unexpected panic message: %v", err)
+		}
+	}()
+	_ = NewLocalPartyWithKDD(big.NewInt(42), nil, keygen.LocalPartySaveData{}, nil, nil, nil)
+}
+
+func TestNewLocalPartyWithKDD_FullBytesLen_TooWide(t *testing.T) {
+	pIDs := tss.GenerateTestPartyIDs(1)
+	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], 1, 0)
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for fullBytesLen wider than the curve order")
+		}
+		err, ok := r.(error)
+		if !ok {
+			t.Fatalf("panic value must be an error, got %T: %v", r, r)
+		}
+		if !strings.Contains(err.Error(), "exceeds curve order byte length") {
+			t.Fatalf("unexpected panic message: %v", err)
+		}
+	}()
+	_ = NewLocalPartyWithKDD(big.NewInt(1), params, keygen.LocalPartySaveData{}, nil, nil, nil, 33)
 }
 
 func TestFillTo32BytesInPlace(t *testing.T) {

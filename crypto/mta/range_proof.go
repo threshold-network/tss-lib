@@ -114,6 +114,8 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 	q := ec.Params().N
 	q3 := new(big.Int).Mul(q, q)
 	q3 = new(big.Int).Mul(q, q3)
+	q3NTilde := new(big.Int).Mul(q3, NTilde)
+	maxS2 := new(big.Int).Lsh(q3NTilde, 1)
 
 	if !common.IsInInterval(pf.Z, NTilde) {
 		return false
@@ -145,6 +147,12 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 	if pf.S.Cmp(one) == 0 {
 		return false
 	}
+	if pf.S.Cmp(zero) == 0 {
+		return false
+	}
+	if new(big.Int).GCD(nil, nil, pf.S, pk.N).Cmp(one) != 0 {
+		return false
+	}
 	if pf.Z.Cmp(one) == 0 {
 		return false
 	}
@@ -154,6 +162,9 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 
 	// 3.
 	if pf.S1.Cmp(q3) == 1 {
+		return false
+	}
+	if pf.S2.Cmp(maxS2) > 0 {
 		return false
 	}
 

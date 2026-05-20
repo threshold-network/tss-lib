@@ -120,6 +120,20 @@ func TestShareProtocolWC(t *testing.T) {
 	badS1.S1 = new(big.Int).Sub(q, big.NewInt(1))
 	assert.False(t, badS1.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "S1 below q must fail")
 
+	q3 := new(big.Int).Mul(q, q)
+	q3.Mul(q3, q)
+	tooLargeBlind := new(big.Int).Mul(q3, NTildei)
+	tooLargeBlind.Lsh(tooLargeBlind, 1)
+	tooLargeBlind.Add(tooLargeBlind, big.NewInt(1))
+
+	badS2 := cloneProofBobWC(pfB)
+	badS2.S2 = new(big.Int).Set(tooLargeBlind)
+	assert.False(t, badS2.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "overwide S2 must fail before exponentiation")
+
+	badT2 := cloneProofBobWC(pfB)
+	badT2.T2 = new(big.Int).Set(tooLargeBlind)
+	assert.False(t, badT2.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "overwide T2 must fail before exponentiation")
+
 	badV := cloneProofBobWC(pfB)
 	badV.V = big.NewInt(0)
 	assert.False(t, badV.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "V equal to zero must fail")

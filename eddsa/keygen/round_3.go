@@ -80,13 +80,12 @@ func (round *round3) Start() *tss.Error {
 			}
 
 			PjVs, err := crypto.UnFlattenECPoints(round.Params().EC(), flatPolyGs)
-			for i, PjV := range PjVs {
-				PjVs[i] = PjV.EightInvEight()
-			}
-
 			if err != nil {
 				ch <- vssOut{err, nil}
 				return
+			}
+			for i, PjV := range PjVs {
+				PjVs[i] = PjV.EightInvEight()
 			}
 			proof, err := r2msg2.UnmarshalZKProof(round.Params().EC())
 			if err != nil {
