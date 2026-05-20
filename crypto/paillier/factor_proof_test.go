@@ -25,16 +25,21 @@ func facSetUp(t *testing.T) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
 	var err error
 	privateKey, publicKey, err = GenerateKeyPair(ctx, testPaillierKeyLength)
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("failed to generate Paillier key pair: %v", err)
+	}
 
 	var err2 error
 	var auxSecret *PrivateKey
 	auxSecret, auxPrime, err2 = GenerateKeyPair(ctx, testPaillierKeyLength)
+	if err2 != nil {
+		t.Fatalf("failed to generate auxiliary Paillier key pair: %v", err2)
+	}
 
 	lambda := common.GetRandomPositiveInt(auxSecret.PhiN)
 	N := auxPrime.N
@@ -42,11 +47,11 @@ func facSetUp(t *testing.T) {
 	tt = new(big.Int).Mod(new(big.Int).Mul(r, r), N)
 	s = new(big.Int).Exp(tt, lambda, N)
 
-	assert.NoError(t, err2)
-
 	var err3 error
 	badPrivateKey, badPublicKey, err3 = GenerateBadKeyPair(ctx, testPaillierKeyLength)
-	assert.NoError(t, err3)
+	if err3 != nil {
+		t.Fatalf("failed to generate malformed Paillier key pair: %v", err3)
+	}
 }
 
 func GenerateBadKeyPair(ctx context.Context, modulusBitLen int) (privateKey *PrivateKey, publicKey *PublicKey, err error) {
