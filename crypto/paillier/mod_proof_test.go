@@ -2,10 +2,12 @@ package paillier
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
 
+	"github.com/bnb-chain/tss-lib/common"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -144,6 +146,98 @@ func TestModProofVerify_ForgedProof(t *testing.T) {
 	res, err := forgedMoodProof.ModVerify(N)
 	assert.Error(t, err)
 	assert.False(t, res, "proof verify result must be false")
+}
+
+func TestModProofVerify_AttackMod(t *testing.T) {
+	session := []byte("mod-proof-attack-session")
+
+	P := mustSetString("11956161572522965463")
+	Q := []*big.Int{
+		mustSetString("2495927741"),
+		mustSetString("3726287311"),
+		mustSetString("3756248813"),
+		mustSetString("3962607427"),
+		mustSetString("2685519289"),
+		mustSetString("2316427879"),
+		mustSetString("3704490329"),
+	}
+
+	N := new(big.Int).Set(P)
+	for _, q := range Q {
+		N.Mul(N, q)
+	}
+
+	proof, err := newHackedModProof(session, N, P, Q)
+	assert.NoError(t, err)
+
+	ok, err := proof.ModVerify(N, session)
+	assert.Error(t, err)
+	assert.False(t, ok, "false proof should not verify")
+}
+
+func newHackedModProof(session []byte, N, P *big.Int, Q []*big.Int) (*ModProof, error) {
+	phi := new(big.Int).Sub(P, one)
+	bigQ := new(big.Int).Set(one)
+	for _, q := range Q {
+		phi.Mul(phi, new(big.Int).Sub(q, one))
+		bigQ.Mul(bigQ, q)
+	}
+
+	invBigQ := new(big.Int).ModInverse(bigQ, P)
+	w := new(big.Int).Mul(invBigQ, bigQ)
+	if new(big.Int).Mod(w, P).Cmp(one) != 0 {
+		return nil, fmt.Errorf("w is not congruent to 1 modulo p")
+	}
+	for _, q := range Q {
+		if new(big.Int).Mod(w, q).Cmp(zero) != 0 {
+			return nil, fmt.Errorf("w is not congruent to 0 modulo all q values")
+		}
+	}
+
+	y := ModChallenge(N, w, session)
+	invN := new(big.Int).ModInverse(N, phi)
+	if invN == nil {
+		return nil, fmt.Errorf("N is not invertible modulo phi")
+	}
+
+	modN := common.ModInt(N)
+	modP := common.ModInt(P)
+	expo := new(big.Int).Add(P, one)
+	expo.Rsh(expo, 3)
+
+	var x [PARAM_M]*big.Int
+	var a [PARAM_M]bool
+	var b [PARAM_M]bool
+	var z [PARAM_M]*big.Int
+
+	for i, yi := range y {
+		yiP := new(big.Int).Set(yi)
+		if big.Jacobi(yiP, P) == 1 {
+			a[i] = false
+		} else {
+			a[i] = true
+			yiP = modN.Mul(big.NewInt(-1), yiP)
+		}
+		b[i] = true
+		x[i] = modN.Mul(modP.Exp(yiP, expo), w)
+		z[i] = modN.Exp(yi, invN)
+	}
+
+	return &ModProof{
+		W: w,
+		X: x,
+		A: a,
+		B: b,
+		Z: z,
+	}, nil
+}
+
+func mustSetString(s string) *big.Int {
+	i, ok := new(big.Int).SetString(s, 10)
+	if !ok {
+		panic("failed to parse integer: " + s)
+	}
+	return i
 }
 
 func TestModSqrt(t *testing.T) {

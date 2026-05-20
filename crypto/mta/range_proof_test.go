@@ -48,6 +48,56 @@ func TestProveRangeAlice(t *testing.T) {
 	assert.True(t, ok, "proof must verify")
 }
 
+func TestProveRangeAliceBypassed(t *testing.T) {
+	q := tss.EC().Params().N
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	sk0, pk0, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	assert.NoError(t, err)
+
+	m0 := common.GetRandomPositiveInt(q)
+	c0, r0, err := sk0.EncryptAndReturnRandomness(m0)
+	assert.NoError(t, err)
+
+	primes0 := [2]*big.Int{common.GetRandomPrimeInt(testSafePrimeBits), common.GetRandomPrimeInt(testSafePrimeBits)}
+	NTildei0, h1i0, h2i0, err := crypto.GenerateNTildei(primes0)
+	assert.NoError(t, err)
+	proof0, err := ProveRangeAlice(tss.EC(), pk0, c0, NTildei0, h1i0, h2i0, m0, r0)
+	assert.NoError(t, err)
+
+	assert.True(t, proof0.Verify(tss.EC(), pk0, NTildei0, h1i0, h2i0, c0), "proof 0 must verify against its own parameters")
+
+	sk1, pk1, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	assert.NoError(t, err)
+
+	m1 := common.GetRandomPositiveInt(q)
+	c1, r1, err := sk1.EncryptAndReturnRandomness(m1)
+	assert.NoError(t, err)
+
+	primes1 := [2]*big.Int{common.GetRandomPrimeInt(testSafePrimeBits), common.GetRandomPrimeInt(testSafePrimeBits)}
+	NTildei1, h1i1, h2i1, err := crypto.GenerateNTildei(primes1)
+	assert.NoError(t, err)
+	proof1, err := ProveRangeAlice(tss.EC(), pk1, c1, NTildei1, h1i1, h2i1, m1, r1)
+	assert.NoError(t, err)
+
+	assert.True(t, proof1.Verify(tss.EC(), pk1, NTildei1, h1i1, h2i1, c1), "proof 1 must verify against its own parameters")
+
+	assert.False(t, proof0.Verify(tss.EC(), pk1, NTildei1, h1i1, h2i1, c1), "proof 0 must not verify against proof 1 parameters")
+	assert.False(t, proof1.Verify(tss.EC(), pk0, NTildei0, h1i0, h2i0, c0), "proof 1 must not verify against proof 0 parameters")
+
+	bypassedProof := &RangeProofAlice{
+		S:  big.NewInt(1),
+		S1: big.NewInt(0),
+		S2: big.NewInt(0),
+		Z:  big.NewInt(1),
+		U:  big.NewInt(1),
+		W:  big.NewInt(1),
+	}
+	assert.False(t, bypassedProof.Verify(tss.EC(), pk1, NTildei1, h1i1, h2i1, big.NewInt(1)), "bypassed proof must not verify")
+}
+
 func TestProveRangeAliceSessionBinding(t *testing.T) {
 	q := tss.EC().Params().N
 

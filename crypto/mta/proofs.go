@@ -191,9 +191,15 @@ func ProofBobFromBytes(bzs [][]byte) (*ProofBob, error) {
 // an absent `X` verifies a proof generated without the X consistency check X = g^x
 func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c2 *big.Int, X *crypto.ECPoint, session ...[]byte) bool {
 	Session := optionalProofSession(session)
-	if pf == nil || pf.ProofBob == nil || !pf.ProofBob.ValidateBasic() ||
-		(X != nil && (pf.U == nil || !pf.U.ValidateBasic())) ||
+	if pf == nil || pf.ProofBob == nil ||
 		pk == nil || NTilde == nil || h1 == nil || h2 == nil || c1 == nil || c2 == nil {
+		return false
+	}
+	if X != nil {
+		if !pf.ValidateBasic() {
+			return false
+		}
+	} else if !pf.ProofBob.ValidateBasic() {
 		return false
 	}
 
@@ -358,7 +364,8 @@ func optionalProofSession(session [][]byte) []byte {
 }
 
 func (pf *ProofBob) ValidateBasic() bool {
-	return pf.Z != nil &&
+	return pf != nil &&
+		pf.Z != nil &&
 		pf.ZPrm != nil &&
 		pf.T != nil &&
 		pf.V != nil &&
@@ -371,7 +378,11 @@ func (pf *ProofBob) ValidateBasic() bool {
 }
 
 func (pf *ProofBobWC) ValidateBasic() bool {
-	return pf.ProofBob.ValidateBasic() && pf.U != nil
+	return pf != nil &&
+		pf.ProofBob != nil &&
+		pf.ProofBob.ValidateBasic() &&
+		pf.U != nil &&
+		pf.U.ValidateBasic()
 }
 
 func (pf *ProofBob) Bytes() [ProofBobBytesParts][]byte {

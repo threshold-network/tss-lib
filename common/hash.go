@@ -94,18 +94,15 @@ func SHA512_256i(in ...*big.Int) *big.Int {
 }
 
 // SHA512_256i_TAGGED is a domain-separated variant of SHA512_256i. The tag is
-// hashed and prepended twice, matching the tagged-hash construction used by BNB
-// upstream for proof challenges.
+// hashed and prepended twice.
 func SHA512_256i_TAGGED(tag []byte, in ...*big.Int) *big.Int {
 	tagBz := SHA512_256(tag)
 	state := crypto.SHA512_256.New()
 	if _, err := state.Write(tagBz); err != nil {
-		Logger.Errorf("SHA512_256i_TAGGED Write(tag) failed: %v", err)
-		return nil
+		panic("SHA512_256i_TAGGED Write(tag) failed: " + err.Error())
 	}
 	if _, err := state.Write(tagBz); err != nil {
-		Logger.Errorf("SHA512_256i_TAGGED Write(tag) failed: %v", err)
-		return nil
+		panic("SHA512_256i_TAGGED Write(tag) failed: " + err.Error())
 	}
 
 	inLen := len(in)
@@ -133,8 +130,7 @@ func SHA512_256i_TAGGED(tag []byte, in ...*big.Int) *big.Int {
 		data = append(data, dataLen...)
 	}
 	if _, err := state.Write(data); err != nil {
-		Logger.Errorf("SHA512_256i_TAGGED Write(data) failed: %v", err)
-		return nil
+		panic("SHA512_256i_TAGGED Write(data) failed: " + err.Error())
 	}
 	return new(big.Int).SetBytes(state.Sum(nil))
 }

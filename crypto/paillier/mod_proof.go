@@ -83,22 +83,22 @@ func (pf ModProof) ModVerify(N *big.Int, session ...[]byte) (bool, error) {
 		return false, fmt.Errorf("mod proof verify: modulus %d seems prime", N)
 	}
 
-	if big.Jacobi(pf.W, N) != -1 {
-		return false, fmt.Errorf("mod proof verify: w %d has invalid jacobi symbol %d", pf.W, big.Jacobi(pf.W, N))
+	if !common.Gt(pf.W, zero) || !common.Lt(pf.W, N) {
+		return false, fmt.Errorf("mod proof verify: w must be in [1, N), got %d", pf.W)
 	}
 
-	if !common.Lt(pf.W, N) {
-		return false, fmt.Errorf("mod proof verify: w %d exceeds N %d", pf.W, N)
+	if big.Jacobi(pf.W, N) != -1 {
+		return false, fmt.Errorf("mod proof verify: w %d has invalid jacobi symbol %d", pf.W, big.Jacobi(pf.W, N))
 	}
 
 	y := ModChallenge(N, pf.W, session...)
 
 	for i, yi := range y {
-		if !common.Lt(pf.X[i], N) {
-			return false, fmt.Errorf("mod proof verify: x_%d %d exceeds N %d", i, pf.X[i], N)
+		if !common.Gt(pf.X[i], zero) || !common.Lt(pf.X[i], N) {
+			return false, fmt.Errorf("mod proof verify: x_%d must be in [1, N), got %d", i, pf.X[i])
 		}
-		if !common.Lt(pf.Z[i], N) {
-			return false, fmt.Errorf("mod proof verify: z_%d %d exceeds N %d", i, pf.Z[i], N)
+		if !common.Gt(pf.Z[i], zero) || !common.Lt(pf.Z[i], N) {
+			return false, fmt.Errorf("mod proof verify: z_%d must be in [1, N), got %d", i, pf.Z[i])
 		}
 
 		ziN := new(big.Int).Exp(pf.Z[i], N, N)
