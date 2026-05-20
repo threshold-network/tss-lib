@@ -160,6 +160,75 @@ func TestFactorProofVerifyRejectsNonInvertibleBase(t *testing.T) {
 	})
 }
 
+func TestFactorProofVerifyRejectsNonZeroInvalidBases(t *testing.T) {
+	facSetUp(t)
+
+	cases := []struct {
+		name   string
+		verify func(proof *FactorProof) (bool, error)
+	}{
+		{
+			name: "verifier s",
+			verify: func(proof *FactorProof) (bool, error) {
+				return proof.FactorVerify(publicKey.N, auxPrime.N, new(big.Int).Set(auxPrime.N), tt)
+			},
+		},
+		{
+			name: "verifier t",
+			verify: func(proof *FactorProof) (bool, error) {
+				return proof.FactorVerify(publicKey.N, auxPrime.N, s, new(big.Int).Set(auxPrime.N))
+			},
+		},
+		{
+			name: "proof P",
+			verify: func(proof *FactorProof) (bool, error) {
+				proof.P = new(big.Int).Set(auxPrime.N)
+				return proof.FactorVerify(publicKey.N, auxPrime.N, s, tt)
+			},
+		},
+		{
+			name: "proof Q",
+			verify: func(proof *FactorProof) (bool, error) {
+				proof.Q = new(big.Int).Set(auxPrime.N)
+				return proof.FactorVerify(publicKey.N, auxPrime.N, s, tt)
+			},
+		},
+		{
+			name: "proof A",
+			verify: func(proof *FactorProof) (bool, error) {
+				proof.A = new(big.Int).Set(auxPrime.N)
+				return proof.FactorVerify(publicKey.N, auxPrime.N, s, tt)
+			},
+		},
+		{
+			name: "proof B",
+			verify: func(proof *FactorProof) (bool, error) {
+				proof.B = new(big.Int).Set(auxPrime.N)
+				return proof.FactorVerify(publicKey.N, auxPrime.N, s, tt)
+			},
+		},
+		{
+			name: "proof T",
+			verify: func(proof *FactorProof) (bool, error) {
+				proof.T = new(big.Int).Set(auxPrime.N)
+				return proof.FactorVerify(publicKey.N, auxPrime.N, s, tt)
+			},
+		},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			proof := privateKey.FactorProof(auxPrime.N, s, tt)
+
+			assert.NotPanics(t, func() {
+				res, err := test.verify(proof)
+				assert.Error(t, err)
+				assert.False(t, res, "proof verify result must be false")
+			})
+		})
+	}
+}
+
 func TestFactorProofVerifyFailBadFactors(t *testing.T) {
 	facSetUp(t)
 	proof := badPrivateKey.FactorProof(auxPrime.N, s, tt)
