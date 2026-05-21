@@ -24,9 +24,9 @@ type (
 		GetFrom() *PartyID
 		// Indicates whether the message should be broadcast to other participants
 		IsBroadcast() bool
-		// Indicates whether the message is to the old committee during re-sharing; used mainly in tests
+		// Legacy routing flag retained for wire compatibility with the wrapper.
 		IsToOldCommittee() bool
-		// Indicates whether the message is to both committees during re-sharing; used mainly in tests
+		// Legacy routing flag retained for wire compatibility with the wrapper.
 		IsToOldAndNewCommittees() bool
 		// Returns the encoded inner message bytes to send over the wire along with metadata about how the message should be delivered
 		WireBytes() ([]byte, *MessageRouting, error)
@@ -57,9 +57,9 @@ type (
 		To []*PartyID
 		// whether the message should be broadcast to other participants
 		IsBroadcast bool
-		// whether the message should be sent to old committee participants rather than the new committee
+		// legacy resharing routing flag retained for wire compatibility
 		IsToOldCommittee bool
-		// whether the message should be sent to both old and new committee participants
+		// legacy resharing routing flag retained for wire compatibility
 		IsToOldAndNewCommittees bool
 	}
 
@@ -126,12 +126,12 @@ func (mm *MessageImpl) IsBroadcast() bool {
 	return mm.wire.IsBroadcast
 }
 
-// only `true` in DGRound2Message (resharing)
+// legacy resharing routing flag retained for wire compatibility
 func (mm *MessageImpl) IsToOldCommittee() bool {
 	return mm.wire.IsToOldCommittee
 }
 
-// only `true` in DGRound4Message (resharing)
+// legacy resharing routing flag retained for wire compatibility
 func (mm *MessageImpl) IsToOldAndNewCommittees() bool {
 	return mm.wire.IsToOldAndNewCommittees
 }

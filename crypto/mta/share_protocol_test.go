@@ -8,6 +8,7 @@ package mta
 
 import (
 	"context"
+	"crypto/elliptic"
 	"math/big"
 	"testing"
 	"time"
@@ -138,7 +139,7 @@ func TestShareProtocolWC(t *testing.T) {
 	badV.V = big.NewInt(0)
 	assert.False(t, badV.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "V equal to zero must fail")
 
-	wrongCurveX := crypto.NewECPointNoCurveCheck(tss.Edwards(), gBPoint.X(), gBPoint.Y())
+	wrongCurveX := crypto.NewECPointNoCurveCheck(elliptic.P256(), gBPoint.X(), gBPoint.Y())
 	assert.False(t, pfB.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, wrongCurveX), "X on a different curve must fail")
 
 	alpha, err := AliceEndWC(tss.EC(), pk, pfB, gBPoint, cA, cB, NTildei, h1i, h2i, sk)
