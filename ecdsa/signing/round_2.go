@@ -32,6 +32,12 @@ func (round *round2) Start() *tss.Error {
 	wg := sync.WaitGroup{}
 	wg.Add((len(round.Parties().IDs()) - 1) * 2)
 	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
+	attributeBobMidErr := func(err error, Pj *tss.PartyID) *tss.Error {
+		if errors.Is(err, mta.ErrRangeProofVerify) {
+			return round.WrapError(errorspkg.Wrap(err, "peer RangeProofAlice rejected"), Pj)
+		}
+		return round.WrapError(errorspkg.Wrap(err, "BobMid arithmetic failure"), Pj)
+	}
 	for j, Pj := range round.Parties().IDs() {
 		if j == i {
 			continue
@@ -63,7 +69,7 @@ func (round *round2) Start() *tss.Error {
 			round.temp.c1jis[j] = c1ji
 			round.temp.pi1jis[j] = pi1ji
 			if err != nil {
-				errChs <- round.WrapError(err, Pj)
+				errChs <- attributeBobMidErr(err, Pj)
 			}
 		}(j, Pj)
 		// Bob_mid_wc
@@ -93,7 +99,7 @@ func (round *round2) Start() *tss.Error {
 			round.temp.c2jis[j] = c2ji
 			round.temp.pi2jis[j] = pi2ji
 			if err != nil {
-				errChs <- round.WrapError(err, Pj)
+				errChs <- attributeBobMidErr(err, Pj)
 			}
 		}(j, Pj)
 	}

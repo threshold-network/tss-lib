@@ -92,23 +92,41 @@ func Create(ec elliptic.Curve, threshold int, secret *big.Int, indexes []*big.In
 }
 
 func (share *Share) Verify(ec elliptic.Curve, threshold int, vs Vs) bool {
-	if share.Threshold != threshold || vs == nil || len(vs) != threshold+1 {
+	if share == nil || ec == nil || share.ID == nil || share.Share == nil ||
+		share.Threshold != threshold || vs == nil || len(vs) != threshold+1 {
+		return false
+	}
+	q := ec.Params().N
+	idModQ := new(big.Int).Mod(share.ID, q)
+	if idModQ.Sign() == 0 || share.Share.Sign() <= 0 || share.Share.Cmp(q) >= 0 {
 		return false
 	}
 	var err error
-	modQ := common.ModInt(ec.Params().N)
+	modQ := common.ModInt(q)
 	v, t := vs[0], one // YRO : we need to have our accumulator outside of the loop
+	if v == nil || !v.SetCurve(ec).ValidateBasic() {
+		return false
+	}
 	for j := 1; j <= threshold; j++ {
+		if vs[j] == nil || !vs[j].SetCurve(ec).ValidateBasic() {
+			return false
+		}
 		// t = k_i^j
 		t = modQ.Mul(t, share.ID)
 		// v = v * v_j^t
 		vjt := vs[j].SetCurve(ec).ScalarMult(t)
+		if vjt == nil {
+			return false
+		}
 		v, err = v.SetCurve(ec).Add(vjt)
 		if err != nil {
 			return false
 		}
 	}
 	sigmaGi := crypto.ScalarBaseMult(ec, share.Share)
+	if sigmaGi == nil {
+		return false
+	}
 	return sigmaGi.Equals(v)
 }
 
