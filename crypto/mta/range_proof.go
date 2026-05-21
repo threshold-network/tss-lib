@@ -116,6 +116,8 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 	q := ec.Params().N
 	q3 := new(big.Int).Mul(q, q)
 	q3 = new(big.Int).Mul(q, q3)
+	// Honest S2 = e*rho + gamma with e < q, rho < q*NTilde,
+	// gamma < q^3*NTilde, hence S2 < 2*q^3*NTilde.
 	q3NTilde := new(big.Int).Mul(q3, NTilde)
 	maxS2 := new(big.Int).Lsh(q3NTilde, 1)
 

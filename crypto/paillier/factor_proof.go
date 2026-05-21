@@ -118,6 +118,10 @@ func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int, session ...[]byte) (bo
 		return false, fmt.Errorf("fac proof verify: z2 = %x exceeds limit %x", pf.Z2, limit)
 	}
 
+	// FactorProof responses are signed in Threshold's fork. Keep the existing
+	// inclusive absolute Z1/Z2 bound style, and reject W1/W2/Sigma/V before
+	// any modular exponentiation so malformed proofs cannot amplify verifier
+	// CPU cost with over-wide exponents.
 	q := new(big.Int).Lsh(big.NewInt(1), PARAM_L)
 	q3 := new(big.Int).Mul(q, q)
 	q3.Mul(q3, q)

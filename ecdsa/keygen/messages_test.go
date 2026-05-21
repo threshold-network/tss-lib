@@ -14,7 +14,7 @@ import (
 	"github.com/bnb-chain/tss-lib/crypto/paillier"
 )
 
-func TestKGRound1MessageValidateBasicRequiresLargeModuli(t *testing.T) {
+func TestKGRound1MessageValidateBasicRequiresExactModulusWidth(t *testing.T) {
 	msg := validKGRound1MessageForValidation()
 	if !msg.ValidateBasic() {
 		t.Fatal("expected baseline message to validate")
@@ -29,6 +29,18 @@ func TestKGRound1MessageValidateBasicRequiresLargeModuli(t *testing.T) {
 	msg.NTilde = big.NewInt(1).Bytes()
 	if msg.ValidateBasic() {
 		t.Fatal("expected sub-2048-bit NTilde modulus to fail validation")
+	}
+
+	msg = validKGRound1MessageForValidation()
+	msg.PaillierN = new(big.Int).Lsh(big.NewInt(1), paillierBitsLen).Bytes()
+	if msg.ValidateBasic() {
+		t.Fatal("expected over-2048-bit Paillier modulus to fail validation")
+	}
+
+	msg = validKGRound1MessageForValidation()
+	msg.NTilde = new(big.Int).Lsh(big.NewInt(1), paillierBitsLen).Bytes()
+	if msg.ValidateBasic() {
+		t.Fatal("expected over-2048-bit NTilde modulus to fail validation")
 	}
 }
 
