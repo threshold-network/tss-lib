@@ -61,6 +61,40 @@ func TestDLNProofVerifyRejectsNilInputs(t *testing.T) {
 	}
 }
 
+func TestDLNProofVerifyRejectsNilProofElements(t *testing.T) {
+	proof := &Proof{}
+	for i := 0; i < Iterations; i++ {
+		proof.Alpha[i] = big.NewInt(2)
+		proof.T[i] = big.NewInt(2)
+	}
+
+	badAlpha := *proof
+	badAlpha.Alpha[0] = nil
+	assertNotPanics(t, func() {
+		if badAlpha.Verify(big.NewInt(2), big.NewInt(3), big.NewInt(23)) {
+			t.Fatal("Verify must reject nil Alpha values")
+		}
+	})
+
+	badT := *proof
+	badT.T[0] = nil
+	assertNotPanics(t, func() {
+		if badT.Verify(big.NewInt(2), big.NewInt(3), big.NewInt(23)) {
+			t.Fatal("Verify must reject nil T values")
+		}
+	})
+}
+
+func assertNotPanics(t *testing.T, f func()) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("unexpected panic: %v", r)
+		}
+	}()
+	f()
+}
+
 func assertPanics(t *testing.T, f func()) {
 	t.Helper()
 	defer func() {

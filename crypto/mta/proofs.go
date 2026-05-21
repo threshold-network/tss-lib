@@ -315,7 +315,7 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 			return false
 		}
 		xEU, err := xE.Add(pf.U)
-		if err != nil || !gS1.Equals(xEU) {
+		if err != nil || xEU == nil || !gS1.Equals(xEU) {
 			return false
 		}
 	}
