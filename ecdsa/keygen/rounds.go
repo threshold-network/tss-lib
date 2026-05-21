@@ -98,6 +98,13 @@ func (round *base) resetOK() {
 	}
 }
 
+// getSSID derives the session-binding identifier for keygen.
+//
+// Callers must invoke this exactly once, in round 1, and store the result in
+// round.temp.ssid for the rest of the protocol — round.number is hashed in
+// here as a domain separator, so calling it from a later round would produce a
+// different SSID that no peer would agree with. The current call site is
+// round1.Start; if you move it, make sure round.number is still 1 at the call.
 func (round *base) getSSID() []byte {
 	ssidList := []*big.Int{
 		round.EC().Params().P,

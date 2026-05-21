@@ -134,14 +134,34 @@ func (shares Shares) ReConstruct(ec elliptic.Curve) (secret *big.Int, err error)
 	if len(shares) == 0 {
 		return nil, ErrNumSharesBelowThreshold
 	}
-	if shares != nil && shares[0].Threshold+1 > len(shares) {
+	if shares[0] == nil {
+		return nil, errors.New("vss reconstruct: nil share")
+	}
+	if shares[0].Threshold+1 > len(shares) {
 		return nil, ErrNumSharesBelowThreshold
 	}
-	modN := common.ModInt(ec.Params().N)
+	q := ec.Params().N
+	modN := common.ModInt(q)
 
-	// x coords
-	xs := make([]*big.Int, 0)
+	// x coords. Reject zero or duplicate share IDs (mod q) up front: a zero
+	// ID encodes the secret directly, and two equal IDs make the Lagrange
+	// denominator xs[j]-share.ID zero, which would otherwise propagate into
+	// ModInverse(0) → nil → nil-deref in the interpolation loop below.
+	xs := make([]*big.Int, 0, len(shares))
+	seen := make(map[string]struct{}, len(shares))
 	for _, share := range shares {
+		if share == nil || share.ID == nil || share.Share == nil {
+			return nil, errors.New("vss reconstruct: nil share or share field")
+		}
+		id := new(big.Int).Mod(share.ID, q)
+		if id.Sign() == 0 {
+			return nil, errors.New("vss reconstruct: share ID is zero mod q")
+		}
+		key := id.String()
+		if _, dup := seen[key]; dup {
+			return nil, fmt.Errorf("vss reconstruct: duplicate share ID %s", key)
+		}
+		seen[key] = struct{}{}
 		xs = append(xs, share.ID)
 	}
 

@@ -90,6 +90,11 @@ func (p *ECPoint) Equals(p2 *ECPoint) bool {
 	return p.X().Cmp(p2.X()) == 0 && p.Y().Cmp(p2.Y()) == 0
 }
 
+// SetCurve mutates the receiver's curve field in place and returns the same
+// pointer. The chained-call style (`p.SetCurve(ec).ScalarMult(k)`) reads as
+// fluent but is a footgun when p is shared — every alias observes the new
+// curve. Callers that need to ensure the curve without mutating a shared point
+// should construct a fresh ECPoint via NewECPoint instead.
 func (p *ECPoint) SetCurve(curve elliptic.Curve) *ECPoint {
 	if p == nil {
 		return nil
