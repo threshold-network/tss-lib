@@ -61,19 +61,28 @@ func (pf *ZKProof) Verify(X *crypto.ECPoint) bool {
 // VerifyWithSession verifies a Schnorr proof with the session bound into the
 // Fiat-Shamir challenge.
 func (pf *ZKProof) VerifyWithSession(session []byte, X *crypto.ECPoint) bool {
-	if pf == nil || !pf.ValidateBasic() {
+	if pf == nil || !pf.ValidateBasic() || X == nil || !X.ValidateBasic() {
 		return false
 	}
 	ec := X.Curve()
 	ecParams := ec.Params()
 	q := ecParams.N
+	if !isValidScalar(pf.T, q) {
+		return false
+	}
 	g := crypto.NewECPointNoCurveCheck(ec, ecParams.Gx, ecParams.Gy)
 
 	cHash := common.SHA512_256i_TAGGED(session, X.X(), X.Y(), g.X(), g.Y(), pf.Alpha.X(), pf.Alpha.Y())
 	c := common.RejectionSample(q, cHash)
+	if c.Sign() == 0 {
+		return false
+	}
 
 	tG := crypto.ScalarBaseMult(ec, pf.T)
 	Xc := X.ScalarMult(c)
+	if tG == nil || Xc == nil {
+		return false
+	}
 	aXc, err := pf.Alpha.Add(Xc)
 	if err != nil {
 		return false
@@ -82,7 +91,7 @@ func (pf *ZKProof) VerifyWithSession(session []byte, X *crypto.ECPoint) bool {
 }
 
 func (pf *ZKProof) ValidateBasic() bool {
-	return pf.T != nil && pf.Alpha != nil
+	return pf.T != nil && pf.Alpha != nil && pf.Alpha.ValidateBasic()
 }
 
 // NewZKProof constructs a new Schnorr ZK proof of knowledge s_i, l_i such that V_i = R^s_i, g^l_i (GG18Spec Fig. 17)
@@ -123,22 +132,35 @@ func (pf *ZKVProof) Verify(V, R *crypto.ECPoint) bool {
 // VerifyWithSession verifies a Schnorr V proof with the session bound into the
 // Fiat-Shamir challenge.
 func (pf *ZKVProof) VerifyWithSession(session []byte, V, R *crypto.ECPoint) bool {
-	if pf == nil || !pf.ValidateBasic() {
+	if pf == nil || !pf.ValidateBasic() ||
+		V == nil || R == nil || !V.ValidateBasic() || !R.ValidateBasic() {
 		return false
 	}
 	ec := V.Curve()
 	ecParams := ec.Params()
 	q := ecParams.N
+	if !isValidScalar(pf.T, q) || !isValidScalar(pf.U, q) {
+		return false
+	}
 	g := crypto.NewECPointNoCurveCheck(ec, ecParams.Gx, ecParams.Gy)
 
 	cHash := common.SHA512_256i_TAGGED(session, V.X(), V.Y(), R.X(), R.Y(), g.X(), g.Y(), pf.Alpha.X(), pf.Alpha.Y())
 	c := common.RejectionSample(q, cHash)
+	if c.Sign() == 0 {
+		return false
+	}
 
 	tR := R.ScalarMult(pf.T)
 	uG := crypto.ScalarBaseMult(ec, pf.U)
+	if tR == nil || uG == nil {
+		return false
+	}
 	tRuG, _ := tR.Add(uG) // already on the curve.
 
 	Vc := V.ScalarMult(c)
+	if Vc == nil {
+		return false
+	}
 	aVc, err := pf.Alpha.Add(Vc)
 	if err != nil {
 		return false
@@ -148,4 +170,8 @@ func (pf *ZKVProof) VerifyWithSession(session []byte, V, R *crypto.ECPoint) bool
 
 func (pf *ZKVProof) ValidateBasic() bool {
 	return pf.Alpha != nil && pf.T != nil && pf.U != nil && pf.Alpha.ValidateBasic()
+}
+
+func isValidScalar(k, q *big.Int) bool {
+	return k != nil && k.Sign() > 0 && k.Cmp(q) < 0
 }

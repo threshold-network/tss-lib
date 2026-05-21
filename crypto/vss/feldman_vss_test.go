@@ -90,6 +90,58 @@ func TestVerify(t *testing.T) {
 	assert.False(t, shares[0].Verify(tss.EC(), threshold, vs[:threshold]))
 }
 
+func TestVerifyRejectsMalformedShare(t *testing.T) {
+	num, threshold := 5, 3
+
+	secret := common.GetRandomPositiveInt(tss.EC().Params().N)
+
+	ids := make([]*big.Int, 0)
+	for i := 0; i < num; i++ {
+		ids = append(ids, common.GetRandomPositiveInt(tss.EC().Params().N))
+	}
+
+	vs, shares, err := Create(tss.EC(), threshold, secret, ids)
+	assert.NoError(t, err)
+
+	cases := []struct {
+		name  string
+		share *Share
+	}{
+		{
+			name: "zero share",
+			share: &Share{
+				Threshold: shares[0].Threshold,
+				ID:        shares[0].ID,
+				Share:     big.NewInt(0),
+			},
+		},
+		{
+			name: "overwide share",
+			share: &Share{
+				Threshold: shares[0].Threshold,
+				ID:        shares[0].ID,
+				Share:     new(big.Int).Set(tss.EC().Params().N),
+			},
+		},
+		{
+			name: "zero id",
+			share: &Share{
+				Threshold: shares[0].Threshold,
+				ID:        big.NewInt(0),
+				Share:     shares[0].Share,
+			},
+		},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			assert.NotPanics(t, func() {
+				assert.False(t, test.share.Verify(tss.EC(), threshold, vs))
+			})
+		})
+	}
+}
+
 func TestReconstruct(t *testing.T) {
 	num, threshold := 5, 3
 

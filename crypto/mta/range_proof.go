@@ -104,7 +104,9 @@ func RangeProofAliceFromBytes(bzs [][]byte) (*RangeProofAlice, error) {
 
 func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c *big.Int, session ...[]byte) bool {
 	Session := optionalProofSession(session)
-	if pf == nil || !pf.ValidateBasic() || pk == nil || NTilde == nil || h1 == nil || h2 == nil || c == nil {
+	if pf == nil || !pf.ValidateBasic() || ec == nil ||
+		pk == nil || pk.N == nil ||
+		NTilde == nil || h1 == nil || h2 == nil || c == nil {
 		return false
 	}
 	if new(big.Int).GCD(nil, nil, c, pk.N).Cmp(one) != 0 {
@@ -164,7 +166,7 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 	if pf.S1.Cmp(q3) == 1 {
 		return false
 	}
-	if pf.S2.Cmp(maxS2) > 0 {
+	if pf.S2.Cmp(maxS2) >= 0 {
 		return false
 	}
 

@@ -33,7 +33,7 @@ func (round *round9) Start() *tss.Error {
 		cj, dj := r7msg.UnmarshalCommitment(), r8msg.UnmarshalDeCommitment()
 		cmt := commitments.HashCommitDecommit{C: cj, D: dj}
 		ok, values := cmt.DeCommit()
-		if !ok && len(values) != 4 {
+		if !ok || len(values) != 4 {
 			return round.WrapError(errors.New("de-commitment for bigVj and bigAj failed"), Pj)
 		}
 		UjX, UjY, TjX, TjY := values[0], values[1], values[2], values[3]

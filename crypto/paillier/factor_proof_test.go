@@ -213,6 +213,61 @@ func TestFactorProofVerifyRejectsNonZeroInvalidBases(t *testing.T) {
 	}
 }
 
+func TestFactorProofVerifyRejectsOverwideResponses(t *testing.T) {
+	facSetUp(t)
+
+	q := new(big.Int).Lsh(big.NewInt(1), PARAM_L)
+	q3 := new(big.Int).Mul(q, q)
+	q3.Mul(q3, q)
+	qN := new(big.Int).Mul(q, auxPrime.N)
+	qPkNN := new(big.Int).Mul(qN, publicKey.N)
+	q3N := new(big.Int).Mul(q3, auxPrime.N)
+	q3PkNN := new(big.Int).Mul(q3N, publicKey.N)
+	limitW := new(big.Int).Lsh(q3N, 1)
+	limitV := new(big.Int).Lsh(q3PkNN, 2)
+
+	cases := []struct {
+		name   string
+		mutate func(proof *FactorProof)
+	}{
+		{
+			name: "W1",
+			mutate: func(proof *FactorProof) {
+				proof.W1 = new(big.Int).Add(limitW, big.NewInt(1))
+			},
+		},
+		{
+			name: "W2",
+			mutate: func(proof *FactorProof) {
+				proof.W2 = new(big.Int).Add(limitW, big.NewInt(1))
+			},
+		},
+		{
+			name: "Sigma",
+			mutate: func(proof *FactorProof) {
+				proof.Sigma = new(big.Int).Add(qPkNN, big.NewInt(1))
+			},
+		},
+		{
+			name: "V",
+			mutate: func(proof *FactorProof) {
+				proof.V = new(big.Int).Add(limitV, big.NewInt(1))
+			},
+		},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			proof := privateKey.FactorProof(auxPrime.N, s, tt)
+			test.mutate(proof)
+
+			res, err := proof.FactorVerify(publicKey.N, auxPrime.N, s, tt)
+			assert.Error(t, err)
+			assert.False(t, res, "proof verify result must be false")
+		})
+	}
+}
+
 func TestFactorProofVerifyFailBadFactors(t *testing.T) {
 	facSetUp(t)
 	proof := badPrivateKey.FactorProof(auxPrime.N, s, tt)

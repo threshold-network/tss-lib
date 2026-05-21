@@ -192,7 +192,8 @@ func ProofBobFromBytes(bzs [][]byte) (*ProofBob, error) {
 func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c2 *big.Int, X *crypto.ECPoint, session ...[]byte) bool {
 	Session := optionalProofSession(session)
 	if pf == nil || pf.ProofBob == nil ||
-		pk == nil || NTilde == nil || h1 == nil || h2 == nil || c1 == nil || c2 == nil {
+		ec == nil || pk == nil || pk.N == nil ||
+		NTilde == nil || h1 == nil || h2 == nil || c1 == nil || c2 == nil {
 		return false
 	}
 	if X != nil {
@@ -275,13 +276,13 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	if pf.S1.Cmp(q3) > 0 {
 		return false
 	}
-	if pf.S2.Cmp(maxS2) > 0 {
+	if pf.S2.Cmp(maxS2) >= 0 {
 		return false
 	}
 	if pf.T1.Cmp(q7) > 0 {
 		return false
 	}
-	if pf.T2.Cmp(maxT2) > 0 {
+	if pf.T2.Cmp(maxT2) >= 0 {
 		return false
 	}
 
@@ -293,7 +294,7 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 		if X == nil {
 			eHash = common.SHA512_256i_TAGGED(Session, append(pk.AsInts(), NTilde, h1, h2, c1, c2, pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)
 		} else {
-			if !tss.SameCurve(ec, X.Curve()) {
+			if !X.ValidateBasic() || !tss.SameCurve(ec, X.Curve()) {
 				return false
 			}
 			eHash = common.SHA512_256i_TAGGED(Session, append(pk.AsInts(), NTilde, h1, h2, X.X(), X.Y(), c1, c2, pf.U.X(), pf.U.Y(), pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)
@@ -307,7 +308,11 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	if X != nil {
 		s1ModQ := new(big.Int).Mod(pf.S1, ec.Params().N)
 		gS1 := crypto.ScalarBaseMult(ec, s1ModQ)
-		xEU, err := X.ScalarMult(e).Add(pf.U)
+		xE := X.ScalarMult(e)
+		if xE == nil {
+			return false
+		}
+		xEU, err := xE.Add(pf.U)
 		if err != nil || !gS1.Equals(xEU) {
 			return false
 		}
