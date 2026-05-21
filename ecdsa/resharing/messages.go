@@ -32,6 +32,8 @@ var (
 	}
 )
 
+const paillierBitsLen = 2048
+
 // ----- //
 
 func NewDGRound1Message(
@@ -132,12 +134,18 @@ func (m *DGRound2Message1) ValidateBasic() bool {
 		common.NonEmptyMultiBytes(m.PaillierProof) &&
 		common.NonEmptyBytes(m.PaillierN) &&
 		common.NonEmptyBytes(m.NTilde) &&
+		hasBitLen(m.PaillierN, paillierBitsLen) &&
+		hasBitLen(m.NTilde, paillierBitsLen) &&
 		common.NonEmptyBytes(m.H1) &&
 		common.NonEmptyBytes(m.H2) &&
 		m.GetDlnproof_1().ValidateBasic() &&
 		m.GetDlnproof_2().ValidateBasic() &&
 		m.GetModproof().ValidateBasic() &&
 		m.GetModproofTilde().ValidateBasic()
+}
+
+func hasBitLen(value []byte, bits int) bool {
+	return new(big.Int).SetBytes(value).BitLen() == bits
 }
 
 func (m *DGRound2Message1) UnmarshalPaillierPK() *paillier.PublicKey {

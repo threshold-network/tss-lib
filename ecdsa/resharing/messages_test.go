@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/bnb-chain/tss-lib/crypto"
+	"github.com/bnb-chain/tss-lib/crypto/dlnproof"
+	"github.com/bnb-chain/tss-lib/crypto/paillier"
 	"github.com/bnb-chain/tss-lib/ecdsa/keygen"
 	"github.com/bnb-chain/tss-lib/tss"
 )
@@ -62,6 +64,82 @@ func TestDGRound1Message_ValidateBasic_RequiresSsid(t *testing.T) {
 	}
 	if shortSsid.ValidateBasic() {
 		t.Fatal("ValidateBasic must reject a DGRound1Message with short Ssid")
+	}
+}
+
+func TestDGRound2Message1ValidateBasicRequiresExactModulusWidth(t *testing.T) {
+	msg := validDGRound2Message1ForValidation()
+	if !msg.ValidateBasic() {
+		t.Fatal("expected baseline message to validate")
+	}
+
+	msg = validDGRound2Message1ForValidation()
+	msg.PaillierN = big.NewInt(1).Bytes()
+	if msg.ValidateBasic() {
+		t.Fatal("expected sub-2048-bit Paillier modulus to fail validation")
+	}
+
+	msg = validDGRound2Message1ForValidation()
+	msg.NTilde = big.NewInt(1).Bytes()
+	if msg.ValidateBasic() {
+		t.Fatal("expected sub-2048-bit NTilde modulus to fail validation")
+	}
+
+	msg = validDGRound2Message1ForValidation()
+	msg.PaillierN = new(big.Int).Lsh(big.NewInt(1), paillierBitsLen).Bytes()
+	if msg.ValidateBasic() {
+		t.Fatal("expected over-2048-bit Paillier modulus to fail validation")
+	}
+
+	msg = validDGRound2Message1ForValidation()
+	msg.NTilde = new(big.Int).Lsh(big.NewInt(1), paillierBitsLen).Bytes()
+	if msg.ValidateBasic() {
+		t.Fatal("expected over-2048-bit NTilde modulus to fail validation")
+	}
+}
+
+func validDGRound2Message1ForValidation() *DGRound2Message1 {
+	largeModulus := new(big.Int).Lsh(big.NewInt(1), paillierBitsLen-1).Bytes()
+	modProof := validDGRound2ModProofForValidation()
+
+	return &DGRound2Message1{
+		PaillierProof: [][]byte{{0x01}},
+		PaillierN:     largeModulus,
+		NTilde:        largeModulus,
+		H1:            []byte{0x02},
+		H2:            []byte{0x03},
+		Dlnproof_1:    validDGRound2DLNProofForValidation(),
+		Dlnproof_2:    validDGRound2DLNProofForValidation(),
+		Modproof:      modProof,
+		ModproofTilde: modProof,
+	}
+}
+
+func validDGRound2DLNProofForValidation() *DGRound2Message1_DLNProof {
+	alpha := make([][]byte, dlnproof.Iterations)
+	tValues := make([][]byte, dlnproof.Iterations)
+	for i := range alpha {
+		alpha[i] = []byte{0x01}
+		tValues[i] = []byte{0x02}
+	}
+
+	return &DGRound2Message1_DLNProof{Alpha: alpha, T: tValues}
+}
+
+func validDGRound2ModProofForValidation() *DGRound2Message1_ModProof {
+	xValues := make([][]byte, paillier.PARAM_M)
+	zValues := make([][]byte, paillier.PARAM_M)
+	for i := range xValues {
+		xValues[i] = []byte{0x01}
+		zValues[i] = []byte{0x02}
+	}
+
+	return &DGRound2Message1_ModProof{
+		W: []byte{0x01},
+		X: xValues,
+		A: make([]bool, paillier.PARAM_M),
+		B: make([]bool, paillier.PARAM_M),
+		Z: zValues,
 	}
 }
 
