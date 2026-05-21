@@ -3,7 +3,6 @@ package paillier
 import (
 	"context"
 	"math/big"
-	"runtime"
 	"testing"
 	"time"
 
@@ -47,33 +46,18 @@ func facSetUp(t *testing.T) {
 	tt = new(big.Int).Mod(new(big.Int).Mul(r, r), N)
 	s = new(big.Int).Exp(tt, lambda, N)
 
-	var err3 error
-	badPrivateKey, badPublicKey, err3 = GenerateBadKeyPair(ctx, testPaillierKeyLength)
-	if err3 != nil {
-		t.Fatalf("failed to generate malformed Paillier key pair: %v", err3)
-	}
+	badPrivateKey, badPublicKey = GenerateBadKeyPair()
 }
 
-func GenerateBadKeyPair(ctx context.Context, modulusBitLen int) (privateKey *PrivateKey, publicKey *PublicKey, err error) {
-	var concurrency int
-	concurrency = runtime.NumCPU()
+func GenerateBadKeyPair() (privateKey *PrivateKey, publicKey *PublicKey) {
 	one := big.NewInt(1)
 
-	// KS-BTL-F-03: use two safe primes for P, Q
-	var P, Q, N *big.Int
-	{
-		tmp := new(big.Int)
-		sgpsLong, err := common.GetRandomSafePrimesConcurrent(ctx, modulusBitLen-128, 1, concurrency)
-		if err != nil {
-			return nil, nil, err
-		}
-		sgpsShort, err := common.GetRandomSafePrimesConcurrent(ctx, 128, 1, concurrency)
-		if err != nil {
-			return nil, nil, err
-		}
-		P, Q = sgpsLong[0].SafePrime(), sgpsShort[0].SafePrime()
-		N = tmp.Mul(P, Q)
-	}
+	// Use fixed odd factors with a 1792-bit size gap. The factor proof must
+	// reject this malformed Paillier modulus, and the fixture should not spend
+	// CI time searching for random safe primes just to construct bad inputs.
+	P := new(big.Int).Sub(new(big.Int).Lsh(one, 1920), big.NewInt(133))
+	Q := new(big.Int).Sub(new(big.Int).Lsh(one, 128), big.NewInt(159))
+	N := new(big.Int).Mul(P, Q)
 
 	// phiN = P-1 * Q-1
 	PMinus1, QMinus1 := new(big.Int).Sub(P, one), new(big.Int).Sub(Q, one)
