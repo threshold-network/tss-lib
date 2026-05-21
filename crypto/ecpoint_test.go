@@ -7,6 +7,7 @@
 package crypto_test
 
 import (
+	"crypto/elliptic"
 	"encoding/hex"
 	"encoding/json"
 	"math/big"
@@ -14,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/btcec"
-	"github.com/decred/dcrd/dcrec/edwards/v2"
 	"github.com/stretchr/testify/assert"
 
 	. "github.com/bnb-chain/tss-lib/crypto"
@@ -163,16 +163,12 @@ func TestS256EcpointJsonSerialization(t *testing.T) {
 	assert.True(t, reflect.TypeOf(point.Curve()) == reflect.TypeOf(umpoint.Curve()))
 }
 
-func TestEdwardsEcpointJsonSerialization(t *testing.T) {
-	ec := edwards.Edwards()
-	tss.RegisterCurve("ed25519", ec)
+func TestP256EcpointJsonSerialization(t *testing.T) {
+	ec := elliptic.P256()
+	tss.RegisterCurve("p256", ec)
 
-	pubKeyBytes, err := hex.DecodeString("ae1e5bf5f3d6bf58b5c222088671fcbe78b437e28fae944c793897b26091f249")
-	assert.NoError(t, err)
-	pbk, err := edwards.ParsePubKey(pubKeyBytes)
-	assert.NoError(t, err)
-
-	point, err := NewECPoint(ec, pbk.X, pbk.Y)
+	x, y := ec.ScalarBaseMult(big.NewInt(1).Bytes())
+	point, err := NewECPoint(ec, x, y)
 	assert.NoError(t, err)
 	bz, err := json.Marshal(point)
 	assert.NoError(t, err)
