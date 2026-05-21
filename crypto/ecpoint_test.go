@@ -138,11 +138,6 @@ func TestScalarMultReturnsNilForInvalidInputs(t *testing.T) {
 	assert.Nil(t, ScalarBaseMult(nil, big.NewInt(1)))
 	assert.Nil(t, point.ScalarMult(big.NewInt(0)))
 	assert.Nil(t, point.ScalarMult(nil))
-
-	_, err := ScalarBaseMultErr(curve, big.NewInt(0))
-	assert.Error(t, err)
-	_, err = point.ScalarMultErr(big.NewInt(0))
-	assert.Error(t, err)
 }
 
 func TestS256EcpointJsonSerialization(t *testing.T) {

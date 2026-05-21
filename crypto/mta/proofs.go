@@ -209,6 +209,8 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	q3 = new(big.Int).Mul(q, q3)
 	q7 := new(big.Int).Mul(q3, q3)
 	q7 = new(big.Int).Mul(q7, q)
+	// Honest S2/T2 = e*rho + rho' with e < q, rho < q*NTilde,
+	// rho' < q^3*NTilde, hence S2/T2 < 2*q^3*NTilde.
 	q3NTilde := new(big.Int).Mul(q3, NTilde)
 	maxS2 := new(big.Int).Lsh(q3NTilde, 1)
 	maxT2 := new(big.Int).Set(maxS2)
