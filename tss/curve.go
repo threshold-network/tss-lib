@@ -12,14 +12,12 @@ import (
 	"reflect"
 
 	s256k1 "github.com/btcsuite/btcd/btcec"
-	"github.com/decred/dcrd/dcrec/edwards/v2"
 )
 
 type CurveName string
 
 const (
 	Secp256k1 CurveName = "secp256k1"
-	Ed25519   CurveName = "ed25519"
 )
 
 var (
@@ -33,7 +31,6 @@ func init() {
 
 	registry = make(map[CurveName]elliptic.Curve)
 	registry[Secp256k1] = s256k1.S256()
-	registry[Ed25519] = edwards.Edwards()
 }
 
 func RegisterCurve(name CurveName, curve elliptic.Curve) {
@@ -84,8 +81,4 @@ func SetCurve(curve elliptic.Curve) {
 // secp256k1
 func S256() elliptic.Curve {
 	return s256k1.S256()
-}
-
-func Edwards() elliptic.Curve {
-	return edwards.Edwards()
 }

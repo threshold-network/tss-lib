@@ -8,7 +8,7 @@ all: protob test
 
 protob:
 	@echo "--> Building Protocol Buffers"
-	@for protocol in message signature ecdsa-keygen ecdsa-signing ecdsa-resharing eddsa-keygen eddsa-signing eddsa-resharing; do \
+	@for protocol in message signature ecdsa-keygen ecdsa-signing; do \
 		echo "Generating $$protocol.pb.go" ; \
 		protoc --go_out=. ./protob/$$protocol.proto ; \
 	done
@@ -43,4 +43,3 @@ pre_commit: build test
 # # unless there is a reason not to.
 # # https://www.gnu.org/software/make/manual/html_node/Phony-Targets.html
 .PHONY: protob build test_unit test_unit_race test
-

@@ -26,9 +26,9 @@ message MessageWrapper {
     // Metadata optionally un-marshalled and used by the transport to route this message.
     bool is_broadcast = 1;
     // Metadata optionally un-marshalled and used by the transport to route this message.
-    bool is_to_old_committee = 2; // used only in certain resharing messages
+    bool is_to_old_committee = 2; // legacy resharing routing field
     // Metadata optionally un-marshalled and used by the transport to route this message.
-    bool is_to_old_and_new_committees = 5; // used only in certain resharing messages
+    bool is_to_old_and_new_committees = 5; // legacy resharing routing field
 
     // Metadata optionally un-marshalled and used by the transport to route this message.
     PartyID from = 3;
