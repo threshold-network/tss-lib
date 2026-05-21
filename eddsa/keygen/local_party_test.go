@@ -186,8 +186,7 @@ keygen:
 					u = new(big.Int).Add(u, uj)
 				}
 				u = new(big.Int).Mod(u, tss.Edwards().Params().N)
-				scalar := make([]byte, 0, 32)
-				copy(scalar, u.Bytes())
+				scalar := u.FillBytes(make([]byte, 32))
 
 				// build eddsa key pair
 				pkX, pkY := save.EDDSAPub.X(), save.EDDSAPub.Y()
@@ -196,8 +195,7 @@ keygen:
 					X:     pkX,
 					Y:     pkY,
 				}
-				println("u len: ", len(u.Bytes()))
-				sk, _, err := edwards.PrivKeyFromScalar(u.Bytes())
+				sk, _, err := edwards.PrivKeyFromScalar(scalar)
 				if !assert.NoError(t, err) {
 					return
 				}
@@ -207,7 +205,7 @@ keygen:
 
 				// public key tests
 				assert.NotZero(t, u, "u should not be zero")
-				ourPkX, ourPkY := tss.Edwards().ScalarBaseMult(u.Bytes())
+				ourPkX, ourPkY := tss.Edwards().ScalarBaseMult(scalar)
 				assert.Equal(t, pkX, ourPkX, "pkX should match expected pk derived from u")
 				assert.Equal(t, pkY, ourPkY, "pkY should match expected pk derived from u")
 				t.Log("Public key tests done.")
