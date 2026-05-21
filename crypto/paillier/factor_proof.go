@@ -177,6 +177,19 @@ func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int, session ...[]byte) (bo
 	return true, nil
 }
 
+// FactorChallenge derives the Fiat-Shamir challenge for the no-small-factor
+// proof. The two paths emit different challenge distributions; both are
+// internally consistent because prover and verifier always traverse the same
+// branch for a given proof, but the absolute-value bounds on Z1/Z2/W1/W2 in
+// FactorVerify (which use CmpAbs) accommodate the signed legacy challenge.
+//
+//   - Tagged path  (session != nil): e ∈ [0, 2^256), derived via
+//     SHA512_256i_TAGGED + modular reduction. Honest responses Z1/Z2 = a+e*p,
+//     b+e*q are positive.
+//   - Legacy path (session absent):  e ∈ [-(2^256-1), 2^256), derived via
+//     HashToN(2q-1, …) − (q-1). Honest responses can be negative; this is the
+//     historical Threshold encoding, kept for wire-compat with non-session
+//     callers.
 func FactorChallenge(N, s, t, pkN, P, Q, A, B, T, sigma *big.Int, session ...[]byte) *big.Int {
 	q := big.NewInt(1)
 	q = q.Lsh(q, 256)                             // q = 2^256

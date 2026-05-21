@@ -22,9 +22,17 @@ func LiterallyJustMod(q *big.Int, eHash *big.Int) *big.Int { // e' = eHash
 }
 
 // RejectionSample preserves the upstream challenge-reduction function name.
-// This implementation reduces the hash modulo q rather than looping with fresh
-// hash material, so callers must only use it where modular-reduction bias is
-// acceptable for the proof challenge.
+// THIS IS NOT TRUE REJECTION SAMPLING: it reduces the hash modulo q rather
+// than looping with fresh hash material until the candidate falls in [0, q).
+//
+// The bias of `eHash mod q` is ≤ q / 2^eHash.BitLen(). For SHA512_256-derived
+// hashes (256 bits) and curve orders q close to 2^256 (secp256k1, curve25519),
+// the bias is ≤ 2^-128 — negligible for Fiat-Shamir challenges. For q
+// significantly smaller than 2^eHash.BitLen() (e.g., q = 2^256 reduced from a
+// 256-bit hash) the bias is exactly 0. For q that is NOT close to a power of
+// 2 (or for any application requiring an unbiased uniform sample over [0, q)),
+// callers must not use this function — implement true rejection sampling at
+// the call site instead.
 func RejectionSample(q *big.Int, eHash *big.Int) *big.Int {
 	return LiterallyJustMod(q, eHash)
 }

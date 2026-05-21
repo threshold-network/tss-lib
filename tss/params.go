@@ -109,17 +109,24 @@ func (params *Parameters) SetSessionNonce(nonce *big.Int) {
 }
 
 // SetSessionNonceBytes hashes an application-level session ID into the
-// per-session nonce. All parties must call it with the same high-entropy
-// session ID before constructing local parties for a protocol run. It panics if
-// the session ID is shorter than 16 bytes.
+// per-session nonce. All parties must call it with the same session ID before
+// constructing local parties for a protocol run.
 //
-// The 16-byte minimum is a floor that catches obvious misuse (empty input, a
-// short ASCII tag); it is not a sufficient condition. Callers must supply at
-// least 128 bits of true randomness. A counter, timestamp, or other
-// low-entropy 16-byte value passes the length check but defeats the
-// session-binding property that the proofs rely on. Prefer a freshly drawn
-// random session ID from a CSPRNG, or a high-entropy ceremony identifier
-// negotiated out of band.
+// The session ID must be:
+//
+//   - At least 16 bytes (enforced by panic). 16 bytes = 128 bits is the
+//     birthday-bound minimum below which random collisions become plausible.
+//   - Unique per ceremony. Reusing the same session ID across two distinct
+//     ceremonies on the same inputs reintroduces the transcript-splicing risk
+//     that the session-binding contract is meant to prevent.
+//   - Drawn from a high-entropy source for collision resistance. The bytes are
+//     hashed through SHA512_256 to a 256-bit nonce; if the application uses
+//     structured IDs (timestamps, counters, slot numbers), prefer concatenating
+//     them with a per-ceremony random seed so two ceremonies cannot collide
+//     under the hash.
+//
+// Callers that already have an unpredictable big.Int (e.g., a draw from a
+// CSPRNG) can pass it through SetSessionNonce directly instead.
 func (params *Parameters) SetSessionNonceBytes(sessionID []byte) {
 	if len(sessionID) < 16 {
 		panic("tss: session ID must be at least 16 bytes")
