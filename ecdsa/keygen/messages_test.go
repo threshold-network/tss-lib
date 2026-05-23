@@ -42,6 +42,23 @@ func TestKGRound1MessageValidateBasicRequiresExactModulusWidth(t *testing.T) {
 	if msg.ValidateBasic() {
 		t.Fatal("expected over-2048-bit NTilde modulus to fail validation")
 	}
+
+	// 2^(paillierBitsLen-1) - 1 has BitLen == paillierBitsLen - 1 (2047), which
+	// is the just-below boundary that a `<= paillierBitsLen` mutation of
+	// hasBitLen would silently let through.
+	belowByOne := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), paillierBitsLen-1), big.NewInt(1)).Bytes()
+
+	msg = validKGRound1MessageForValidation()
+	msg.PaillierN = belowByOne
+	if msg.ValidateBasic() {
+		t.Fatal("expected 2047-bit Paillier modulus to fail validation")
+	}
+
+	msg = validKGRound1MessageForValidation()
+	msg.NTilde = belowByOne
+	if msg.ValidateBasic() {
+		t.Fatal("expected 2047-bit NTilde modulus to fail validation")
+	}
 }
 
 func validKGRound1MessageForValidation() *KGRound1Message {
