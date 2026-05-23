@@ -8,10 +8,24 @@ package signing
 
 import (
 	"errors"
+	"math/big"
 
 	"github.com/bnb-chain/tss-lib/crypto/commitments"
 	"github.com/bnb-chain/tss-lib/tss"
 )
+
+// decommitFour verifies cmt and returns its four secret values. It rejects
+// any commitment whose DeCommit reports failure OR whose length differs from
+// four; both conditions must hold because an attacker controls both C and D
+// in their own messages and could otherwise commit to a longer payload, then
+// have round 9 silently read values[0..3] as attacker-chosen point coordinates.
+func decommitFour(cmt commitments.HashCommitDecommit) ([]*big.Int, bool) {
+	ok, values := cmt.DeCommit()
+	if !ok || len(values) != 4 {
+		return nil, false
+	}
+	return values, true
+}
 
 func (round *round9) Start() *tss.Error {
 	if round.started {
@@ -31,9 +45,8 @@ func (round *round9) Start() *tss.Error {
 		r7msg := round.temp.signRound7Messages[j].Content().(*SignRound7Message)
 		r8msg := round.temp.signRound8Messages[j].Content().(*SignRound8Message)
 		cj, dj := r7msg.UnmarshalCommitment(), r8msg.UnmarshalDeCommitment()
-		cmt := commitments.HashCommitDecommit{C: cj, D: dj}
-		ok, values := cmt.DeCommit()
-		if !ok || len(values) != 4 {
+		values, ok := decommitFour(commitments.HashCommitDecommit{C: cj, D: dj})
+		if !ok {
 			return round.WrapError(errors.New("de-commitment for bigVj and bigAj failed"), Pj)
 		}
 		UjX, UjY, TjX, TjY := values[0], values[1], values[2], values[3]
