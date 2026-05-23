@@ -53,6 +53,18 @@ This is a protocol/wire compatibility break for proof transcripts. Proofs whose 
 - Constant-time operations are not included and remain a residual follow-up.
 - EdDSA and resharing protocol packages are intentionally removed in this fork because Threshold/tBTC does not use them.
 
+## Removed Public Surface
+
+The following public packages and symbols were removed in this fork. Downstream consumers upgrading from upstream BNB tss-lib or from an earlier Threshold fork can grep against this list to confirm they do not depend on the removed surface. Audit of `keep-core-security` confirmed it imports only ECDSA keygen/signing plus the shared `common`, `crypto`, and `tss` packages.
+
+- Packages: `github.com/bnb-chain/tss-lib/eddsa/keygen`, `eddsa/signing`, `eddsa/resharing`, `ecdsa/resharing`.
+- `tss.Ed25519` curve-name constant and the registered `Edwards()` curve.
+- `tss.ReSharingParameters` and `tss.NewReSharingParameters`.
+- `crypto.ECPoint.EightInvEight()` and the unexported `eight` / `eightInv` package-level constants.
+- Proto definitions: `protob/ecdsa-resharing.proto`, `protob/eddsa-keygen.proto`, `protob/eddsa-signing.proto`, `protob/eddsa-resharing.proto`.
+
+The legacy `IsToOldCommittee` / `IsToOldAndNewCommittees` fields on `tss.Message` and `MessageWrapper` are intentionally retained; this fork never sets them to `true`, but the wrapper field numbers stay reserved for proto wire-layout stability.
+
 ## Tests
 
 - `go test ./crypto/... ./ecdsa/keygen ./ecdsa/signing` passed.
