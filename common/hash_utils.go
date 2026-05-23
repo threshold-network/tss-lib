@@ -21,18 +21,19 @@ func LiterallyJustMod(q *big.Int, eHash *big.Int) *big.Int { // e' = eHash
 	return e
 }
 
-// RejectionSample preserves the upstream challenge-reduction function name.
-// THIS IS NOT TRUE REJECTION SAMPLING: it reduces the hash modulo q rather
-// than looping with fresh hash material until the candidate falls in [0, q).
+// RejectionSample reduces `eHash` modulo q. The name preserves the upstream
+// challenge-derivation function name; this is NOT true rejection sampling
+// (no loop with fresh hash material until a candidate falls in [0, q)).
 //
-// The bias of `eHash mod q` is ≤ q / 2^eHash.BitLen(). For SHA512_256-derived
-// hashes (256 bits) and curve orders q close to 2^256 (secp256k1, curve25519),
-// the bias is ≤ 2^-128 — negligible for Fiat-Shamir challenges. For q
-// significantly smaller than 2^eHash.BitLen() (e.g., q = 2^256 reduced from a
-// 256-bit hash) the bias is exactly 0. For q that is NOT close to a power of
-// 2 (or for any application requiring an unbiased uniform sample over [0, q)),
-// callers must not use this function — implement true rejection sampling at
-// the call site instead.
+// Safe only when q is close to 2^k from below, where k is the hash output
+// width in bits (k = 256 for SHA512_256). For secp256k1 the bias is ≈ 2^-128
+// — negligible for Fiat-Shamir challenges.
+//
+// For q that is NOT close to a power of 2, or for moduli larger than 2^k
+// (e.g. Paillier N ≈ 2^2048), use HashToN / HashToNTagged: those absorb
+// ≥ k + 256 bits of entropy before reduction and bound bias at ≤ 2^-256
+// regardless of q. For applications requiring an unbiased uniform sample
+// over [0, q), implement true rejection sampling at the call site.
 func RejectionSample(q *big.Int, eHash *big.Int) *big.Int {
 	return LiterallyJustMod(q, eHash)
 }
