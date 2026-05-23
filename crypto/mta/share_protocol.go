@@ -16,6 +16,11 @@ import (
 	"github.com/bnb-chain/tss-lib/crypto/paillier"
 )
 
+// ErrRangeProofVerify signals that BobMid/BobMidWC rejected the peer-supplied
+// RangeProofAlice. Callers can use errors.Is to preserve peer attribution while
+// distinguishing proof rejection from local arithmetic failures.
+var ErrRangeProofVerify = errors.New("RangeProofAlice.Verify() returned false")
+
 func AliceInit(
 	ec elliptic.Curve,
 	pkA *paillier.PublicKey,
@@ -38,7 +43,7 @@ func BobMid(
 	session ...[]byte,
 ) (beta, cB, betaPrm *big.Int, piB *ProofBob, err error) {
 	if !pf.Verify(ec, pkA, NTildeB, h1B, h2B, cA, session...) {
-		err = errors.New("RangeProofAlice.Verify() returned false")
+		err = ErrRangeProofVerify
 		return
 	}
 	q := ec.Params().N
@@ -72,7 +77,7 @@ func BobMidWC(
 	session ...[]byte,
 ) (beta, cB, betaPrm *big.Int, piB *ProofBobWC, err error) {
 	if !pf.Verify(ec, pkA, NTildeB, h1B, h2B, cA, session...) {
-		err = errors.New("RangeProofAlice.Verify() returned false")
+		err = ErrRangeProofVerify
 		return
 	}
 	q := ec.Params().N

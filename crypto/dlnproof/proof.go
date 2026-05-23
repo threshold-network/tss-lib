@@ -58,7 +58,7 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 	if p == nil {
 		return false
 	}
-	if N.Sign() != 1 {
+	if h1 == nil || h2 == nil || N == nil || N.Sign() != 1 {
 		return false
 	}
 	modN := common.ModInt(N)
@@ -82,11 +82,7 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 		}
 	}
 	for i := range p.Alpha {
-		if p.Alpha[i] == nil {
-			return false
-		}
-		a := new(big.Int).Mod(p.Alpha[i], N)
-		if a.Cmp(one) <= 0 || a.Cmp(N) >= 0 {
+		if p.Alpha[i] == nil || p.Alpha[i].Cmp(one) <= 0 || p.Alpha[i].Cmp(N) >= 0 {
 			return false
 		}
 	}
@@ -94,9 +90,6 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 	c := common.SHA512_256i_TAGGED(Session, msg...)
 	cIBI := new(big.Int)
 	for i := 0; i < Iterations; i++ {
-		if p.Alpha[i] == nil || p.T[i] == nil {
-			return false
-		}
 		cI := c.Bit(i)
 		cIBI = cIBI.SetInt64(int64(cI))
 		h1ExpTi := modN.Exp(h1, p.T[i])

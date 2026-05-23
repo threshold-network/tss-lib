@@ -129,6 +129,17 @@ func TestNewECPointRejectsNonCanonicalCoordinates(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestScalarMultReturnsNilForInvalidInputs(t *testing.T) {
+	curve := tss.EC()
+	point := ScalarBaseMult(curve, big.NewInt(1))
+
+	assert.Nil(t, ScalarBaseMult(curve, big.NewInt(0)))
+	assert.Nil(t, ScalarBaseMult(curve, nil))
+	assert.Nil(t, ScalarBaseMult(nil, big.NewInt(1)))
+	assert.Nil(t, point.ScalarMult(big.NewInt(0)))
+	assert.Nil(t, point.ScalarMult(nil))
+}
+
 func TestS256EcpointJsonSerialization(t *testing.T) {
 	ec := btcec.S256()
 	tss.RegisterCurve("secp256k1", ec)

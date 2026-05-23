@@ -106,6 +106,48 @@ func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int, session ...[]byte) (bo
 		}
 	}
 
+	limit := big.NewInt(1)
+	limit.Lsh(limit, PARAM_L+PARAM_E)
+	limit.Mul(limit, new(big.Int).Sqrt(pkN))
+
+	if pf.Z1.CmpAbs(limit) > 0 {
+		return false, fmt.Errorf("fac proof verify: z1 = %x exceeds limit %x", pf.Z1, limit)
+	}
+
+	if pf.Z2.CmpAbs(limit) > 0 {
+		return false, fmt.Errorf("fac proof verify: z2 = %x exceeds limit %x", pf.Z2, limit)
+	}
+
+	// FactorProof responses are signed in Threshold's fork. Keep the existing
+	// inclusive absolute Z1/Z2 bound style, and reject W1/W2/Sigma/V before
+	// any modular exponentiation so malformed proofs cannot amplify verifier
+	// CPU cost with over-wide exponents.
+	q := new(big.Int).Lsh(big.NewInt(1), PARAM_L)
+	q3 := new(big.Int).Mul(q, q)
+	q3.Mul(q3, q)
+	qN := new(big.Int).Mul(q, N)
+	qPkNN := new(big.Int).Mul(qN, pkN)
+	q3N := new(big.Int).Mul(q3, N)
+	q3PkNN := new(big.Int).Mul(q3N, pkN)
+	limitW := new(big.Int).Lsh(q3N, 1)
+	limitV := new(big.Int).Lsh(q3PkNN, 2)
+
+	if pf.W1.CmpAbs(limitW) > 0 {
+		return false, fmt.Errorf("fac proof verify: w1 = %x exceeds limit %x", pf.W1, limitW)
+	}
+
+	if pf.W2.CmpAbs(limitW) > 0 {
+		return false, fmt.Errorf("fac proof verify: w2 = %x exceeds limit %x", pf.W2, limitW)
+	}
+
+	if pf.Sigma.CmpAbs(qPkNN) > 0 {
+		return false, fmt.Errorf("fac proof verify: sigma = %x exceeds limit %x", pf.Sigma, qPkNN)
+	}
+
+	if pf.V.CmpAbs(limitV) > 0 {
+		return false, fmt.Errorf("fac proof verify: v = %x exceeds limit %x", pf.V, limitV)
+	}
+
 	e := FactorChallenge(N, s, t, pkN, pf.P, pf.Q, pf.A, pf.B, pf.T, pf.Sigma, session...)
 
 	modN := common.ModInt(N)
@@ -130,18 +172,6 @@ func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int, session ...[]byte) (bo
 
 	if !common.Eq(Qz1tv, TRe) {
 		return false, fmt.Errorf("fac proof verify: Q^z1*t^v = %x != T*R^e = %x", Qz1tv, TRe)
-	}
-
-	limit := big.NewInt(1)
-	limit.Lsh(limit, PARAM_L+PARAM_E)
-	limit.Mul(limit, new(big.Int).Sqrt(pkN))
-
-	if pf.Z1.CmpAbs(limit) > 0 {
-		return false, fmt.Errorf("fac proof verify: z1 = %x exceeds limit %x", pf.Z1, limit)
-	}
-
-	if pf.Z2.CmpAbs(limit) > 0 {
-		return false, fmt.Errorf("fac proof verify: z2 = %x exceeds limit %x", pf.Z2, limit)
 	}
 
 	return true, nil
