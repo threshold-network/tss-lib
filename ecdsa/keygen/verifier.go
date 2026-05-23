@@ -44,6 +44,7 @@ func (pv *ProofVerifier) VerifyDLNProof1(
 	m dlnMessage,
 	h1, h2, n *big.Int,
 	onDone func(bool),
+	session ...[]byte,
 ) {
 	pv.semaphore <- struct{}{}
 	go func() {
@@ -55,7 +56,7 @@ func (pv *ProofVerifier) VerifyDLNProof1(
 			return
 		}
 
-		onDone(dlnProof.Verify(h1, h2, n))
+		onDone(dlnProof.Verify(h1, h2, n, session...))
 	}()
 }
 
@@ -63,6 +64,7 @@ func (pv *ProofVerifier) VerifyDLNProof2(
 	m dlnMessage,
 	h1, h2, n *big.Int,
 	onDone func(bool),
+	session ...[]byte,
 ) {
 	pv.semaphore <- struct{}{}
 	go func() {
@@ -74,7 +76,7 @@ func (pv *ProofVerifier) VerifyDLNProof2(
 			return
 		}
 
-		onDone(dlnProof.Verify(h1, h2, n))
+		onDone(dlnProof.Verify(h1, h2, n, session...))
 	}()
 }
 
@@ -82,6 +84,7 @@ func (pv *ProofVerifier) VerifyModProof(
 	m modMessage,
 	N *big.Int,
 	onDone func(bool),
+	session ...[]byte,
 ) {
 	pv.semaphore <- struct{}{}
 	go func() {
@@ -93,7 +96,7 @@ func (pv *ProofVerifier) VerifyModProof(
 			return
 		}
 
-		ok, err2 := modProof.ModVerify(N)
+		ok, err2 := modProof.ModVerify(N, session...)
 		if err2 != nil {
 			onDone(false)
 			return
@@ -106,6 +109,7 @@ func (pv *ProofVerifier) VerifyModProofTilde(
 	m modMessage,
 	N *big.Int,
 	onDone func(bool),
+	session ...[]byte,
 ) {
 	pv.semaphore <- struct{}{}
 	go func() {
@@ -117,7 +121,7 @@ func (pv *ProofVerifier) VerifyModProofTilde(
 			return
 		}
 
-		ok, err2 := modProof.ModVerify(N)
+		ok, err2 := modProof.ModVerify(N, session...)
 		if err2 != nil {
 			onDone(false)
 			return

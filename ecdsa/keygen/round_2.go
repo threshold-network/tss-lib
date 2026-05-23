@@ -71,31 +71,32 @@ func (round *round2) Start() *tss.Error {
 		wg.Add(4)
 		_j := j
 		_msg := msg
+		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 
 		verifier.VerifyDLNProof1(r1msg, H1j, H2j, NTildej, func(isValid bool) {
 			if !isValid {
 				dlnProof1FailCulprits[_j] = _msg.GetFrom()
 			}
 			wg.Done()
-		})
+		}, round.temp.ssid)
 		verifier.VerifyDLNProof2(r1msg, H2j, H1j, NTildej, func(isValid bool) {
 			if !isValid {
 				dlnProof2FailCulprits[_j] = _msg.GetFrom()
 			}
 			wg.Done()
-		})
+		}, round.temp.ssid)
 		verifier.VerifyModProof(r1msg, paillierPKj.N, func(isValid bool) {
 			if !isValid {
 				modProofFailCulprits[_j] = _msg.GetFrom()
 			}
 			wg.Done()
-		})
+		}, contextJ)
 		verifier.VerifyModProofTilde(r1msg, NTildej, func(isValid bool) {
 			if !isValid {
 				modProofTildeFailCulprits[_j] = _msg.GetFrom()
 			}
 			wg.Done()
-		})
+		}, contextJ)
 	}
 	wg.Wait()
 	for _, culprit := range append(dlnProof1FailCulprits, dlnProof2FailCulprits...) {
@@ -128,6 +129,7 @@ func (round *round2) Start() *tss.Error {
 
 	// 5. p2p send share ij to Pj
 	shares := round.temp.shares
+	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 	for j, Pj := range round.Parties().IDs() {
 		// do not send to this Pj, but store for round 3
 		if j == i {
@@ -135,8 +137,8 @@ func (round *round2) Start() *tss.Error {
 			continue
 		}
 		H1j, H2j, NTildej := round.save.H1j[j], round.save.H2j[j], round.save.NTildej[j]
-		facProof := round.save.LocalPreParams.PaillierSK.FactorProof(NTildej, H1j, H2j)
-		facProofTilde := round.temp.skTilde.FactorProof(NTildej, H1j, H2j)
+		facProof := round.save.LocalPreParams.PaillierSK.FactorProof(NTildej, H1j, H2j, contextI)
+		facProofTilde := round.temp.skTilde.FactorProof(NTildej, H1j, H2j, contextI)
 
 		r2msg1 := NewKGRound2Message1(Pj, round.PartyID(), shares[j], facProof, facProofTilde)
 		round.out <- r2msg1
@@ -161,21 +163,24 @@ func (round *round2) CanAccept(msg tss.ParsedMessage) bool {
 }
 
 func (round *round2) Update() (bool, *tss.Error) {
+	ret := true
 	// guard - VERIFY de-commit for all Pj
 	for j, msg := range round.temp.kgRound2Message1s {
 		if round.ok[j] {
 			continue
 		}
 		if msg == nil || !round.CanAccept(msg) {
-			return false, nil
+			ret = false
+			continue
 		}
 		msg2 := round.temp.kgRound2Message2s[j]
 		if msg2 == nil || !round.CanAccept(msg2) {
-			return false, nil
+			ret = false
+			continue
 		}
 		round.ok[j] = true
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round2) NextRound() tss.Round {

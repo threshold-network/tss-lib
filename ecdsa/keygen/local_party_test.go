@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"os"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -34,9 +35,62 @@ const (
 	testThreshold    = TestThreshold
 )
 
+func TestSSIDIncludesSessionNonce(t *testing.T) {
+	pIDs := tss.GenerateTestPartyIDs(3)
+
+	ssidA := testKeygenSSID(pIDs, []byte("session-a-with-128-bits"))
+	ssidAAgain := testKeygenSSID(pIDs, []byte("session-a-with-128-bits"))
+	ssidB := testKeygenSSID(pIDs, []byte("session-b-with-128-bits"))
+
+	assert.Equal(t, ssidA, ssidAAgain)
+	assert.NotEqual(t, ssidA, ssidB)
+}
+
+func testKeygenSSID(pIDs tss.SortedPartyIDs, sessionID []byte) []byte {
+	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)
+	params.SetSessionNonceBytes(sessionID)
+
+	round := &base{
+		Parameters: params,
+		temp:       &localTempData{ssidNonce: params.SessionNonce()},
+		number:     1,
+	}
+	return round.getSSID()
+}
+
 func setUp(level string) {
 	if err := log.SetLogLevel("tss-lib", level); err != nil {
 		panic(err)
+	}
+}
+
+// TestKeygen_Start_RequiresSessionNonce pins that keygen fails closed when
+// no SessionNonce is set. Previously, round 1 fell back to a zero nonce,
+// neutralising the SSID binding for any caller that forgot
+// SetSessionNonce — two keygen ceremonies over otherwise-identical
+// committees would derive the same SSID, breaking the session-binding
+// property the BNB hardening was meant to add.
+func TestKeygen_Start_RequiresSessionNonce(t *testing.T) {
+	setUp("info")
+	pIDs := tss.GenerateTestPartyIDs(2)
+	p2pCtx := tss.NewPeerContext(pIDs)
+	params := tss.NewParameters(tss.S256(), p2pCtx, pIDs[0], len(pIDs), 1)
+	// Deliberately do NOT call params.SetSessionNonce — Start must fail closed.
+
+	out := make(chan tss.Message, 1)
+	end := make(chan LocalPartySaveData, 1)
+	fixtures, _, err := LoadKeygenTestFixtures(testParticipants)
+	if err != nil {
+		t.Skip("test fixtures required (LocalPreParams) to reach the nonce check")
+	}
+	lp := NewLocalParty(params, out, end, fixtures[0].LocalPreParams).(*LocalParty)
+
+	tssErr := lp.Start()
+	if tssErr == nil {
+		t.Fatal("Start must return an error without SessionNonce")
+	}
+	if !strings.Contains(tssErr.Error(), "SetSessionNonce") {
+		t.Fatalf("error must reference SetSessionNonce, got: %v", tssErr)
 	}
 }
 
@@ -47,6 +101,7 @@ func TestStartRound1Paillier(t *testing.T) {
 	p2pCtx := tss.NewPeerContext(pIDs)
 	threshold := 1
 	params := tss.NewParameters(tss.EC(), p2pCtx, pIDs[0], len(pIDs), threshold)
+	params.SetSessionNonce(big.NewInt(1))
 
 	fixtures, pIDs, err := LoadKeygenTestFixtures(testParticipants)
 	if err != nil {
@@ -87,6 +142,7 @@ func TestFinishAndSaveH1H2(t *testing.T) {
 	p2pCtx := tss.NewPeerContext(pIDs)
 	threshold := 1
 	params := tss.NewParameters(tss.EC(), p2pCtx, pIDs[0], len(pIDs), threshold)
+	params.SetSessionNonce(big.NewInt(2))
 
 	fixtures, pIDs, err := LoadKeygenTestFixtures(testParticipants)
 	if err != nil {
@@ -134,6 +190,7 @@ func TestBadMessageCulprits(t *testing.T) {
 	pIDs := tss.GenerateTestPartyIDs(2)
 	p2pCtx := tss.NewPeerContext(pIDs)
 	params := tss.NewParameters(tss.S256(), p2pCtx, pIDs[0], len(pIDs), 1)
+	params.SetSessionNonce(big.NewInt(3))
 
 	fixtures, pIDs, err := LoadKeygenTestFixtures(testParticipants)
 	if err != nil {
@@ -192,9 +249,11 @@ func TestE2EConcurrentAndSaveFixtures(t *testing.T) {
 	startGR := runtime.NumGoroutine()
 
 	// init the parties
+	ceremonyNonce := big.NewInt(4)
 	for i := 0; i < len(pIDs); i++ {
 		var P *LocalParty
 		params := tss.NewParameters(tss.S256(), p2pCtx, pIDs[i], len(pIDs), threshold)
+		params.SetSessionNonce(ceremonyNonce)
 		if i < len(fixtures) {
 			P = NewLocalParty(params, outCh, endCh, fixtures[i].LocalPreParams).(*LocalParty)
 		} else {
@@ -277,9 +336,9 @@ keygen:
 
 					// fails if threshold cannot be satisfied (bad share)
 					{
-						badShares := pShares[:threshold]
+						badShares := pShares[:threshold+1]
 						badShares[len(badShares)-1].Share.Set(big.NewInt(0))
-						uj, err := pShares[:threshold].ReConstruct(tss.S256())
+						uj, err := pShares[:threshold+1].ReConstruct(tss.S256())
 						assert.NoError(t, err)
 						assert.NotEqual(t, parties[j].temp.ui, uj)
 						BigXjX, BigXjY := tss.EC().ScalarBaseMult(uj.Bytes())

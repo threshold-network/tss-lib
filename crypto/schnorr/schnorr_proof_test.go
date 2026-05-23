@@ -40,6 +40,19 @@ func TestSchnorrProofVerify(t *testing.T) {
 	assert.True(t, res, "verify result must be true")
 }
 
+func TestSchnorrProofVerifySessionBinding(t *testing.T) {
+	q := tss.EC().Params().N
+	u := common.GetRandomPositiveInt(q)
+	X := crypto.ScalarBaseMult(tss.EC(), u)
+
+	session := []byte("schnorr-session-a")
+	proof, _ := NewZKProofWithSession(session, u, X)
+
+	assert.True(t, proof.VerifyWithSession(session, X), "verify result must be true with the original session")
+	assert.False(t, proof.VerifyWithSession([]byte("schnorr-session-b"), X), "proof must not replay across sessions")
+	assert.False(t, proof.Verify(X), "session-bound proof must not verify without its session")
+}
+
 func TestSchnorrProofVerifyBadX(t *testing.T) {
 	q := tss.EC().Params().N
 	u := common.GetRandomPositiveInt(q)
@@ -67,6 +80,24 @@ func TestSchnorrVProofVerify(t *testing.T) {
 	res := proof.Verify(V, R)
 
 	assert.True(t, res, "verify result must be true")
+}
+
+func TestSchnorrVProofVerifySessionBinding(t *testing.T) {
+	q := tss.EC().Params().N
+	k := common.GetRandomPositiveInt(q)
+	s := common.GetRandomPositiveInt(q)
+	l := common.GetRandomPositiveInt(q)
+	R := crypto.ScalarBaseMult(tss.EC(), k) // k_-1 * G
+	Rs := R.ScalarMult(s)
+	lG := crypto.ScalarBaseMult(tss.EC(), l)
+	V, _ := Rs.Add(lG)
+
+	session := []byte("schnorr-v-session-a")
+	proof, _ := NewZKVProofWithSession(session, V, R, s, l)
+
+	assert.True(t, proof.VerifyWithSession(session, V, R), "verify result must be true with the original session")
+	assert.False(t, proof.VerifyWithSession([]byte("schnorr-v-session-b"), V, R), "proof must not replay across sessions")
+	assert.False(t, proof.Verify(V, R), "session-bound proof must not verify without its session")
 }
 
 func TestSchnorrVProofVerifyBadPartialV(t *testing.T) {

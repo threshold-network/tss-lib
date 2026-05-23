@@ -60,6 +60,13 @@ func GetCurveName(curve elliptic.Curve) (CurveName, bool) {
 	return "", false
 }
 
+// SameCurve returns true if both curves are registered under the same name.
+func SameCurve(lhs, rhs elliptic.Curve) bool {
+	lName, lOk := GetCurveName(lhs)
+	rName, rOk := GetCurveName(rhs)
+	return lOk && rOk && lName == rName
+}
+
 // EC returns the current elliptic curve in use. The default is secp256k1
 func EC() elliptic.Curve {
 	return ec

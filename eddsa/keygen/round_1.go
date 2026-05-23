@@ -38,6 +38,22 @@ func (round *round1) Start() *tss.Error {
 	Pi := round.PartyID()
 	i := Pi.Index
 
+	// Keygen fails closed if no SessionNonce is set. The previous zero
+	// fallback neutralised the SSID binding for any caller that forgot
+	// SetSessionNonce — two keygen ceremonies over otherwise identical
+	// committees would derive the same SSID, exposing proof transcripts
+	// to splicing between runs.
+	nonce := round.Params().SessionNonce()
+	if nonce == nil || nonce.Sign() <= 0 {
+		return round.WrapError(errors.New("keygen requires tss.Parameters.SetSessionNonce(<unique positive per-ceremony nonce>) before Start"), Pi)
+	}
+	round.temp.ssidNonce = new(big.Int).Set(nonce)
+	ssid, err := round.getSSID()
+	if err != nil {
+		return round.WrapError(err)
+	}
+	round.temp.ssid = ssid
+
 	// 1. calculate "partial" key share ui
 	ui := common.GetRandomPositiveInt(round.Params().EC().Params().N)
 	round.temp.ui = ui
@@ -89,17 +105,19 @@ func (round *round1) CanAccept(msg tss.ParsedMessage) bool {
 }
 
 func (round *round1) Update() (bool, *tss.Error) {
+	ret := true
 	for j, msg := range round.temp.kgRound1Messages {
 		if round.ok[j] {
 			continue
 		}
 		if msg == nil || !round.CanAccept(msg) {
-			return false, nil
+			ret = false
+			continue
 		}
 		// vss check is in round 2
 		round.ok[j] = true
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round1) NextRound() tss.Round {

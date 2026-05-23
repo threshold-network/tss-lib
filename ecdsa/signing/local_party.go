@@ -63,10 +63,11 @@ type (
 		sigma,
 		keyDerivationDelta,
 		gamma *big.Int
-		cis        []*big.Int
-		bigWs      []*crypto.ECPoint
-		pointGamma *crypto.ECPoint
-		deCommit   cmt.HashDeCommitment
+		fullBytesLen int
+		cis          []*big.Int
+		bigWs        []*crypto.ECPoint
+		pointGamma   *crypto.ECPoint
+		deCommit     cmt.HashDeCommitment
 
 		// round 2
 		betas, // return value of Bob_mid
@@ -91,6 +92,9 @@ type (
 		Ui,
 		Ti *crypto.ECPoint
 		DTelda cmt.HashDeCommitment
+
+		ssid      []byte
+		ssidNonce *big.Int
 	}
 )
 
@@ -99,11 +103,20 @@ func NewLocalParty(
 	params *tss.Parameters,
 	key keygen.LocalPartySaveData,
 	out chan<- tss.Message,
-	end chan<- common.SignatureData) tss.Party {
-	return NewLocalPartyWithKDD(msg, params, key, nil, out, end)
+	end chan<- common.SignatureData,
+	fullBytesLen ...int,
+) tss.Party {
+	return NewLocalPartyWithKDD(msg, params, key, nil, out, end, fullBytesLen...)
 }
 
-// NewLocalPartyWithKDD returns a party with key derivation delta for HD support
+// NewLocalPartyWithKDD returns a party with key derivation delta for HD support.
+//
+// fullBytesLen fixes the byte width used to encode the message for the final
+// ECDSA verification/output path (preserving leading zero bytes). Every signer
+// in a ceremony must pass the same value. It must be positive, no larger than
+// the curve order byte length, and at least ceil(msg.BitLen()/8); violating
+// these constraints is a caller bug and the constructor panics at the call site
+// rather than later inside a protocol goroutine.
 func NewLocalPartyWithKDD(
 	msg *big.Int,
 	params *tss.Parameters,
@@ -111,7 +124,10 @@ func NewLocalPartyWithKDD(
 	keyDerivationDelta *big.Int,
 	out chan<- tss.Message,
 	end chan<- common.SignatureData,
+	fullBytesLen ...int,
 ) tss.Party {
+	validatedFullBytesLen := validateFullBytesLen("NewLocalPartyWithKDD", msg, params, fullBytesLen)
+
 	partyCount := len(params.Parties().IDs())
 	p := &LocalParty{
 		BaseParty: new(tss.BaseParty),
@@ -136,6 +152,7 @@ func NewLocalPartyWithKDD(
 	// temp data init
 	p.temp.keyDerivationDelta = keyDerivationDelta
 	p.temp.m = msg
+	p.temp.fullBytesLen = validatedFullBytesLen
 	p.temp.cis = make([]*big.Int, partyCount)
 	p.temp.bigWs = make([]*crypto.ECPoint, partyCount)
 	p.temp.betas = make([]*big.Int, partyCount)
@@ -145,6 +162,28 @@ func NewLocalPartyWithKDD(
 	p.temp.pi2jis = make([]*mta.ProofBobWC, partyCount)
 	p.temp.vs = make([]*big.Int, partyCount)
 	return p
+}
+
+func validateFullBytesLen(caller string, msg *big.Int, params *tss.Parameters, fullBytesLen []int) int {
+	if len(fullBytesLen) != 1 {
+		panic(fmt.Errorf("%s: fullBytesLen is required and must match all signing parties", caller))
+	}
+	length := fullBytesLen[0]
+	if length <= 0 {
+		panic(fmt.Errorf("%s: fullBytesLen must be positive, got %d", caller, length))
+	}
+	if msg != nil && msg.BitLen() > 8*length {
+		panic(fmt.Errorf("%s: fullBytesLen=%d is too small for a %d-bit message (need at least %d bytes)",
+			caller, length, msg.BitLen(), (msg.BitLen()+7)/8))
+	}
+	if params == nil || params.EC() == nil || params.EC().Params() == nil || params.EC().Params().N == nil {
+		panic(fmt.Errorf("%s: params with a curve order is required to validate fullBytesLen", caller))
+	}
+	orderBytes := (params.EC().Params().N.BitLen() + 7) / 8
+	if length > orderBytes {
+		panic(fmt.Errorf("%s: fullBytesLen=%d exceeds curve order byte length %d", caller, length, orderBytes))
+	}
+	return length
 }
 
 func (p *LocalParty) FirstRound() tss.Round {

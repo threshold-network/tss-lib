@@ -7,6 +7,9 @@
 package resharing
 
 import (
+	"math/big"
+
+	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/ecdsa/keygen"
 	"github.com/bnb-chain/tss-lib/tss"
 )
@@ -136,4 +139,18 @@ func (round *base) allNewOK() {
 	for j := range round.newOK {
 		round.newOK[j] = true
 	}
+}
+
+func (round *base) getSSID() []byte {
+	ssidList := []*big.Int{
+		round.EC().Params().P,
+		round.EC().Params().N,
+		round.EC().Params().Gx,
+		round.EC().Params().Gy,
+	}
+	ssidList = append(ssidList, round.OldParties().IDs().Keys()...)
+	ssidList = append(ssidList, round.NewParties().IDs().Keys()...)
+	ssidList = append(ssidList, big.NewInt(int64(round.number)))
+	ssidList = append(ssidList, round.temp.ssidNonce)
+	return common.SHA512_256i(ssidList...).FillBytes(make([]byte, 32))
 }

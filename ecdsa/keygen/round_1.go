@@ -84,6 +84,19 @@ func (round *round1) Start() *tss.Error {
 	round.save.NTildej[i] = preParams.NTildei
 	round.save.H1j[i], round.save.H2j[i] = preParams.H1i, preParams.H2i
 
+	// Keygen fails closed if no SessionNonce is set. The previous zero
+	// fallback neutralised the SSID binding for any caller that forgot
+	// SetSessionNonce — two keygen ceremonies over otherwise identical
+	// committees would derive the same SSID, exposing proof transcripts
+	// to splicing between runs.
+	nonce := round.Params().SessionNonce()
+	if nonce == nil || nonce.Sign() <= 0 {
+		return round.WrapError(errors.New("keygen requires tss.Parameters.SetSessionNonce(<unique positive per-ceremony nonce>) before Start"), Pi)
+	}
+	round.temp.ssidNonce = new(big.Int).Set(nonce)
+	round.temp.ssid = round.getSSID()
+	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
+
 	// generate the dlnproofs for keygen
 	h1i, h2i, alpha, beta, p, q, NTildei :=
 		preParams.H1i,
@@ -93,10 +106,10 @@ func (round *round1) Start() *tss.Error {
 		preParams.P,
 		preParams.Q,
 		preParams.NTildei
-	dlnProof1 := dlnproof.NewDLNProof(h1i, h2i, alpha, p, q, NTildei)
-	dlnProof2 := dlnproof.NewDLNProof(h2i, h1i, beta, p, q, NTildei)
+	dlnProof1 := dlnproof.NewDLNProof(h1i, h2i, alpha, p, q, NTildei, round.temp.ssid)
+	dlnProof2 := dlnproof.NewDLNProof(h2i, h1i, beta, p, q, NTildei, round.temp.ssid)
 
-	modProof := preParams.PaillierSK.ModProof()
+	modProof := preParams.PaillierSK.ModProof(contextI)
 
 	// NTildei = (2p+1) * (2q+1)
 	// phi(NTildei) = ((2p+1) - 1) * ((2q+1) - 1) = 2p * 2q
@@ -109,7 +122,7 @@ func (round *round1) Start() *tss.Error {
 	pkTilde := &paillier.PublicKey{N: NTildei}
 	skTilde := &paillier.PrivateKey{PublicKey: *pkTilde, LambdaN: lambdaNTilde, PhiN: phiNTilde}
 
-	modProofTilde := skTilde.ModProof()
+	modProofTilde := skTilde.ModProof(contextI)
 
 	// for this P: SAVE
 	// - shareID
@@ -158,17 +171,19 @@ func (round *round1) CanAccept(msg tss.ParsedMessage) bool {
 }
 
 func (round *round1) Update() (bool, *tss.Error) {
+	ret := true
 	for j, msg := range round.temp.kgRound1Messages {
 		if round.ok[j] {
 			continue
 		}
 		if msg == nil || !round.CanAccept(msg) {
-			return false, nil
+			ret = false
+			continue
 		}
 		// vss check is in round 2
 		round.ok[j] = true
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round1) NextRound() tss.Round {

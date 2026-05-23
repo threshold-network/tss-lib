@@ -12,6 +12,7 @@ import (
 	"github.com/agl/ed25519/edwards25519"
 	"github.com/pkg/errors"
 
+	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
 	"github.com/bnb-chain/tss-lib/crypto/commitments"
 	"github.com/bnb-chain/tss-lib/tss"
@@ -38,6 +39,7 @@ func (round *round3) Start() *tss.Error {
 			continue
 		}
 
+		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		msg := round.temp.signRound2Messages[j]
 		r2msg := msg.Content().(*SignRound2Message)
 		cmtDeCmt := commitments.HashCommitDecommit{C: round.temp.cjs[j], D: r2msg.UnmarshalDeCommitment()}
@@ -50,15 +52,15 @@ func (round *round3) Start() *tss.Error {
 		}
 
 		Rj, err := crypto.NewECPoint(round.Params().EC(), coordinates[0], coordinates[1])
-		Rj = Rj.EightInvEight()
 		if err != nil {
 			return round.WrapError(errors.Wrapf(err, "NewECPoint(Rj)"), Pj)
 		}
+		Rj = Rj.EightInvEight()
 		proof, err := r2msg.UnmarshalZKProof(round.Params().EC())
 		if err != nil {
 			return round.WrapError(errors.New("failed to unmarshal Rj proof"), Pj)
 		}
-		ok = proof.Verify(Rj)
+		ok = proof.VerifyWithSession(contextJ, Rj)
 		if !ok {
 			return round.WrapError(errors.New("failed to prove Rj"), Pj)
 		}
@@ -77,7 +79,9 @@ func (round *round3) Start() *tss.Error {
 	h.Reset()
 	h.Write(encodedR[:])
 	h.Write(encodedPubKey[:])
-	h.Write(round.temp.m.Bytes())
+	mBytes := make([]byte, round.temp.fullBytesLen)
+	round.temp.m.FillBytes(mBytes)
+	h.Write(mBytes)
 
 	var lambda [64]byte
 	h.Sum(lambda[:0])
@@ -101,16 +105,18 @@ func (round *round3) Start() *tss.Error {
 }
 
 func (round *round3) Update() (bool, *tss.Error) {
+	ret := true
 	for j, msg := range round.temp.signRound3Messages {
 		if round.ok[j] {
 			continue
 		}
 		if msg == nil || !round.CanAccept(msg) {
-			return false, nil
+			ret = false
+			continue
 		}
 		round.ok[j] = true
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round3) CanAccept(msg tss.ParsedMessage) bool {

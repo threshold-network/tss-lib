@@ -34,7 +34,7 @@ type (
 // Canetti, R., Gennaro, R., Goldfeder, S., Makriyannis, N., Peled, U.:
 // UC Non-Interactive, Proactive, Threshold ECDSA with Identifiable Aborts.
 // In: Cryptology ePrint Archive 2021/060
-func (privateKey *PrivateKey) FactorProof(N, s, t *big.Int) *FactorProof {
+func (privateKey *PrivateKey) FactorProof(N, s, t *big.Int, session ...[]byte) *FactorProof {
 	N0 := privateKey.PublicKey.N
 	p, q := privateKey.GetPQ()
 
@@ -67,7 +67,7 @@ func (privateKey *PrivateKey) FactorProof(N, s, t *big.Int) *FactorProof {
 	// the last message with respect to e and communicates the entire transcript as the proof. Later, the Verifier
 	// accepts the proof if it is a valid transcript of the underlying Σ-protocol and e is well-formed (verified by
 	// querying the oracle as the Prover should have).
-	e := FactorChallenge(N, s, t, N0, P, Q, A, B, T, sigma)
+	e := FactorChallenge(N, s, t, N0, P, Q, A, B, T, sigma, session...)
 
 	sigmaH := new(big.Int)
 	sigmaH.Mul(v, p)
@@ -82,15 +82,31 @@ func (privateKey *PrivateKey) FactorProof(N, s, t *big.Int) *FactorProof {
 	return &FactorProof{P, Q, A, B, T, sigma, z1, z2, w1, w2, vv}
 }
 
-func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int) (bool, error) {
+func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int, session ...[]byte) (bool, error) {
 	if common.AnyIsNil(pkN, N, s, t) {
 		return false, fmt.Errorf("fac proof verify: nil bigint present in args")
 	}
 	if common.AnyIsNil(pf.P, pf.Q, pf.A, pf.B, pf.T, pf.Sigma, pf.Z1, pf.Z2, pf.W1, pf.W2, pf.V) {
 		return false, fmt.Errorf("fac proof verify: nil bigint present in proof")
 	}
+	if N.Sign() <= 0 {
+		return false, fmt.Errorf("fac proof verify: invalid modulus %x", N)
+	}
+	for name, base := range map[string]*big.Int{
+		"s": s,
+		"t": t,
+		"P": pf.P,
+		"Q": pf.Q,
+		"A": pf.A,
+		"B": pf.B,
+		"T": pf.T,
+	} {
+		if !common.IsInInterval(base, N) || !common.Coprime(base, N) {
+			return false, fmt.Errorf("fac proof verify: base %s = %x is not invertible modulo N", name, base)
+		}
+	}
 
-	e := FactorChallenge(N, s, t, pkN, pf.P, pf.Q, pf.A, pf.B, pf.T, pf.Sigma)
+	e := FactorChallenge(N, s, t, pkN, pf.P, pf.Q, pf.A, pf.B, pf.T, pf.Sigma, session...)
 
 	modN := common.ModInt(N)
 
@@ -131,11 +147,19 @@ func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int) (bool, error) {
 	return true, nil
 }
 
-func FactorChallenge(N, s, t, pkN, P, Q, A, B, T, sigma *big.Int) *big.Int {
+func FactorChallenge(N, s, t, pkN, P, Q, A, B, T, sigma *big.Int, session ...[]byte) *big.Int {
 	q := big.NewInt(1)
 	q = q.Lsh(q, 256)                             // q = 2^256
 	qMinus1 := new(big.Int).Sub(q, big.NewInt(1)) // q-1
 	qDoubleMinus1 := new(big.Int).Add(q, qMinus1) // q+q-1 = 2q-1
+
+	if len(session) > 0 {
+		if len(session[0]) == 0 {
+			panic("paillier: factor proof session tag must be non-empty")
+		}
+		eHash := common.SHA512_256i_TAGGED(session[0], N, s, t, pkN, P, Q, A, B, T, sigma)
+		return common.RejectionSample(q, eHash)
+	}
 
 	// 2. Verifier replies with e <- +-q
 	// The q here is not the secret factor q, but rather the order of secp256k1,

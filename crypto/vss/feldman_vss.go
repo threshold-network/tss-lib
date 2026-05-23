@@ -92,7 +92,7 @@ func Create(ec elliptic.Curve, threshold int, secret *big.Int, indexes []*big.In
 }
 
 func (share *Share) Verify(ec elliptic.Curve, threshold int, vs Vs) bool {
-	if share.Threshold != threshold || vs == nil {
+	if share.Threshold != threshold || vs == nil || len(vs) != threshold+1 {
 		return false
 	}
 	var err error
@@ -113,7 +113,10 @@ func (share *Share) Verify(ec elliptic.Curve, threshold int, vs Vs) bool {
 }
 
 func (shares Shares) ReConstruct(ec elliptic.Curve) (secret *big.Int, err error) {
-	if shares != nil && shares[0].Threshold > len(shares) {
+	if len(shares) == 0 {
+		return nil, ErrNumSharesBelowThreshold
+	}
+	if shares != nil && shares[0].Threshold+1 > len(shares) {
 		return nil, ErrNumSharesBelowThreshold
 	}
 	modN := common.ModInt(ec.Params().N)

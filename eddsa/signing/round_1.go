@@ -9,6 +9,7 @@ package signing
 import (
 	"errors"
 	"fmt"
+	"math/big"
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
@@ -31,6 +32,22 @@ func (round *round1) Start() *tss.Error {
 	round.number = 1
 	round.started = true
 	round.resetOK()
+
+	// Signing fails closed if no SessionNonce is set. The previous fallback
+	// (SHA512_256 of the message) made two concurrent ceremonies on the same
+	// canonical message reuse the same SSID, which would have enabled
+	// Fiat-Shamir transcript splicing across the runs. The caller must now
+	// supply a per-ceremony nonce via tss.Parameters.SetSessionNonce.
+	nonce := round.Params().SessionNonce()
+	if nonce == nil || nonce.Sign() <= 0 {
+		return round.WrapError(errors.New("signing requires tss.Parameters.SetSessionNonce(<unique positive per-ceremony nonce>) before Start"))
+	}
+	round.temp.ssidNonce = new(big.Int).Set(nonce)
+	ssid, err := round.getSSID()
+	if err != nil {
+		return round.WrapError(err)
+	}
+	round.temp.ssid = ssid
 
 	// 1. select ri
 	ri := common.GetRandomPositiveInt(round.Params().EC().Params().N)
@@ -56,16 +73,18 @@ func (round *round1) Start() *tss.Error {
 }
 
 func (round *round1) Update() (bool, *tss.Error) {
+	ret := true
 	for j, msg := range round.temp.signRound1Messages {
 		if round.ok[j] {
 			continue
 		}
 		if msg == nil || !round.CanAccept(msg) {
-			return false, nil
+			ret = false
+			continue
 		}
 		round.ok[j] = true
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round1) CanAccept(msg tss.ParsedMessage) bool {
