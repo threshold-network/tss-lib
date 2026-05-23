@@ -62,7 +62,7 @@ func TestModChallengeRejectsEmptySessionTag(t *testing.T) {
 // from a single SHA512_256i_TAGGED → Mod N reduction against a 2048-bit
 // Paillier N. A regression to truncation here would weaken the
 // session-tagged proof to a strictly smaller challenge space than the
-// legacy HashToN path it shares the verifier with.
+// HashToN path it shares the verifier with.
 func TestModChallenge_SessionPath_NotTruncated(t *testing.T) {
 	modSetUp(t)
 	N := publicKey.N

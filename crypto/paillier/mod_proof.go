@@ -130,7 +130,7 @@ func (pf ModProof) ModVerify(N *big.Int, session ...[]byte) (bool, error) {
 // N.BitLen() + 256 bits of entropy before reducing mod N. Reducing a single
 // 256-bit SHA512_256i_TAGGED output mod ~2^2048 would emit challenges in
 // [0, 2^256) instead of [0, N), giving the session-tagged path a strictly
-// weaker challenge distribution than the legacy HashToN path it shares the
+// weaker challenge distribution than the HashToN path it shares the
 // verifier with. Each iteration also chains the previously-derived challenges
 // (y[:i]) into the hash inputs, preserving the sequential-challenge property of
 // the original session-tagged construction.
