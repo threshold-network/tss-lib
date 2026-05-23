@@ -175,3 +175,31 @@ func TestRangeProofAliceRejectsMalformedInputs(t *testing.T) {
 	badZ.Z = big.NewInt(1)
 	assert.False(t, badZ.Verify(tss.EC(), pk, NTildei, h1i, h2i, c), "Z equal to one must fail")
 }
+
+// TestRangeProofAliceAcceptsZeroContribution codifies that the range proof
+// intentionally accepts c=1 with r=1 and m=0. BNB upstream flags c=1 as a
+// "bypass" in TestProveRangeAliceBypassed via a println, but tracing c=1
+// through BobMid (share_protocol.go) gives alpha+beta = 0 mod q, identical
+// to an honest a=0 contribution. The proof accepts m=0 because GG18 bounds
+// s1 < q^3, and signing tolerates one peer contributing zero because
+// k = sum(k_i) stays unpredictable from other parties' randomness. We do
+// not reject c=1 in Verify because it is not a verifier-side bug.
+func TestRangeProofAliceAcceptsZeroContribution(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	_, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	assert.NoError(t, err)
+
+	primes := [2]*big.Int{common.GetRandomPrimeInt(testSafePrimeBits), common.GetRandomPrimeInt(testSafePrimeBits)}
+	NTildei, h1i, h2i, err := crypto.GenerateNTildei(primes)
+	assert.NoError(t, err)
+
+	mZero := big.NewInt(0)
+	rOne := big.NewInt(1)
+	cOne := big.NewInt(1)
+	proof, err := ProveRangeAlice(tss.EC(), pk, cOne, NTildei, h1i, h2i, mZero, rOne)
+	assert.NoError(t, err)
+	assert.True(t, proof.Verify(tss.EC(), pk, NTildei, h1i, h2i, cOne),
+		"c=1 with r=1, m=0 verifies because it is honest zero contribution; see test docstring")
+}
