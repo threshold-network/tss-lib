@@ -120,6 +120,14 @@ func (params *Parameters) SetSessionNonce(nonce *big.Int) {
 // per-session nonce. All parties must call it with the same high-entropy
 // session ID before constructing local parties for a protocol run. It panics if
 // the session ID is shorter than 16 bytes.
+//
+// The 16-byte minimum is a floor that catches obvious misuse (empty input, a
+// short ASCII tag); it is not a sufficient condition. Callers must supply at
+// least 128 bits of true randomness. A counter, timestamp, or other
+// low-entropy 16-byte value passes the length check but defeats the
+// session-binding property that the proofs rely on. Prefer a freshly drawn
+// random session ID from a CSPRNG, or a high-entropy ceremony identifier
+// negotiated out of band.
 func (params *Parameters) SetSessionNonceBytes(sessionID []byte) {
 	if len(sessionID) < 16 {
 		panic("tss: session ID must be at least 16 bytes")
