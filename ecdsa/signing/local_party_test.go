@@ -9,6 +9,7 @@ package signing
 import (
 	"crypto/ecdsa"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"runtime"
@@ -35,6 +36,55 @@ func setUp(level string) {
 	if err := log.SetLogLevel("tss-lib", level); err != nil {
 		panic(err)
 	}
+}
+
+func TestStoreMessageRejectsContentDifferentReplay(t *testing.T) {
+	lp, pIDs := newStoreMessageTestParty(t)
+
+	msg1 := NewSignRound3Message(pIDs[1], big.NewInt(1))
+	ok, err := lp.StoreMessage(msg1)
+	assert.True(t, ok)
+	assert.Nil(t, err)
+
+	redelivery := NewSignRound3Message(pIDs[1], big.NewInt(1))
+	assert.True(t, tss.IsSameMessage(msg1, redelivery))
+	ok, err = lp.StoreMessage(redelivery)
+	assert.True(t, ok)
+	assert.Nil(t, err)
+
+	replacement := NewSignRound3Message(pIDs[1], big.NewInt(2))
+	assert.False(t, tss.IsSameMessage(msg1, replacement))
+	ok, err = lp.StoreMessage(replacement)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, tss.ErrDuplicateMessage))
+}
+
+func TestStoreMessageAllowsSelfReplacement(t *testing.T) {
+	lp, pIDs := newStoreMessageTestParty(t)
+
+	msg1 := NewSignRound3Message(pIDs[0], big.NewInt(1))
+	replacement := NewSignRound3Message(pIDs[0], big.NewInt(2))
+
+	ok, err := lp.StoreMessage(msg1)
+	assert.True(t, ok)
+	assert.Nil(t, err)
+	ok, err = lp.StoreMessage(replacement)
+	assert.True(t, ok)
+	assert.Nil(t, err)
+}
+
+func newStoreMessageTestParty(t *testing.T) (*LocalParty, tss.SortedPartyIDs) {
+	t.Helper()
+
+	pIDs := tss.GenerateTestPartyIDs(2)
+	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)
+	keys := keygen.NewLocalPartySaveData(len(pIDs))
+	for i, id := range pIDs {
+		keys.Ks[i] = id.KeyInt()
+	}
+	lp := NewLocalParty(big.NewInt(1), params, keys, nil, nil, 32).(*LocalParty)
+	return lp, pIDs
 }
 
 func TestE2EConcurrent(t *testing.T) {
@@ -347,8 +397,8 @@ func TestNewLocalPartyWithKDD_FullBytesLen_Required(t *testing.T) {
 }
 
 func TestNewLocalPartyWithKDD_FullBytesLen_TooWide(t *testing.T) {
-	pIDs := tss.GenerateTestPartyIDs(1)
-	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], 1, 0)
+	pIDs := tss.GenerateTestPartyIDs(2)
+	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)
 	defer func() {
 		r := recover()
 		if r == nil {

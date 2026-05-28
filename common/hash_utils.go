@@ -21,12 +21,29 @@ func LiterallyJustMod(q *big.Int, eHash *big.Int) *big.Int { // e' = eHash
 	return e
 }
 
-// RejectionSample preserves the upstream challenge-reduction function name.
-// This implementation reduces the hash modulo q rather than looping with fresh
-// hash material, so callers must only use it where modular-reduction bias is
-// acceptable for the proof challenge.
-func RejectionSample(q *big.Int, eHash *big.Int) *big.Int {
+// RejectionSample reduces `eHash` modulo q. The name preserves the upstream
+// challenge-derivation function name; this is NOT true rejection sampling
+// (no loop with fresh hash material until a candidate falls in [0, q)).
+//
+// Safe only when q is close to 2^k from below, where k is the hash output
+// width in bits (k = 256 for SHA512_256). For secp256k1 the bias is ≈ 2^-128
+// — negligible for Fiat-Shamir challenges.
+//
+// For q that is NOT close to a power of 2, or for moduli larger than 2^k
+// (e.g. Paillier N ≈ 2^2048), use HashToN / HashToNTagged: those absorb
+// ≥ k + 256 bits of entropy before reduction and bound bias at ≤ 2^-256
+// regardless of q. For applications requiring an unbiased uniform sample
+// over [0, q), implement true rejection sampling at the call site.
+func ModReduceHash(q *big.Int, eHash *big.Int) *big.Int {
 	return LiterallyJustMod(q, eHash)
+}
+
+// RejectionSample is kept for compatibility with older callers.
+//
+// Deprecated: use ModReduceHash. This function is modular reduction, not true
+// rejection sampling.
+func RejectionSample(q *big.Int, eHash *big.Int) *big.Int {
+	return ModReduceHash(q, eHash)
 }
 
 // Return a big.Int between 0 and N

@@ -18,7 +18,23 @@ import (
 
 const (
 	RangeProofAliceBytesParts = 6
+	verifyMinModulusBitLen    = 2048
+	fsDomainTagRangeAlice     = "tss-lib.threshold.mta.range-alice"
+	fsDomainTagBob            = "tss-lib.threshold.mta.bob"
+	fsDomainTagBobWC          = "tss-lib.threshold.mta.bob-wc"
 )
+
+func fsSessionRangeAlice(session []byte) []byte {
+	return append([]byte(fsDomainTagRangeAlice+"|"), session...)
+}
+
+func fsSessionBob(session []byte) []byte {
+	return append([]byte(fsDomainTagBob+"|"), session...)
+}
+
+func fsSessionBobWC(session []byte) []byte {
+	return append([]byte(fsDomainTagBobWC+"|"), session...)
+}
 
 var (
 	zero = big.NewInt(0)
@@ -34,7 +50,7 @@ type (
 // ProveRangeAlice implements Alice's range proof used in the MtA and MtAwc protocols from GG18Spec (9) Fig. 9.
 func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h2, m, r *big.Int, session ...[]byte) (*RangeProofAlice, error) {
 	Session := optionalProofSession(session)
-	if pk == nil || NTilde == nil || h1 == nil || h2 == nil || c == nil || m == nil || r == nil {
+	if ec == nil || pk == nil || NTilde == nil || h1 == nil || h2 == nil || c == nil || m == nil || r == nil {
 		return nil, errors.New("ProveRangeAlice constructor received nil value(s)")
 	}
 
@@ -70,8 +86,8 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 	w = modNTilde.Mul(w, modNTilde.Exp(h2, gamma))
 
 	// 8-9. e'
-	eHash := common.SHA512_256i_TAGGED(Session, append(pk.AsInts(), NTilde, h1, h2, c, z, u, w)...)
-	e := common.RejectionSample(q, eHash)
+	eHash := common.SHA512_256i_TAGGED(fsSessionRangeAlice(Session), append(pk.AsInts(), NTilde, h1, h2, c, z, u, w)...)
+	e := common.ModReduceHash(q, eHash)
 
 	modN := common.ModInt(pk.N)
 	s := modN.Exp(r, e)
@@ -109,7 +125,14 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 		NTilde == nil || h1 == nil || h2 == nil || c == nil {
 		return false
 	}
-	if new(big.Int).GCD(nil, nil, c, pk.N).Cmp(one) != 0 {
+	if !common.IsUsableUnknownOrderModulus(pk.N, verifyMinModulusBitLen) ||
+		!common.IsUsableUnknownOrderModulus(NTilde, verifyMinModulusBitLen) {
+		return false
+	}
+	if !common.IsCanonicalGenerator(NTilde, h1) || !common.IsCanonicalGenerator(NTilde, h2) || h1.Cmp(h2) == 0 {
+		return false
+	}
+	if !common.IsCanonicalPaillierCiphertext(c, pk.N) {
 		return false
 	}
 
@@ -121,16 +144,16 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 	q3NTilde := new(big.Int).Mul(q3, NTilde)
 	maxS2 := new(big.Int).Lsh(q3NTilde, 1)
 
-	if !common.IsInInterval(pf.Z, NTilde) {
+	if !common.IsInIntervalPositive(pf.Z, NTilde) {
 		return false
 	}
-	if !common.IsInInterval(pf.U, pk.NSquare()) {
+	if !common.IsInIntervalPositive(pf.U, pk.NSquare()) {
 		return false
 	}
-	if !common.IsInInterval(pf.W, NTilde) {
+	if !common.IsInIntervalPositive(pf.W, NTilde) {
 		return false
 	}
-	if !common.IsInInterval(pf.S, pk.N) {
+	if !common.IsInIntervalPositive(pf.S, pk.N) {
 		return false
 	}
 	if new(big.Int).GCD(nil, nil, pf.Z, NTilde).Cmp(one) != 0 {
@@ -173,8 +196,11 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 	}
 
 	// 1-2. e'
-	eHash := common.SHA512_256i_TAGGED(Session, append(pk.AsInts(), NTilde, h1, h2, c, pf.Z, pf.U, pf.W)...)
-	e := common.RejectionSample(q, eHash)
+	eHash := common.SHA512_256i_TAGGED(fsSessionRangeAlice(Session), append(pk.AsInts(), NTilde, h1, h2, c, pf.Z, pf.U, pf.W)...)
+	e := common.ModReduceHash(q, eHash)
+	if e.Sign() == 0 {
+		return false
+	}
 
 	var products *big.Int // for the following conditionals
 	minusE := new(big.Int).Sub(zero, e)

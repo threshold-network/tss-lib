@@ -66,6 +66,11 @@ func SortPartyIDs(ids UnSortedPartyIDs, startAt ...int) SortedPartyIDs {
 		sorted = append(sorted, id)
 	}
 	sort.Sort(sorted)
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i-1].KeyInt().Cmp(sorted[i].KeyInt()) == 0 {
+			panic(fmt.Errorf("SortPartyIDs: duplicate party key %s", sorted[i].KeyInt()))
+		}
+	}
 	// assign party indexes
 	for i, id := range sorted {
 		frm := 0
@@ -140,7 +145,7 @@ func (spids SortedPartyIDs) Len() int {
 }
 
 func (spids SortedPartyIDs) Less(a, b int) bool {
-	return spids[a].KeyInt().Cmp(spids[b].KeyInt()) <= 0
+	return spids[a].KeyInt().Cmp(spids[b].KeyInt()) < 0
 }
 
 func (spids SortedPartyIDs) Swap(a, b int) {

@@ -101,6 +101,23 @@ func TestModChallenge_SessionPath_ChainsPreviousChallenges(t *testing.T) {
 	}
 }
 
+func TestSampleYModNDeterministicAndSupportsManyBlocks(t *testing.T) {
+	// Force 257 SHA512_256 blocks, exceeding the former uint8 block-index
+	// capacity that would have collided block 256 with block 0.
+	N := new(big.Int).Lsh(one, 32*257*8)
+	N.Sub(N, one)
+	tag := []byte("sample-y-large-modulus-test")
+	inputs := []*big.Int{big.NewInt(1), big.NewInt(2), big.NewInt(3)}
+
+	y1 := sampleYModN(tag, N, inputs...)
+	y2 := sampleYModN(tag, N, inputs...)
+
+	assert.Equal(t, y1, y2)
+	assert.True(t, y1.Sign() >= 0)
+	assert.True(t, y1.Cmp(N) < 0)
+	assert.True(t, N.BitLen() > 32*256*8)
+}
+
 func TestModProofVerifyFail(t *testing.T) {
 	modSetUp(t)
 	proof := privateKey.ModProof()

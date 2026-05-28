@@ -8,9 +8,14 @@ import (
 )
 
 const (
-	PARAM_E = 512 // 2 * secp256k1 element bit length
-	PARAM_L = 256 // 1 * secp256k1 element bit length
+	PARAM_E                = 512 // 2 * secp256k1 element bit length
+	PARAM_L                = 256 // 1 * secp256k1 element bit length
+	fsDomainTagFactorProof = "tss-lib.threshold.factorproof"
 )
+
+func fsSessionFactorProof(session []byte) []byte {
+	return append([]byte(fsDomainTagFactorProof+"|"), session...)
+}
 
 type (
 	FactorProof struct {
@@ -89,8 +94,11 @@ func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int, session ...[]byte) (bo
 	if common.AnyIsNil(pf.P, pf.Q, pf.A, pf.B, pf.T, pf.Sigma, pf.Z1, pf.Z2, pf.W1, pf.W2, pf.V) {
 		return false, fmt.Errorf("fac proof verify: nil bigint present in proof")
 	}
-	if N.Sign() <= 0 {
-		return false, fmt.Errorf("fac proof verify: invalid modulus %x", N)
+	if !common.IsUsableUnknownOrderModulus(pkN, verifyMinModulusBitLen) {
+		return false, fmt.Errorf("fac proof verify: invalid Paillier modulus %x", pkN)
+	}
+	if !common.IsUsableUnknownOrderModulus(N, verifyMinModulusBitLen) {
+		return false, fmt.Errorf("fac proof verify: invalid auxiliary modulus %x", N)
 	}
 	for name, base := range map[string]*big.Int{
 		"s": s,
@@ -101,7 +109,7 @@ func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int, session ...[]byte) (bo
 		"B": pf.B,
 		"T": pf.T,
 	} {
-		if !common.IsInInterval(base, N) || !common.Coprime(base, N) {
+		if !common.IsCanonicalGenerator(N, base) {
 			return false, fmt.Errorf("fac proof verify: base %s = %x is not invertible modulo N", name, base)
 		}
 	}
@@ -149,6 +157,9 @@ func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int, session ...[]byte) (bo
 	}
 
 	e := FactorChallenge(N, s, t, pkN, pf.P, pf.Q, pf.A, pf.B, pf.T, pf.Sigma, session...)
+	if e.Sign() == 0 {
+		return false, fmt.Errorf("fac proof verify: Fiat-Shamir challenge is zero")
+	}
 
 	modN := common.ModInt(N)
 
@@ -177,6 +188,19 @@ func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int, session ...[]byte) (bo
 	return true, nil
 }
 
+// FactorChallenge derives the Fiat-Shamir challenge for the no-small-factor
+// proof. The two paths emit different challenge distributions; both are
+// internally consistent because prover and verifier always traverse the same
+// branch for a given proof, but the absolute-value bounds on Z1/Z2/W1/W2 in
+// FactorVerify (which use CmpAbs) accommodate the signed legacy challenge.
+//
+//   - Tagged path  (session != nil): e ∈ [0, 2^256), derived via
+//     SHA512_256i_TAGGED + modular reduction. Honest responses Z1/Z2 = a+e*p,
+//     b+e*q are positive.
+//   - Legacy path (session absent):  e ∈ [-(2^256-1), 2^256), derived via
+//     HashToN(2q-1, …) − (q-1). Honest responses can be negative; this is the
+//     historical Threshold encoding, kept for wire-compat with non-session
+//     callers.
 func FactorChallenge(N, s, t, pkN, P, Q, A, B, T, sigma *big.Int, session ...[]byte) *big.Int {
 	q := big.NewInt(1)
 	q = q.Lsh(q, 256)                             // q = 2^256
@@ -187,8 +211,8 @@ func FactorChallenge(N, s, t, pkN, P, Q, A, B, T, sigma *big.Int, session ...[]b
 		if len(session[0]) == 0 {
 			panic("paillier: factor proof session tag must be non-empty")
 		}
-		eHash := common.SHA512_256i_TAGGED(session[0], N, s, t, pkN, P, Q, A, B, T, sigma)
-		return common.RejectionSample(q, eHash)
+		eHash := common.SHA512_256i_TAGGED(fsSessionFactorProof(session[0]), N, s, t, pkN, P, Q, A, B, T, sigma)
+		return common.ModReduceHash(q, eHash)
 	}
 
 	// 2. Verifier replies with e <- +-q
