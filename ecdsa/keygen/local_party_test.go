@@ -10,6 +10,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -79,7 +80,7 @@ func TestStoreMessageRejectsContentDifferentReplay(t *testing.T) {
 	ok, err = lp.StoreMessage(replacement)
 	assert.False(t, ok)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "duplicate")
+	assert.True(t, errors.Is(err, tss.ErrDuplicateMessage))
 }
 
 func TestStoreMessageAllowsSelfReplacement(t *testing.T) {

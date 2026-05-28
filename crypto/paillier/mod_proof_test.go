@@ -102,6 +102,8 @@ func TestModChallenge_SessionPath_ChainsPreviousChallenges(t *testing.T) {
 }
 
 func TestSampleYModNDeterministicAndSupportsManyBlocks(t *testing.T) {
+	// Force 257 SHA512_256 blocks, exceeding the former uint8 block-index
+	// capacity that would have collided block 256 with block 0.
 	N := new(big.Int).Lsh(one, 32*257*8)
 	N.Sub(N, one)
 	tag := []byte("sample-y-large-modulus-test")

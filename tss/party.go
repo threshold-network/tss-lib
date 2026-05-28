@@ -14,6 +14,8 @@ import (
 	"github.com/bnb-chain/tss-lib/common"
 )
 
+var ErrDuplicateMessage = errors.New("duplicate message")
+
 type Party interface {
 	Start() *Error
 	// The main entry point when updating a party's state from the wire.
