@@ -40,6 +40,8 @@ func PrepareForSigning(ec elliptic.Curve, i, pax int, xi *big.Int, ks []*big.Int
 		if new(big.Int).Mod(ksj, q).Cmp(new(big.Int).Mod(ksi, q)) == 0 {
 			return nil, nil, fmt.Errorf("PrepareForSigning: party keys at indices %d and %d collide mod q", j, i)
 		}
+		// The denominator is inverted modulo q, so equality has to be checked
+		// modulo q even when the raw key encodings differ.
 		// big.Int Div is calculated as: a/b = a * modInv(b,q)
 		coef := modQ.Mul(ks[j], modQ.ModInverse(new(big.Int).Sub(ksj, ksi)))
 		wi = modQ.Mul(wi, coef)
@@ -58,6 +60,8 @@ func PrepareForSigning(ec elliptic.Curve, i, pax int, xi *big.Int, ks []*big.Int
 			if new(big.Int).Mod(ksj, q).Cmp(new(big.Int).Mod(ksc, q)) == 0 {
 				return nil, nil, fmt.Errorf("PrepareForSigning: party keys at indices %d and %d collide mod q", j, c)
 			}
+			// The denominator is inverted modulo q, so equality has to be checked
+			// modulo q even when the raw key encodings differ.
 			// big.Int Div is calculated as: a/b = a * modInv(b,q)
 			iota := modQ.Mul(ksc, modQ.ModInverse(new(big.Int).Sub(ksc, ksj)))
 			bigWj = bigWj.ScalarMult(iota)

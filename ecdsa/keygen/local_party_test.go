@@ -58,6 +58,46 @@ func testKeygenSSID(pIDs tss.SortedPartyIDs, sessionID []byte) []byte {
 	return round.getSSID()
 }
 
+func TestStoreMessageRejectsContentDifferentReplay(t *testing.T) {
+	pIDs := tss.GenerateTestPartyIDs(2)
+	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)
+	lp := NewLocalParty(params, nil, nil).(*LocalParty)
+
+	msg1 := NewKGRound2Message2(pIDs[1], []*big.Int{big.NewInt(1), big.NewInt(2), big.NewInt(3)})
+	ok, err := lp.StoreMessage(msg1)
+	assert.True(t, ok)
+	assert.Nil(t, err)
+
+	redelivery := NewKGRound2Message2(pIDs[1], []*big.Int{big.NewInt(1), big.NewInt(2), big.NewInt(3)})
+	assert.True(t, tss.IsSameMessage(msg1, redelivery))
+	ok, err = lp.StoreMessage(redelivery)
+	assert.True(t, ok)
+	assert.Nil(t, err)
+
+	replacement := NewKGRound2Message2(pIDs[1], []*big.Int{big.NewInt(1), big.NewInt(2), big.NewInt(4)})
+	assert.False(t, tss.IsSameMessage(msg1, replacement))
+	ok, err = lp.StoreMessage(replacement)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate")
+}
+
+func TestStoreMessageAllowsSelfReplacement(t *testing.T) {
+	pIDs := tss.GenerateTestPartyIDs(2)
+	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)
+	lp := NewLocalParty(params, nil, nil).(*LocalParty)
+
+	msg1 := NewKGRound2Message2(pIDs[0], []*big.Int{big.NewInt(1), big.NewInt(2), big.NewInt(3)})
+	replacement := NewKGRound2Message2(pIDs[0], []*big.Int{big.NewInt(1), big.NewInt(2), big.NewInt(4)})
+
+	ok, err := lp.StoreMessage(msg1)
+	assert.True(t, ok)
+	assert.Nil(t, err)
+	ok, err = lp.StoreMessage(replacement)
+	assert.True(t, ok)
+	assert.Nil(t, err)
+}
+
 func setUp(level string) {
 	if err := log.SetLogLevel("tss-lib", level); err != nil {
 		panic(err)

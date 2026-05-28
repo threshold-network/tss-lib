@@ -83,6 +83,29 @@ func (p *ECPoint) Curve() elliptic.Curve {
 	return p.curve
 }
 
+func SameCurve(lhs, rhs elliptic.Curve) bool {
+	if lhs == nil || rhs == nil {
+		return false
+	}
+	lParams, rParams := lhs.Params(), rhs.Params()
+	if lParams == nil || rParams == nil {
+		return false
+	}
+	return sameBigInt(lParams.P, rParams.P) &&
+		sameBigInt(lParams.N, rParams.N) &&
+		sameBigInt(lParams.B, rParams.B) &&
+		sameBigInt(lParams.Gx, rParams.Gx) &&
+		sameBigInt(lParams.Gy, rParams.Gy) &&
+		lParams.BitSize == rParams.BitSize
+}
+
+func sameBigInt(lhs, rhs *big.Int) bool {
+	if lhs == nil || rhs == nil {
+		return lhs == rhs
+	}
+	return lhs.Cmp(rhs) == 0
+}
+
 func (p *ECPoint) Equals(p2 *ECPoint) bool {
 	if p == nil || p2 == nil {
 		return false
@@ -111,6 +134,8 @@ func (p *ECPoint) IsIdentity() bool {
 	if p == nil || p.coords[0] == nil || p.coords[1] == nil {
 		return false
 	}
+	// The supported curves encode usable affine points away from x=0; reject
+	// common identity-like encodings before arithmetic reaches curve methods.
 	if p.coords[0].Sign() != 0 {
 		return false
 	}

@@ -12,7 +12,6 @@ import (
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
-	"github.com/bnb-chain/tss-lib/tss"
 )
 
 type (
@@ -78,7 +77,7 @@ func (pf *ZKProof) VerifyWithSession(session []byte, X *crypto.ECPoint) bool {
 	if pf == nil || !pf.ValidateBasic() || X == nil || !X.ValidateBasic() {
 		return false
 	}
-	if !tss.SameCurve(X.Curve(), pf.Alpha.Curve()) {
+	if !crypto.SameCurve(X.Curve(), pf.Alpha.Curve()) {
 		return false
 	}
 	ec := X.Curve()
@@ -153,7 +152,7 @@ func (pf *ZKVProof) VerifyWithSession(session []byte, V, R *crypto.ECPoint) bool
 		V == nil || R == nil || !V.ValidateBasic() || !R.ValidateBasic() {
 		return false
 	}
-	if !tss.SameCurve(V.Curve(), R.Curve()) || !tss.SameCurve(V.Curve(), pf.Alpha.Curve()) {
+	if !crypto.SameCurve(V.Curve(), R.Curve()) || !crypto.SameCurve(V.Curve(), pf.Alpha.Curve()) {
 		return false
 	}
 	ec := V.Curve()

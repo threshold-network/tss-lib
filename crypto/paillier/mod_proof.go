@@ -169,7 +169,9 @@ func sampleYModN(tag []byte, N *big.Int, inputs ...*big.Int) *big.Int {
 		binary.BigEndian.PutUint32(counterBytes, counter)
 		out := make([]byte, 0, blocks*32)
 		for blockIdx := 0; blockIdx < blocks; blockIdx++ {
-			out = append(out, common.SHA512_256(seed, counterBytes, []byte{byte(blockIdx)})...)
+			blockIdxBytes := make([]byte, 4)
+			binary.BigEndian.PutUint32(blockIdxBytes, uint32(blockIdx))
+			out = append(out, common.SHA512_256(seed, counterBytes, blockIdxBytes)...)
 		}
 		out = out[:byteLen]
 		if excessBits > 0 {

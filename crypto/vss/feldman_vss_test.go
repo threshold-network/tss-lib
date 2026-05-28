@@ -7,6 +7,7 @@
 package vss_test
 
 import (
+	"crypto/elliptic"
 	"math/big"
 	"testing"
 
@@ -88,6 +89,23 @@ func TestVerify(t *testing.T) {
 		assert.True(t, shares[i].Verify(tss.EC(), threshold, vs))
 	}
 	assert.False(t, shares[0].Verify(tss.EC(), threshold, vs[:threshold]))
+}
+
+func TestVerifyAllowsUnregisteredCurve(t *testing.T) {
+	ec := elliptic.P256()
+	num, threshold := 5, 3
+	secret := common.GetRandomPositiveInt(ec.Params().N)
+
+	ids := make([]*big.Int, 0, num)
+	for i := 1; i <= num; i++ {
+		ids = append(ids, big.NewInt(int64(i)))
+	}
+
+	vs, shares, err := Create(ec, threshold, secret, ids)
+	assert.NoError(t, err)
+	for i := 0; i < num; i++ {
+		assert.True(t, shares[i].Verify(ec, threshold, vs))
+	}
 }
 
 func TestVerifyRejectsMalformedShare(t *testing.T) {
