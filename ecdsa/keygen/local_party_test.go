@@ -97,7 +97,7 @@ func TestKeygen_Start_RequiresSessionNonce(t *testing.T) {
 func TestStartRound1Paillier(t *testing.T) {
 	setUp("debug")
 
-	pIDs := tss.GenerateTestPartyIDs(1)
+	pIDs := tss.GenerateTestPartyIDs(2)
 	p2pCtx := tss.NewPeerContext(pIDs)
 	threshold := 1
 	params := tss.NewParameters(tss.EC(), p2pCtx, pIDs[0], len(pIDs), threshold)
@@ -138,7 +138,7 @@ func TestStartRound1Paillier(t *testing.T) {
 func TestFinishAndSaveH1H2(t *testing.T) {
 	setUp("debug")
 
-	pIDs := tss.GenerateTestPartyIDs(1)
+	pIDs := tss.GenerateTestPartyIDs(2)
 	p2pCtx := tss.NewPeerContext(pIDs)
 	threshold := 1
 	params := tss.NewParameters(tss.EC(), p2pCtx, pIDs[0], len(pIDs), threshold)

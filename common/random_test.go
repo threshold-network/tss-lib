@@ -31,6 +31,12 @@ func TestGetRandomPositiveInt(t *testing.T) {
 	assert.True(t, rndPos.Cmp(big.NewInt(0)) == 1, "rand int should be positive")
 }
 
+func TestGetRandomPositiveIntRejectsNoPositiveRange(t *testing.T) {
+	assert.Nil(t, common.GetRandomPositiveInt(nil))
+	assert.Nil(t, common.GetRandomPositiveInt(big.NewInt(0)))
+	assert.Nil(t, common.GetRandomPositiveInt(big.NewInt(1)))
+}
+
 func TestGetRandomPositiveRelativelyPrimeInt(t *testing.T) {
 	rnd := common.MustGetRandomInt(randomIntBitLen)
 	rndPosRP := common.GetRandomPositiveRelativelyPrimeInt(rnd)

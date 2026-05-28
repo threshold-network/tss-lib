@@ -347,8 +347,8 @@ func TestNewLocalPartyWithKDD_FullBytesLen_Required(t *testing.T) {
 }
 
 func TestNewLocalPartyWithKDD_FullBytesLen_TooWide(t *testing.T) {
-	pIDs := tss.GenerateTestPartyIDs(1)
-	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], 1, 0)
+	pIDs := tss.GenerateTestPartyIDs(2)
+	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)
 	defer func() {
 		r := recover()
 		if r == nil {

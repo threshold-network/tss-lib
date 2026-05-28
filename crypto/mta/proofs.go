@@ -38,7 +38,7 @@ type (
 // an absent `X` generates the proof without the X consistency check X = g^x
 func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c2, x, y, r *big.Int, X *crypto.ECPoint, session ...[]byte) (*ProofBobWC, error) {
 	Session := optionalProofSession(session)
-	if pk == nil || NTilde == nil || h1 == nil || h2 == nil || c1 == nil || c2 == nil || x == nil || y == nil || r == nil {
+	if ec == nil || pk == nil || NTilde == nil || h1 == nil || h2 == nil || c1 == nil || c2 == nil || x == nil || y == nil || r == nil {
 		return nil, errors.New("ProveBob() received a nil argument")
 	}
 
@@ -103,11 +103,11 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 		var eHash *big.Int
 		// X is nil if called by ProveBob (Bob's proof "without check")
 		if X == nil {
-			eHash = common.SHA512_256i_TAGGED(Session, append(pk.AsInts(), NTilde, h1, h2, c1, c2, z, zPrm, t, v, w)...)
+			eHash = common.SHA512_256i_TAGGED(fsSessionBob(Session), append(pk.AsInts(), NTilde, h1, h2, c1, c2, z, zPrm, t, v, w)...)
 		} else {
-			eHash = common.SHA512_256i_TAGGED(Session, append(pk.AsInts(), NTilde, h1, h2, X.X(), X.Y(), c1, c2, u.X(), u.Y(), z, zPrm, t, v, w)...)
+			eHash = common.SHA512_256i_TAGGED(fsSessionBobWC(Session), append(pk.AsInts(), NTilde, h1, h2, X.X(), X.Y(), c1, c2, u.X(), u.Y(), z, zPrm, t, v, w)...)
 		}
-		e = common.RejectionSample(q, eHash)
+		e = common.ModReduceHash(q, eHash)
 	}
 
 	// 13.
@@ -203,6 +203,16 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	} else if !pf.ProofBob.ValidateBasic() {
 		return false
 	}
+	if !common.IsUsableUnknownOrderModulus(pk.N, verifyMinModulusBitLen) ||
+		!common.IsUsableUnknownOrderModulus(NTilde, verifyMinModulusBitLen) {
+		return false
+	}
+	if !common.IsCanonicalGenerator(NTilde, h1) || !common.IsCanonicalGenerator(NTilde, h2) || h1.Cmp(h2) == 0 {
+		return false
+	}
+	if !common.IsCanonicalPaillierCiphertext(c1, pk.N) || !common.IsCanonicalPaillierCiphertext(c2, pk.N) {
+		return false
+	}
 
 	q := ec.Params().N
 	q3 := new(big.Int).Mul(q, q)
@@ -215,22 +225,22 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	maxS2 := new(big.Int).Lsh(q3NTilde, 1)
 	maxT2 := new(big.Int).Set(maxS2)
 
-	if !common.IsInInterval(pf.Z, NTilde) {
+	if !common.IsInIntervalPositive(pf.Z, NTilde) {
 		return false
 	}
-	if !common.IsInInterval(pf.ZPrm, NTilde) {
+	if !common.IsInIntervalPositive(pf.ZPrm, NTilde) {
 		return false
 	}
-	if !common.IsInInterval(pf.T, NTilde) {
+	if !common.IsInIntervalPositive(pf.T, NTilde) {
 		return false
 	}
-	if !common.IsInInterval(pf.V, pk.NSquare()) {
+	if !common.IsInIntervalPositive(pf.V, pk.NSquare()) {
 		return false
 	}
-	if !common.IsInInterval(pf.W, NTilde) {
+	if !common.IsInIntervalPositive(pf.W, NTilde) {
 		return false
 	}
-	if !common.IsInInterval(pf.S, pk.N) {
+	if !common.IsInIntervalPositive(pf.S, pk.N) {
 		return false
 	}
 	if new(big.Int).GCD(nil, nil, pf.Z, NTilde).Cmp(one) != 0 {
@@ -253,12 +263,6 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 		return false
 	}
 	if gcd.GCD(nil, nil, pf.S, pk.N).Cmp(one) != 0 {
-		return false
-	}
-	if pf.V.Cmp(zero) == 0 {
-		return false
-	}
-	if gcd.GCD(nil, nil, pf.V, pk.N).Cmp(one) != 0 {
 		return false
 	}
 	if pf.S1.Cmp(q) == -1 {
@@ -294,14 +298,20 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 		var eHash *big.Int
 		// X is nil if called on a ProveBob (Bob's proof "without check")
 		if X == nil {
-			eHash = common.SHA512_256i_TAGGED(Session, append(pk.AsInts(), NTilde, h1, h2, c1, c2, pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)
+			eHash = common.SHA512_256i_TAGGED(fsSessionBob(Session), append(pk.AsInts(), NTilde, h1, h2, c1, c2, pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)
 		} else {
 			if !X.ValidateBasic() || !tss.SameCurve(ec, X.Curve()) {
 				return false
 			}
-			eHash = common.SHA512_256i_TAGGED(Session, append(pk.AsInts(), NTilde, h1, h2, X.X(), X.Y(), c1, c2, pf.U.X(), pf.U.Y(), pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)
+			if !pf.U.ValidateBasic() || !tss.SameCurve(ec, pf.U.Curve()) {
+				return false
+			}
+			eHash = common.SHA512_256i_TAGGED(fsSessionBobWC(Session), append(pk.AsInts(), NTilde, h1, h2, X.X(), X.Y(), c1, c2, pf.U.X(), pf.U.Y(), pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)
 		}
-		e = common.RejectionSample(q, eHash)
+		e = common.ModReduceHash(q, eHash)
+	}
+	if e.Sign() == 0 {
+		return false
 	}
 
 	var left, right *big.Int // for the following conditionals
@@ -315,7 +325,7 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 			return false
 		}
 		xEU, err := xE.Add(pf.U)
-		if err != nil || xEU == nil || !gS1.Equals(xEU) {
+		if err != nil || xEU == nil || gS1 == nil || !gS1.Equals(xEU) {
 			return false
 		}
 	}

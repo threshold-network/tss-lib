@@ -7,6 +7,7 @@
 package tss
 
 import (
+	"bytes"
 	"fmt"
 
 	"google.golang.org/protobuf/proto"
@@ -166,4 +167,18 @@ func (mm *MessageImpl) String() string {
 		extraStr = " (To Old Committee)"
 	}
 	return fmt.Sprintf("Type: %s, From: %s, To: %s%s", mm.Type(), mm.From.String(), toStr, extraStr)
+}
+
+func IsSameMessage(lhs, rhs ParsedMessage) bool {
+	if lhs == nil || rhs == nil {
+		return lhs == rhs
+	}
+	lhsBytes, _, lhsErr := lhs.WireBytes()
+	rhsBytes, _, rhsErr := rhs.WireBytes()
+	if lhsErr != nil || rhsErr != nil {
+		return false
+	}
+	return lhs.Type() == rhs.Type() &&
+		lhs.IsBroadcast() == rhs.IsBroadcast() &&
+		bytes.Equal(lhsBytes, rhsBytes)
 }

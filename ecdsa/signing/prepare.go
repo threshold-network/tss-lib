@@ -16,18 +16,19 @@ import (
 )
 
 // PrepareForSigning(), GG18Spec (11) Fig. 14
-func PrepareForSigning(ec elliptic.Curve, i, pax int, xi *big.Int, ks []*big.Int, bigXs []*crypto.ECPoint) (wi *big.Int, bigWs []*crypto.ECPoint) {
+func PrepareForSigning(ec elliptic.Curve, i, pax int, xi *big.Int, ks []*big.Int, bigXs []*crypto.ECPoint) (wi *big.Int, bigWs []*crypto.ECPoint, err error) {
 	modQ := common.ModInt(ec.Params().N)
 	if len(ks) != len(bigXs) {
-		panic(fmt.Errorf("PrepareForSigning: len(ks) != len(bigXs) (%d != %d)", len(ks), len(bigXs)))
+		return nil, nil, fmt.Errorf("PrepareForSigning: len(ks) != len(bigXs) (%d != %d)", len(ks), len(bigXs))
 	}
 	if len(ks) != pax {
-		panic(fmt.Errorf("PrepareForSigning: len(ks) != pax (%d != %d)", len(ks), pax))
+		return nil, nil, fmt.Errorf("PrepareForSigning: len(ks) != pax (%d != %d)", len(ks), pax)
 	}
 	if len(ks) <= i {
-		panic(fmt.Errorf("PrepareForSigning: len(ks) <= i (%d <= %d)", len(ks), i))
+		return nil, nil, fmt.Errorf("PrepareForSigning: len(ks) <= i (%d <= %d)", len(ks), i)
 	}
 
+	q := ec.Params().N
 	// 2-4.
 	wi = xi
 	for j := 0; j < pax; j++ {
@@ -36,8 +37,8 @@ func PrepareForSigning(ec elliptic.Curve, i, pax int, xi *big.Int, ks []*big.Int
 		}
 		ksj := ks[j]
 		ksi := ks[i]
-		if ksj.Cmp(ksi) == 0 {
-			panic(fmt.Errorf("index of two parties are equal"))
+		if new(big.Int).Mod(ksj, q).Cmp(new(big.Int).Mod(ksi, q)) == 0 {
+			return nil, nil, fmt.Errorf("PrepareForSigning: party keys at indices %d and %d collide mod q", j, i)
 		}
 		// big.Int Div is calculated as: a/b = a * modInv(b,q)
 		coef := modQ.Mul(ks[j], modQ.ModInverse(new(big.Int).Sub(ksj, ksi)))
@@ -54,8 +55,8 @@ func PrepareForSigning(ec elliptic.Curve, i, pax int, xi *big.Int, ks []*big.Int
 			}
 			ksc := ks[c]
 			ksj := ks[j]
-			if ksj.Cmp(ksc) == 0 {
-				panic(fmt.Errorf("index of two parties are equal"))
+			if new(big.Int).Mod(ksj, q).Cmp(new(big.Int).Mod(ksc, q)) == 0 {
+				return nil, nil, fmt.Errorf("PrepareForSigning: party keys at indices %d and %d collide mod q", j, c)
 			}
 			// big.Int Div is calculated as: a/b = a * modInv(b,q)
 			iota := modQ.Mul(ksc, modQ.ModInverse(new(big.Int).Sub(ksc, ksj)))
@@ -63,5 +64,5 @@ func PrepareForSigning(ec elliptic.Curve, i, pax int, xi *big.Int, ks []*big.Int
 		}
 		bigWs[j] = bigWj
 	}
-	return
+	return wi, bigWs, nil
 }

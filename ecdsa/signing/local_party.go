@@ -235,27 +235,64 @@ func (p *LocalParty) StoreMessage(msg tss.ParsedMessage) (bool, *tss.Error) {
 	fromPIdx := msg.GetFrom().Index
 
 	// switch/case is necessary to store any messages beyond current round
-	// this does not handle message replays. we expect the caller to apply replay and spoofing protection.
+	// Identical redelivery is idempotent; content-different replacement from
+	// a peer is rejected so commit-reveal state cannot be silently overwritten.
+	isDup := fromPIdx != p.PartyID().Index
+	dupErr := func() (bool, *tss.Error) {
+		return false, p.WrapError(
+			fmt.Errorf("duplicate %T from party %d", msg.Content(), fromPIdx),
+			msg.GetFrom())
+	}
 	switch msg.Content().(type) {
 	case *SignRound1Message1:
+		if isDup && p.temp.signRound1Message1s[fromPIdx] != nil && !tss.IsSameMessage(p.temp.signRound1Message1s[fromPIdx], msg) {
+			return dupErr()
+		}
 		p.temp.signRound1Message1s[fromPIdx] = msg
 	case *SignRound1Message2:
+		if isDup && p.temp.signRound1Message2s[fromPIdx] != nil && !tss.IsSameMessage(p.temp.signRound1Message2s[fromPIdx], msg) {
+			return dupErr()
+		}
 		p.temp.signRound1Message2s[fromPIdx] = msg
 	case *SignRound2Message:
+		if isDup && p.temp.signRound2Messages[fromPIdx] != nil && !tss.IsSameMessage(p.temp.signRound2Messages[fromPIdx], msg) {
+			return dupErr()
+		}
 		p.temp.signRound2Messages[fromPIdx] = msg
 	case *SignRound3Message:
+		if isDup && p.temp.signRound3Messages[fromPIdx] != nil && !tss.IsSameMessage(p.temp.signRound3Messages[fromPIdx], msg) {
+			return dupErr()
+		}
 		p.temp.signRound3Messages[fromPIdx] = msg
 	case *SignRound4Message:
+		if isDup && p.temp.signRound4Messages[fromPIdx] != nil && !tss.IsSameMessage(p.temp.signRound4Messages[fromPIdx], msg) {
+			return dupErr()
+		}
 		p.temp.signRound4Messages[fromPIdx] = msg
 	case *SignRound5Message:
+		if isDup && p.temp.signRound5Messages[fromPIdx] != nil && !tss.IsSameMessage(p.temp.signRound5Messages[fromPIdx], msg) {
+			return dupErr()
+		}
 		p.temp.signRound5Messages[fromPIdx] = msg
 	case *SignRound6Message:
+		if isDup && p.temp.signRound6Messages[fromPIdx] != nil && !tss.IsSameMessage(p.temp.signRound6Messages[fromPIdx], msg) {
+			return dupErr()
+		}
 		p.temp.signRound6Messages[fromPIdx] = msg
 	case *SignRound7Message:
+		if isDup && p.temp.signRound7Messages[fromPIdx] != nil && !tss.IsSameMessage(p.temp.signRound7Messages[fromPIdx], msg) {
+			return dupErr()
+		}
 		p.temp.signRound7Messages[fromPIdx] = msg
 	case *SignRound8Message:
+		if isDup && p.temp.signRound8Messages[fromPIdx] != nil && !tss.IsSameMessage(p.temp.signRound8Messages[fromPIdx], msg) {
+			return dupErr()
+		}
 		p.temp.signRound8Messages[fromPIdx] = msg
 	case *SignRound9Message:
+		if isDup && p.temp.signRound9Messages[fromPIdx] != nil && !tss.IsSameMessage(p.temp.signRound9Messages[fromPIdx], msg) {
+			return dupErr()
+		}
 		p.temp.signRound9Messages[fromPIdx] = msg
 	default: // unrecognised message, just ignore!
 		common.Logger.Warningf("unrecognised message ignored: %v", msg)
