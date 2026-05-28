@@ -104,7 +104,17 @@ func (p *ECPoint) SetCurve(curve elliptic.Curve) *ECPoint {
 }
 
 func (p *ECPoint) ValidateBasic() bool {
-	return p != nil && p.coords[0] != nil && p.coords[1] != nil && p.IsOnCurve()
+	return p != nil && p.coords[0] != nil && p.coords[1] != nil && p.IsOnCurve() && !p.IsIdentity()
+}
+
+func (p *ECPoint) IsIdentity() bool {
+	if p == nil || p.coords[0] == nil || p.coords[1] == nil {
+		return false
+	}
+	if p.coords[0].Sign() != 0 {
+		return false
+	}
+	return p.coords[1].Sign() == 0 || p.coords[1].Cmp(big.NewInt(1)) == 0
 }
 
 func ScalarBaseMult(curve elliptic.Curve, k *big.Int) *ECPoint {

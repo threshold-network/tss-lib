@@ -12,6 +12,7 @@ import (
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
+	"github.com/bnb-chain/tss-lib/tss"
 )
 
 type (
@@ -25,6 +26,19 @@ type (
 		T, U  *big.Int
 	}
 )
+
+const (
+	fsDomainTagZK  = "tss-lib.threshold.schnorr.zk"
+	fsDomainTagZKV = "tss-lib.threshold.schnorr.zkv"
+)
+
+func fsSessionZK(session []byte) []byte {
+	return append([]byte(fsDomainTagZK+"|"), session...)
+}
+
+func fsSessionZKV(session []byte) []byte {
+	return append([]byte(fsDomainTagZKV+"|"), session...)
+}
 
 // NewZKProof constructs a new Schnorr ZK proof of knowledge of the discrete logarithm (GG18Spec Fig. 16)
 func NewZKProof(x *big.Int, X *crypto.ECPoint) (*ZKProof, error) {
@@ -45,8 +59,8 @@ func NewZKProofWithSession(session []byte, x *big.Int, X *crypto.ECPoint) (*ZKPr
 	a := common.GetRandomPositiveInt(q)
 	alpha := crypto.ScalarBaseMult(ec, a)
 
-	cHash := common.SHA512_256i_TAGGED(session, X.X(), X.Y(), g.X(), g.Y(), alpha.X(), alpha.Y())
-	c := common.RejectionSample(q, cHash)
+	cHash := common.SHA512_256i_TAGGED(fsSessionZK(session), X.X(), X.Y(), g.X(), g.Y(), alpha.X(), alpha.Y())
+	c := common.ModReduceHash(q, cHash)
 	t := new(big.Int).Mul(c, x)
 	t = common.ModInt(q).Add(a, t)
 
@@ -64,6 +78,9 @@ func (pf *ZKProof) VerifyWithSession(session []byte, X *crypto.ECPoint) bool {
 	if pf == nil || !pf.ValidateBasic() || X == nil || !X.ValidateBasic() {
 		return false
 	}
+	if !tss.SameCurve(X.Curve(), pf.Alpha.Curve()) {
+		return false
+	}
 	ec := X.Curve()
 	ecParams := ec.Params()
 	q := ecParams.N
@@ -72,8 +89,8 @@ func (pf *ZKProof) VerifyWithSession(session []byte, X *crypto.ECPoint) bool {
 	}
 	g := crypto.NewECPointNoCurveCheck(ec, ecParams.Gx, ecParams.Gy)
 
-	cHash := common.SHA512_256i_TAGGED(session, X.X(), X.Y(), g.X(), g.Y(), pf.Alpha.X(), pf.Alpha.Y())
-	c := common.RejectionSample(q, cHash)
+	cHash := common.SHA512_256i_TAGGED(fsSessionZK(session), X.X(), X.Y(), g.X(), g.Y(), pf.Alpha.X(), pf.Alpha.Y())
+	c := common.ModReduceHash(q, cHash)
 	if c.Sign() == 0 {
 		return false
 	}
@@ -115,8 +132,8 @@ func NewZKVProofWithSession(session []byte, V, R *crypto.ECPoint, s, l *big.Int)
 	bG := crypto.ScalarBaseMult(ec, b)
 	alpha, _ := aR.Add(bG) // already on the curve.
 
-	cHash := common.SHA512_256i_TAGGED(session, V.X(), V.Y(), R.X(), R.Y(), g.X(), g.Y(), alpha.X(), alpha.Y())
-	c := common.RejectionSample(q, cHash)
+	cHash := common.SHA512_256i_TAGGED(fsSessionZKV(session), V.X(), V.Y(), R.X(), R.Y(), g.X(), g.Y(), alpha.X(), alpha.Y())
+	c := common.ModReduceHash(q, cHash)
 
 	modQ := common.ModInt(q)
 	t := modQ.Add(a, new(big.Int).Mul(c, s))
@@ -136,6 +153,9 @@ func (pf *ZKVProof) VerifyWithSession(session []byte, V, R *crypto.ECPoint) bool
 		V == nil || R == nil || !V.ValidateBasic() || !R.ValidateBasic() {
 		return false
 	}
+	if !tss.SameCurve(V.Curve(), R.Curve()) || !tss.SameCurve(V.Curve(), pf.Alpha.Curve()) {
+		return false
+	}
 	ec := V.Curve()
 	ecParams := ec.Params()
 	q := ecParams.N
@@ -144,8 +164,8 @@ func (pf *ZKVProof) VerifyWithSession(session []byte, V, R *crypto.ECPoint) bool
 	}
 	g := crypto.NewECPointNoCurveCheck(ec, ecParams.Gx, ecParams.Gy)
 
-	cHash := common.SHA512_256i_TAGGED(session, V.X(), V.Y(), R.X(), R.Y(), g.X(), g.Y(), pf.Alpha.X(), pf.Alpha.Y())
-	c := common.RejectionSample(q, cHash)
+	cHash := common.SHA512_256i_TAGGED(fsSessionZKV(session), V.X(), V.Y(), R.X(), R.Y(), g.X(), g.Y(), pf.Alpha.X(), pf.Alpha.Y())
+	c := common.ModReduceHash(q, cHash)
 	if c.Sign() == 0 {
 		return false
 	}
@@ -155,7 +175,10 @@ func (pf *ZKVProof) VerifyWithSession(session []byte, V, R *crypto.ECPoint) bool
 	if tR == nil || uG == nil {
 		return false
 	}
-	tRuG, _ := tR.Add(uG) // already on the curve.
+	tRuG, err := tR.Add(uG)
+	if err != nil {
+		return false
+	}
 
 	Vc := V.ScalarMult(c)
 	if Vc == nil {

@@ -34,8 +34,16 @@ func LiterallyJustMod(q *big.Int, eHash *big.Int) *big.Int { // e' = eHash
 // ≥ k + 256 bits of entropy before reduction and bound bias at ≤ 2^-256
 // regardless of q. For applications requiring an unbiased uniform sample
 // over [0, q), implement true rejection sampling at the call site.
-func RejectionSample(q *big.Int, eHash *big.Int) *big.Int {
+func ModReduceHash(q *big.Int, eHash *big.Int) *big.Int {
 	return LiterallyJustMod(q, eHash)
+}
+
+// RejectionSample is kept for compatibility with older callers.
+//
+// Deprecated: use ModReduceHash. This function is modular reduction, not true
+// rejection sampling.
+func RejectionSample(q *big.Int, eHash *big.Int) *big.Int {
+	return ModReduceHash(q, eHash)
 }
 
 // Return a big.Int between 0 and N

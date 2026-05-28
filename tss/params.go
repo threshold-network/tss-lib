@@ -8,6 +8,7 @@ package tss
 
 import (
 	"crypto/elliptic"
+	"fmt"
 	"math/big"
 	"runtime"
 	"time"
@@ -37,6 +38,16 @@ const (
 
 // Exported, used in `tss` client
 func NewParameters(ec elliptic.Curve, ctx *PeerContext, partyID *PartyID, partyCount, threshold int) *Parameters {
+	if partyCount < 2 {
+		panic("tss: party count must be at least 2")
+	}
+	if threshold < 1 {
+		panic("tss: threshold must be at least 1")
+	}
+	if threshold >= partyCount {
+		panic("tss: threshold must be less than party count")
+	}
+	assertDistinctIDsModQ(ec, ctx)
 	return &Parameters{
 		ec:                  ec,
 		parties:             ctx,
@@ -45,6 +56,28 @@ func NewParameters(ec elliptic.Curve, ctx *PeerContext, partyID *PartyID, partyC
 		threshold:           threshold,
 		concurrency:         runtime.GOMAXPROCS(0),
 		safePrimeGenTimeout: defaultSafePrimeGenTimeout,
+	}
+}
+
+func assertDistinctIDsModQ(ec elliptic.Curve, ctx *PeerContext) {
+	if ec == nil || ctx == nil {
+		return
+	}
+	q := ec.Params().N
+	seen := make(map[string]*PartyID, len(ctx.IDs()))
+	for _, partyID := range ctx.IDs() {
+		if partyID == nil || partyID.Key == nil {
+			continue
+		}
+		residue := new(big.Int).Mod(partyID.KeyInt(), q)
+		if residue.Sign() == 0 {
+			panic(fmt.Errorf("tss: party %s has key congruent to 0 mod q", partyID))
+		}
+		key := residue.Text(16)
+		if previous, exists := seen[key]; exists {
+			panic(fmt.Errorf("tss: party keys for %s and %s collide mod q", previous, partyID))
+		}
+		seen[key] = partyID
 	}
 }
 

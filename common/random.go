@@ -36,13 +36,13 @@ func MustGetRandomInt(bits int) *big.Int {
 }
 
 func GetRandomPositiveInt(lessThan *big.Int) *big.Int {
-	if lessThan == nil || zero.Cmp(lessThan) != -1 {
+	if lessThan == nil || lessThan.Cmp(one) <= 0 {
 		return nil
 	}
 	var try *big.Int
 	for {
 		try = MustGetRandomInt(lessThan.BitLen())
-		if try.Cmp(lessThan) < 0 && try.Cmp(zero) >= 0 {
+		if try.Cmp(lessThan) < 0 && try.Sign() > 0 {
 			break
 		}
 	}

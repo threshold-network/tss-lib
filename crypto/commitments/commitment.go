@@ -53,9 +53,17 @@ func NewHashDeCommitmentFromBytes(marshalled [][]byte) HashDeCommitment {
 }
 
 func (cmt *HashCommitDecommit) Verify() bool {
+	if cmt == nil {
+		return false
+	}
 	C, D := cmt.C, cmt.D
 	if C == nil || D == nil {
 		return false
+	}
+	for _, part := range D {
+		if part == nil {
+			return false
+		}
 	}
 	hash := common.SHA512_256i(D...)
 	return hash.Cmp(C) == 0
