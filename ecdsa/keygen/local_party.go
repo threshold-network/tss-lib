@@ -140,7 +140,7 @@ func (p *LocalParty) StoreMessage(msg tss.ParsedMessage) (bool, *tss.Error) {
 	isDup := fromPIdx != p.PartyID().Index
 	dupErr := func() (bool, *tss.Error) {
 		return false, p.WrapError(
-			fmt.Errorf("duplicate %T from party %d", msg.Content(), fromPIdx),
+			fmt.Errorf("%w: %T from party %d", tss.ErrDuplicateMessage, msg.Content(), fromPIdx),
 			msg.GetFrom())
 	}
 	switch msg.Content().(type) {

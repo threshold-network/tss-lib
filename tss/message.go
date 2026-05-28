@@ -82,12 +82,15 @@ var (
 // NewMessageWrapper constructs a MessageWrapper from routing metadata and content
 func NewMessageWrapper(routing MessageRouting, content MessageContent) *MessageWrapper {
 	// marshal the content to the ProtoBuf Any type
-	any, _ := anypb.New(content)
-	if any != nil {
-		if bz, err := (proto.MarshalOptions{Deterministic: true}).Marshal(content); err == nil {
-			any.Value = bz
-		}
+	any, err := anypb.New(content)
+	if err != nil {
+		panic(fmt.Errorf("NewMessageWrapper: marshal content into Any: %w", err))
 	}
+	bz, err := (proto.MarshalOptions{Deterministic: true}).Marshal(content)
+	if err != nil {
+		panic(fmt.Errorf("NewMessageWrapper: deterministic marshal content: %w", err))
+	}
+	any.Value = bz
 	// convert given PartyIDs to the wire format
 	var to []*MessageWrapper_PartyID
 	if routing.To != nil {

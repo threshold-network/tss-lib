@@ -83,6 +83,9 @@ func (p *ECPoint) Curve() elliptic.Curve {
 	return p.curve
 }
 
+// SameCurve compares curve domain parameters, not implementation identity. It
+// intentionally accepts distinct elliptic.Curve implementations with identical
+// parameters; callers must still trust the curve implementation they pass in.
 func SameCurve(lhs, rhs elliptic.Curve) bool {
 	if lhs == nil || rhs == nil {
 		return false
