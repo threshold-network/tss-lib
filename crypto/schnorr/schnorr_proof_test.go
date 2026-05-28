@@ -7,6 +7,7 @@
 package schnorr_test
 
 import (
+	"crypto/elliptic"
 	"math/big"
 	"testing"
 
@@ -39,6 +40,17 @@ func TestSchnorrProofVerify(t *testing.T) {
 	res := proof.Verify(X)
 
 	assert.True(t, res, "verify result must be true")
+}
+
+func TestSchnorrProofVerifyAllowsUnregisteredCurve(t *testing.T) {
+	ec := elliptic.P256()
+	q := ec.Params().N
+	u := common.GetRandomPositiveInt(q)
+	X := crypto.ScalarBaseMult(ec, u)
+
+	proof, err := NewZKProof(u, X)
+	assert.NoError(t, err)
+	assert.True(t, proof.Verify(X), "ZK proof must verify on an unregistered curve")
 }
 
 func TestSchnorrProofVerifySessionBinding(t *testing.T) {
@@ -97,6 +109,22 @@ func TestSchnorrVProofVerify(t *testing.T) {
 	res := proof.Verify(V, R)
 
 	assert.True(t, res, "verify result must be true")
+}
+
+func TestSchnorrVProofVerifyAllowsUnregisteredCurve(t *testing.T) {
+	ec := elliptic.P256()
+	q := ec.Params().N
+	k := common.GetRandomPositiveInt(q)
+	s := common.GetRandomPositiveInt(q)
+	l := common.GetRandomPositiveInt(q)
+	R := crypto.ScalarBaseMult(ec, k)
+	Rs := R.ScalarMult(s)
+	lG := crypto.ScalarBaseMult(ec, l)
+	V, _ := Rs.Add(lG)
+
+	proof, err := NewZKVProof(V, R, s, l)
+	assert.NoError(t, err)
+	assert.True(t, proof.Verify(V, R), "ZKV proof must verify on an unregistered curve")
 }
 
 func TestSchnorrVProofVerifyRejectsZeroScalars(t *testing.T) {

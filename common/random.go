@@ -49,13 +49,30 @@ func GetRandomPositiveInt(lessThan *big.Int) *big.Int {
 	return try
 }
 
+func getRandomNonNegativeInt(lessThan *big.Int) *big.Int {
+	if lessThan == nil || lessThan.Sign() <= 0 {
+		return nil
+	}
+	var try *big.Int
+	for {
+		try = MustGetRandomInt(lessThan.BitLen())
+		if try.Cmp(lessThan) < 0 {
+			break
+		}
+	}
+	return try
+}
+
 // Sample an integer in range (-limit, limit)
 func GetRandomInt(limit *big.Int) *big.Int {
+	if limit == nil || limit.Sign() <= 0 {
+		return nil
+	}
 	limitMinus1 := new(big.Int).Sub(limit, big.NewInt(1))
 	limitDoubleMinus1 := new(big.Int).Add(limit, limitMinus1)
 	// get an integer in [0, 2*limit-1) and subtract limit-1
 	// to get an integer in [-limit+1, limit-1]
-	i := GetRandomPositiveInt(limitDoubleMinus1)
+	i := getRandomNonNegativeInt(limitDoubleMinus1)
 	i = i.Sub(i, limitMinus1)
 	return i
 }

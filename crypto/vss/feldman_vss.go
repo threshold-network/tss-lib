@@ -18,7 +18,6 @@ import (
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
-	"github.com/bnb-chain/tss-lib/tss"
 )
 
 type (
@@ -108,11 +107,11 @@ func (share *Share) Verify(ec elliptic.Curve, threshold int, vs Vs) bool {
 	var err error
 	modQ := common.ModInt(q)
 	v, t := vs[0], one // YRO : we need to have our accumulator outside of the loop
-	if v == nil || !tss.SameCurve(v.Curve(), ec) || !v.ValidateBasic() {
+	if v == nil || !crypto.SameCurve(v.Curve(), ec) || !v.ValidateBasic() {
 		return false
 	}
 	for j := 1; j <= threshold; j++ {
-		if vs[j] == nil || !tss.SameCurve(vs[j].Curve(), ec) || !vs[j].ValidateBasic() {
+		if vs[j] == nil || !crypto.SameCurve(vs[j].Curve(), ec) || !vs[j].ValidateBasic() {
 			return false
 		}
 		// t = k_i^j

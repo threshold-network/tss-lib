@@ -15,7 +15,6 @@ import (
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
 	"github.com/bnb-chain/tss-lib/crypto/paillier"
-	"github.com/bnb-chain/tss-lib/tss"
 )
 
 const (
@@ -300,10 +299,10 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 		if X == nil {
 			eHash = common.SHA512_256i_TAGGED(fsSessionBob(Session), append(pk.AsInts(), NTilde, h1, h2, c1, c2, pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)
 		} else {
-			if !X.ValidateBasic() || !tss.SameCurve(ec, X.Curve()) {
+			if !X.ValidateBasic() || !crypto.SameCurve(ec, X.Curve()) {
 				return false
 			}
-			if !pf.U.ValidateBasic() || !tss.SameCurve(ec, pf.U.Curve()) {
+			if !pf.U.ValidateBasic() || !crypto.SameCurve(ec, pf.U.Curve()) {
 				return false
 			}
 			eHash = common.SHA512_256i_TAGGED(fsSessionBobWC(Session), append(pk.AsInts(), NTilde, h1, h2, X.X(), X.Y(), c1, c2, pf.U.X(), pf.U.Y(), pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)

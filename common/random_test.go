@@ -37,6 +37,12 @@ func TestGetRandomPositiveIntRejectsNoPositiveRange(t *testing.T) {
 	assert.Nil(t, common.GetRandomPositiveInt(big.NewInt(1)))
 }
 
+func TestGetRandomIntPreservesZeroInclusiveRange(t *testing.T) {
+	assert.Nil(t, common.GetRandomInt(nil))
+	assert.Nil(t, common.GetRandomInt(big.NewInt(0)))
+	assert.Zero(t, common.GetRandomInt(big.NewInt(1)).Sign())
+}
+
 func TestGetRandomPositiveRelativelyPrimeInt(t *testing.T) {
 	rnd := common.MustGetRandomInt(randomIntBitLen)
 	rndPosRP := common.GetRandomPositiveRelativelyPrimeInt(rnd)

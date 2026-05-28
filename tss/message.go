@@ -83,6 +83,11 @@ var (
 func NewMessageWrapper(routing MessageRouting, content MessageContent) *MessageWrapper {
 	// marshal the content to the ProtoBuf Any type
 	any, _ := anypb.New(content)
+	if any != nil {
+		if bz, err := (proto.MarshalOptions{Deterministic: true}).Marshal(content); err == nil {
+			any.Value = bz
+		}
+	}
 	// convert given PartyIDs to the wire format
 	var to []*MessageWrapper_PartyID
 	if routing.To != nil {
@@ -138,7 +143,7 @@ func (mm *MessageImpl) IsToOldAndNewCommittees() bool {
 }
 
 func (mm *MessageImpl) WireBytes() ([]byte, *MessageRouting, error) {
-	bz, err := proto.Marshal(mm.wire.Message)
+	bz, err := proto.MarshalOptions{Deterministic: true}.Marshal(mm.wire.Message)
 	if err != nil {
 		return nil, nil, err
 	}
