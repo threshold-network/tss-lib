@@ -41,6 +41,9 @@ func (round *round4) Start() *tss.Error {
 
 	// compute the multiplicative inverse thelta mod q
 	thetaInverse = modN.ModInverse(thetaInverse)
+	if thetaInverse == nil {
+		return round.WrapError(errors.New("theta inverse is nil"))
+	}
 	i := round.PartyID().Index
 	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 	piGamma, err := schnorr.NewZKProofWithSession(contextI, round.temp.gamma, round.temp.pointGamma)

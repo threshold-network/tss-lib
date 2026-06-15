@@ -55,13 +55,22 @@ func (p *ECPoint) Y() *big.Int {
 }
 
 func (p *ECPoint) Add(p1 *ECPoint) (*ECPoint, error) {
+	if p == nil || p1 == nil {
+		return nil, errors.New("Add: point is nil")
+	}
 	x, y := p.curve.Add(p.X(), p.Y(), p1.X(), p1.Y())
 	return NewECPoint(p.curve, x, y)
 }
 
+// ScalarMult returns p * k. If the input is nil, k is nil, or the curve
+// operation returns the identity/off-curve coordinates, ScalarMult returns nil
+// instead of panicking. Callers must check the returned pointer before use.
 func (p *ECPoint) ScalarMult(k *big.Int) *ECPoint {
+	if p == nil || k == nil {
+		return nil
+	}
 	x, y := p.curve.ScalarMult(p.X(), p.Y(), k.Bytes())
-	newP, _ := NewECPoint(p.curve, x, y) // it must be on the curve, no need to check.
+	newP, _ := NewECPoint(p.curve, x, y)
 	return newP
 }
 
@@ -89,6 +98,9 @@ func (p *ECPoint) Equals(p2 *ECPoint) bool {
 }
 
 func (p *ECPoint) SetCurve(curve elliptic.Curve) *ECPoint {
+	if p == nil {
+		return nil
+	}
 	p.curve = curve
 	return p
 }
@@ -98,17 +110,24 @@ func (p *ECPoint) ValidateBasic() bool {
 }
 
 func (p *ECPoint) EightInvEight() *ECPoint {
-	return p.ScalarMult(eight).ScalarMult(eightInv)
+	q := p.ScalarMult(eight)
+	if q == nil {
+		return nil
+	}
+	return q.ScalarMult(eightInv)
 }
 
 func ScalarBaseMult(curve elliptic.Curve, k *big.Int) *ECPoint {
+	if curve == nil || k == nil {
+		return nil
+	}
 	x, y := curve.ScalarBaseMult(k.Bytes())
-	p, _ := NewECPoint(curve, x, y) // it must be on the curve, no need to check.
+	p, _ := NewECPoint(curve, x, y)
 	return p
 }
 
 func isOnCurve(c elliptic.Curve, x, y *big.Int) bool {
-	if x == nil || y == nil {
+	if c == nil || x == nil || y == nil {
 		return false
 	}
 	P := c.Params().P

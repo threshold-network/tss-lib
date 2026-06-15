@@ -104,7 +104,9 @@ func RangeProofAliceFromBytes(bzs [][]byte) (*RangeProofAlice, error) {
 
 func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c *big.Int, session ...[]byte) bool {
 	Session := optionalProofSession(session)
-	if pf == nil || !pf.ValidateBasic() || pk == nil || NTilde == nil || h1 == nil || h2 == nil || c == nil {
+	if pf == nil || !pf.ValidateBasic() || ec == nil ||
+		pk == nil || pk.N == nil ||
+		NTilde == nil || h1 == nil || h2 == nil || c == nil {
 		return false
 	}
 	if new(big.Int).GCD(nil, nil, c, pk.N).Cmp(one) != 0 {
@@ -114,6 +116,8 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 	q := ec.Params().N
 	q3 := new(big.Int).Mul(q, q)
 	q3 = new(big.Int).Mul(q, q3)
+	// Honest S2 = e*rho + gamma with e < q, rho < q*NTilde,
+	// gamma < q^3*NTilde, hence S2 < 2*q^3*NTilde.
 	q3NTilde := new(big.Int).Mul(q3, NTilde)
 	maxS2 := new(big.Int).Lsh(q3NTilde, 1)
 
@@ -164,7 +168,7 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 	if pf.S1.Cmp(q3) == 1 {
 		return false
 	}
-	if pf.S2.Cmp(maxS2) > 0 {
+	if pf.S2.Cmp(maxS2) >= 0 {
 		return false
 	}
 

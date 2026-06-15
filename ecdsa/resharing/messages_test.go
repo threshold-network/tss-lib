@@ -96,6 +96,23 @@ func TestDGRound2Message1ValidateBasicRequiresExactModulusWidth(t *testing.T) {
 	if msg.ValidateBasic() {
 		t.Fatal("expected over-2048-bit NTilde modulus to fail validation")
 	}
+
+	// 2^(paillierBitsLen-1) - 1 has BitLen == paillierBitsLen - 1 (2047), which
+	// is the just-below boundary that a `<= paillierBitsLen` mutation of
+	// hasBitLen would silently let through.
+	belowByOne := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), paillierBitsLen-1), big.NewInt(1)).Bytes()
+
+	msg = validDGRound2Message1ForValidation()
+	msg.PaillierN = belowByOne
+	if msg.ValidateBasic() {
+		t.Fatal("expected 2047-bit Paillier modulus to fail validation")
+	}
+
+	msg = validDGRound2Message1ForValidation()
+	msg.NTilde = belowByOne
+	if msg.ValidateBasic() {
+		t.Fatal("expected 2047-bit NTilde modulus to fail validation")
+	}
 }
 
 func validDGRound2Message1ForValidation() *DGRound2Message1 {

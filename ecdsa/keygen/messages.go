@@ -82,12 +82,18 @@ func (m *KGRound1Message) ValidateBasic() bool {
 		common.NonEmptyBytes(m.GetCommitment()) &&
 		common.NonEmptyBytes(m.GetPaillierN()) &&
 		common.NonEmptyBytes(m.GetNTilde()) &&
+		hasBitLen(m.GetPaillierN(), paillierBitsLen) &&
+		hasBitLen(m.GetNTilde(), paillierBitsLen) &&
 		common.NonEmptyBytes(m.GetH1()) &&
 		common.NonEmptyBytes(m.GetH2()) &&
 		m.GetDlnproof_1().ValidateBasic() &&
 		m.GetDlnproof_2().ValidateBasic() &&
 		m.GetModproof().ValidateBasic() &&
 		m.GetModproofTilde().ValidateBasic()
+}
+
+func hasBitLen(value []byte, bits int) bool {
+	return new(big.Int).SetBytes(value).BitLen() == bits
 }
 
 func (m *KGRound1Message) UnmarshalCommitment() *big.Int {
