@@ -8,9 +8,11 @@ package signing
 
 import (
 	"crypto/ecdsa"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -56,11 +58,17 @@ func TestE2EConcurrent(t *testing.T) {
 
 	updater := test.SharedPartyUpdater
 
+	msgData, err := hex.DecodeString("00f163ee51bcaeff9cdff5e0e3c1a646abd19885fffbab0b3b4236e0cf95c9f5")
+	assert.NoError(t, err)
+	msgInt := new(big.Int).SetBytes(msgData)
+
 	// init the parties
+	ceremonyNonce := big.NewInt(1)
 	for i := 0; i < len(signPIDs); i++ {
 		params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[i], len(signPIDs), threshold)
+		params.SetSessionNonce(ceremonyNonce)
 
-		P := NewLocalParty(big.NewInt(42), params, keys[i], outCh, endCh).(*LocalParty)
+		P := NewLocalParty(msgInt, params, keys[i], outCh, endCh, len(msgData)).(*LocalParty)
 		parties = append(parties, P)
 		go func(P *LocalParty) {
 			if err := P.Start(); err != nil {
@@ -120,8 +128,9 @@ signing:
 					X:     pkX,
 					Y:     pkY,
 				}
-				ok := ecdsa.Verify(&pk, big.NewInt(42).Bytes(), R.X(), sumS)
+				ok := ecdsa.Verify(&pk, msgData, R.X(), sumS)
 				assert.True(t, ok, "ecdsa verify must pass")
+				assert.Equal(t, msgData, parties[0].data.M)
 				t.Log("ECDSA signing test done.")
 				// END ECDSA verify
 
@@ -166,10 +175,12 @@ func TestE2EWithHDKeyDerivation(t *testing.T) {
 	updater := test.SharedPartyUpdater
 
 	// init the parties
+	ceremonyNonce := big.NewInt(2)
 	for i := 0; i < len(signPIDs); i++ {
 		params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[i], len(signPIDs), threshold)
+		params.SetSessionNonce(ceremonyNonce)
 
-		P := NewLocalPartyWithKDD(big.NewInt(42), params, keys[i], keyDerivationDelta, outCh, endCh).(*LocalParty)
+		P := NewLocalPartyWithKDD(big.NewInt(42), params, keys[i], keyDerivationDelta, outCh, endCh, 32).(*LocalParty)
 		parties = append(parties, P)
 		go func(P *LocalParty) {
 			if err := P.Start(); err != nil {
@@ -237,6 +248,121 @@ signing:
 			}
 		}
 	}
+}
+
+// TestSigning_Start_RequiresSessionNonce pins that signing fails closed
+// when no SessionNonce is set. Previously the round-1 code fell back to
+// SHA512_256(messageBytes), making two concurrent ceremonies on the same
+// canonical message reuse the same SSID and enabling Fiat-Shamir
+// transcript splicing across runs. The fix removes the fallback and
+// requires the caller to provide a per-ceremony nonce.
+func TestSigning_Start_RequiresSessionNonce(t *testing.T) {
+	setUp("info")
+	keys, signPIDs, err := keygen.LoadKeygenTestFixturesRandomSet(testThreshold+1, testParticipants)
+	assert.NoError(t, err, "should load keygen fixtures")
+
+	p2pCtx := tss.NewPeerContext(signPIDs)
+	outCh := make(chan tss.Message, len(signPIDs))
+	endCh := make(chan common.SignatureData, len(signPIDs))
+
+	params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[0], len(signPIDs), testThreshold)
+	// Deliberately do NOT call params.SetSessionNonce — Start must fail closed.
+
+	P := NewLocalParty(big.NewInt(42), params, keys[0], outCh, endCh, 32).(*LocalParty)
+	tssErr := P.Start()
+	if tssErr == nil {
+		t.Fatal("Start must return an error without SessionNonce")
+	}
+	if !strings.Contains(tssErr.Error(), "SetSessionNonce") {
+		t.Fatalf("error must reference SetSessionNonce, got: %v", tssErr)
+	}
+}
+
+// TestNewLocalPartyWithKDD_FullBytesLen_NonPositive pins constructor-side
+// validation for fullBytesLen. Previously, a negative fullBytesLen passed
+// through to the round-1 code path, where `make([]byte, fullBytesLen)`
+// panicked inside a protocol goroutine, bypassing tss.Error reporting and
+// crossing goroutine boundaries. The constructor now panics synchronously
+// at the caller's call site with a clear message.
+func TestNewLocalPartyWithKDD_FullBytesLen_NonPositive(t *testing.T) {
+	msg := big.NewInt(1)
+	for _, length := range []int{-1, 0} {
+		func() {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("expected panic for fullBytesLen=%d", length)
+				}
+				err, ok := r.(error)
+				if !ok {
+					t.Fatalf("panic value must be an error, got %T: %v", r, r)
+				}
+				if !strings.Contains(err.Error(), "fullBytesLen must be positive") {
+					t.Fatalf("unexpected panic message: %v", err)
+				}
+			}()
+			_ = NewLocalPartyWithKDD(msg, nil, keygen.LocalPartySaveData{}, nil, nil, nil, length)
+		}()
+	}
+}
+
+// TestNewLocalPartyWithKDD_FullBytesLen_TooSmall pins that a fullBytesLen
+// smaller than the message's byte width is rejected at the constructor
+// rather than later inside (*big.Int).FillBytes (which would panic with
+// "big.Int.FillBytes: insufficient length" inside a protocol goroutine).
+func TestNewLocalPartyWithKDD_FullBytesLen_TooSmall(t *testing.T) {
+	// 16-bit msg needs at least 2 bytes; pass fullBytesLen=1 to trigger.
+	msg := big.NewInt(0xABCD)
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for fullBytesLen smaller than msg byte width")
+		}
+		err, ok := r.(error)
+		if !ok {
+			t.Fatalf("panic value must be an error, got %T: %v", r, r)
+		}
+		if !strings.Contains(err.Error(), "fullBytesLen=1 is too small") {
+			t.Fatalf("unexpected panic message: %v", err)
+		}
+	}()
+	_ = NewLocalPartyWithKDD(msg, nil, keygen.LocalPartySaveData{}, nil, nil, nil, 1)
+}
+
+func TestNewLocalPartyWithKDD_FullBytesLen_Required(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic when fullBytesLen is omitted")
+		}
+		err, ok := r.(error)
+		if !ok {
+			t.Fatalf("panic value must be an error, got %T: %v", r, r)
+		}
+		if !strings.Contains(err.Error(), "fullBytesLen is required") {
+			t.Fatalf("unexpected panic message: %v", err)
+		}
+	}()
+	_ = NewLocalPartyWithKDD(big.NewInt(42), nil, keygen.LocalPartySaveData{}, nil, nil, nil)
+}
+
+func TestNewLocalPartyWithKDD_FullBytesLen_TooWide(t *testing.T) {
+	pIDs := tss.GenerateTestPartyIDs(1)
+	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], 1, 0)
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for fullBytesLen wider than the curve order")
+		}
+		err, ok := r.(error)
+		if !ok {
+			t.Fatalf("panic value must be an error, got %T: %v", r, r)
+		}
+		if !strings.Contains(err.Error(), "exceeds curve order byte length") {
+			t.Fatalf("unexpected panic message: %v", err)
+		}
+	}()
+	_ = NewLocalPartyWithKDD(big.NewInt(1), params, keygen.LocalPartySaveData{}, nil, nil, nil, 33)
 }
 
 func TestFillTo32BytesInPlace(t *testing.T) {

@@ -38,6 +38,35 @@ func BenchmarkDlnProof_Verify(b *testing.B) {
 	}
 }
 
+func TestDLNProofSessionBinding(t *testing.T) {
+	localPartySaveData, _, err := LoadKeygenTestFixtures(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	params := localPartySaveData[0].LocalPreParams
+	session := []byte("dln-session-a")
+	proof := dlnproof.NewDLNProof(
+		params.H1i,
+		params.H2i,
+		params.Alpha,
+		params.P,
+		params.Q,
+		params.NTildei,
+		session,
+	)
+
+	if !proof.Verify(params.H1i, params.H2i, params.NTildei, session) {
+		t.Fatal("expected positive verification with the original session")
+	}
+	if proof.Verify(params.H1i, params.H2i, params.NTildei, []byte("dln-session-b")) {
+		t.Fatal("expected negative verification with a different session")
+	}
+	if proof.Verify(params.H1i, params.H2i, params.NTildei) {
+		t.Fatal("expected negative verification without the proof session")
+	}
+}
+
 func BenchmarkDlnVerifier_VerifyProof1(b *testing.B) {
 	preParams, alpha, tt := prepareProofB(b)
 	message := &KGRound1Message{

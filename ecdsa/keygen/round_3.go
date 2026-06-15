@@ -65,6 +65,7 @@ func (round *round3) Start() *tss.Error {
 		if j == PIdx {
 			continue
 		}
+		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		// 6-8.
 		go func(j int, ch chan<- vssOut) {
 			// 4-9.
@@ -96,21 +97,25 @@ func (round *round3) Start() *tss.Error {
 			pkN := round.save.PaillierPKs[j].N
 			NTilde := round.save.LocalPreParams.NTildei
 			H1i, H2i := round.save.LocalPreParams.H1i, round.save.LocalPreParams.H2i
-			ok, err = FacProof.FactorVerify(pkN, NTilde, H1i, H2i)
+			ok, err = FacProof.FactorVerify(pkN, NTilde, H1i, H2i, contextJ)
 			if err != nil {
 				ch <- vssOut{err, nil}
+				return
 			}
 			if !ok {
 				ch <- vssOut{errors.New("factor proof verify failed"), nil}
+				return
 			}
 			FacProofTilde := r2msg1.UnmarshalFactorProofTilde()
 			NTildej := round.save.NTildej[j]
-			ok, err = FacProofTilde.FactorVerify(NTildej, NTilde, H1i, H2i)
+			ok, err = FacProofTilde.FactorVerify(NTildej, NTilde, H1i, H2i, contextJ)
 			if err != nil {
 				ch <- vssOut{err, nil}
+				return
 			}
 			if !ok {
 				ch <- vssOut{errors.New("factor proof verify failed"), nil}
+				return
 			}
 			// (9) handled above
 			ch <- vssOut{nil, PjVs}
@@ -216,17 +221,19 @@ func (round *round3) CanAccept(msg tss.ParsedMessage) bool {
 }
 
 func (round *round3) Update() (bool, *tss.Error) {
+	ret := true
 	for j, msg := range round.temp.kgRound3Messages {
 		if round.ok[j] {
 			continue
 		}
 		if msg == nil || !round.CanAccept(msg) {
-			return false, nil
+			ret = false
+			continue
 		}
 		// proof check is in round 4
 		round.ok[j] = true
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round3) NextRound() tss.Round {

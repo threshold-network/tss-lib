@@ -12,6 +12,7 @@ import (
 
 	errorspkg "github.com/pkg/errors"
 
+	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto/mta"
 	"github.com/bnb-chain/tss-lib/tss"
 )
@@ -30,6 +31,7 @@ func (round *round2) Start() *tss.Error {
 	errChs := make(chan *tss.Error, (len(round.Parties().IDs())-1)*2)
 	wg := sync.WaitGroup{}
 	wg.Add((len(round.Parties().IDs()) - 1) * 2)
+	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 	for j, Pj := range round.Parties().IDs() {
 		if j == i {
 			continue
@@ -54,7 +56,8 @@ func (round *round2) Start() *tss.Error {
 				round.key.H2j[j],
 				round.key.NTildej[i],
 				round.key.H1j[i],
-				round.key.H2j[i])
+				round.key.H2j[i],
+				contextI)
 			// should be thread safe as these are pre-allocated
 			round.temp.betas[j] = beta
 			round.temp.c1jis[j] = c1ji
@@ -84,7 +87,8 @@ func (round *round2) Start() *tss.Error {
 				round.key.NTildej[i],
 				round.key.H1j[i],
 				round.key.H2j[i],
-				round.temp.bigWs[i])
+				round.temp.bigWs[i],
+				contextI)
 			round.temp.vs[j] = v
 			round.temp.c2jis[j] = c2ji
 			round.temp.pi2jis[j] = pi2ji
@@ -116,16 +120,18 @@ func (round *round2) Start() *tss.Error {
 }
 
 func (round *round2) Update() (bool, *tss.Error) {
+	ret := true
 	for j, msg := range round.temp.signRound2Messages {
 		if round.ok[j] {
 			continue
 		}
 		if msg == nil || !round.CanAccept(msg) {
-			return false, nil
+			ret = false
+			continue
 		}
 		round.ok[j] = true
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round2) CanAccept(msg tss.ParsedMessage) bool {

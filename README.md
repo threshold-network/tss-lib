@@ -89,7 +89,8 @@ Use the `signing.LocalParty` for signing and provide it with a `message` to sign
 Please note that `t+1` signers are required to sign a message and for optimal usage no more than this should be involved. Each signer should have the same view of who the `t+1` signers are.
 
 ```go
-party := signing.NewLocalParty(message, params, ourKeyData, outCh, endCh)
+fullBytesLen := (params.EC().Params().N.BitLen() + 7) / 8
+party := signing.NewLocalParty(message, params, ourKeyData, outCh, endCh, fullBytesLen)
 go func() {
     err := party.Start()
     // handle err ...
@@ -146,6 +147,15 @@ When you build a transport, it should offer a broadcast channel as well as point
 
 Within your transport, each message should be wrapped with a **session ID** that is unique to a single run of the keygen, signing or re-sharing rounds. This session ID should be agreed upon out-of-band and known only by the participating parties before the rounds begin. Upon receiving any message, your program should make sure that the received session ID matches the one that was agreed upon at the start.
 
+The same session ID should be bound into the protocol parameters before constructing local parties:
+
+```go
+params := tss.NewParameters(curve, ctx, thisParty, len(parties), threshold)
+params.SetSessionNonceBytes([]byte(sessionID))
+```
+
+All parties in the run must use the same high-entropy session ID of at least 16 bytes, and it must be unique to the ceremony. Keygen, signing, and ECDSA re-sharing fail closed if no session nonce is set; reusing a session ID across otherwise identical ceremonies reintroduces transcript-splicing risk.
+
 Additionally, there should be a mechanism in your transport to allow for "reliable broadcasts", meaning parties can broadcast a message to other parties such that it's guaranteed that each one receives the same message. There are several examples of algorithms online that do this by sharing and comparing hashes of received messages.
 
 Timeouts and errors should be handled by your application. The method `WaitingFor` may be called on a `Party` to get the set of other parties that it is still waiting for messages from. You may also get the set of culprit parties that caused an error from a `*tss.Error`.
@@ -155,4 +165,3 @@ A full review of this library was carried out by Kudelski Security and their fin
 
 ## References
 \[1\] https://eprint.iacr.org/2019/114.pdf
-

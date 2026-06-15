@@ -60,3 +60,18 @@ func TestLiterallyJustMod(t *testing.T) {
 		})
 	}
 }
+
+func TestRejectionSampleReducesModuloQ(t *testing.T) {
+	q := big.NewInt(101)
+	eHash := big.NewInt(12345)
+
+	got := common.RejectionSample(q, new(big.Int).Set(eHash))
+	want := new(big.Int).Mod(eHash, q)
+
+	if got.Cmp(want) != 0 {
+		t.Fatalf("RejectionSample() = %v, want %v", got, want)
+	}
+	if got.Sign() < 0 || got.Cmp(q) >= 0 {
+		t.Fatal("RejectionSample must return a value in [0, q)")
+	}
+}

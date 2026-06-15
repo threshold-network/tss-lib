@@ -7,8 +7,10 @@
 package resharing
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"math/big"
 
 	"github.com/bnb-chain/tss-lib/crypto"
 	"github.com/bnb-chain/tss-lib/crypto/commitments"
@@ -32,6 +34,24 @@ func (round *round1) Start() *tss.Error {
 	round.started = true
 	round.resetOK() // resets both round.oldOK and round.newOK
 	round.allNewOK()
+
+	// Derive SSID for both committees so the old committee can broadcast it
+	// in DGRound1Message and the new committee can cross-check that every
+	// old-committee party agrees. Both committees can derive locally from
+	// public inputs (party IDs, curve, round number, ssidNonce); broadcasting
+	// adds early detection of a corrupted old-committee party who would
+	// otherwise emit divergent SSIDs across new-committee members.
+	//
+	// Resharing fails closed if no SessionNonce is set. The previous zero
+	// fallback neutralised the SSID binding for any caller that forgot
+	// SetSessionNonce — two resharing ceremonies over identical committees
+	// would derive the same SSID, breaking session binding.
+	nonce := round.Params().SessionNonce()
+	if nonce == nil || nonce.Sign() <= 0 {
+		return round.WrapError(errors.New("resharing requires tss.Parameters.SetSessionNonce(<unique positive per-ceremony nonce>) before Start"))
+	}
+	round.temp.ssidNonce = new(big.Int).Set(nonce)
+	round.temp.ssid = round.getSSID()
 
 	if !round.ReSharingParams().IsOldCommittee() {
 		return nil
@@ -66,10 +86,11 @@ func (round *round1) Start() *tss.Error {
 	round.temp.VD = vCmt.D
 	round.temp.NewShares = shares
 
-	// 5. "broadcast" C_i to members of the NEW committee
+	// 5. "broadcast" C_i to members of the NEW committee, including this
+	// party's locally-derived SSID so the new committee can cross-verify.
 	r1msg := NewDGRound1Message(
 		round.NewParties().IDs().Exclude(round.PartyID()), round.PartyID(),
-		round.input.ECDSAPub, vCmt.C)
+		round.input.ECDSAPub, vCmt.C, round.temp.ssid)
 	round.temp.dgRound1Messages[i] = r1msg
 	round.out <- r1msg
 
@@ -89,19 +110,30 @@ func (round *round1) Update() (bool, *tss.Error) {
 	if !round.ReSharingParameters.IsNewCommittee() {
 		return true, nil
 	}
+	ret := true
 	// accept messages from old -> new committee
 	for j, msg := range round.temp.dgRound1Messages {
 		if round.oldOK[j] {
 			continue
 		}
 		if msg == nil || !round.CanAccept(msg) {
-			return false, nil
+			ret = false
+			continue
 		}
-		round.oldOK[j] = true
+		// Verify the sender's broadcast SSID matches our locally-derived SSID
+		// before consuming any field of the message. A mismatch means either
+		// (a) this old-committee party is corrupted and broadcasting an
+		// inconsistent SSID across new-committee members, or (b) the parties
+		// disagree on the protocol context (party IDs, curve, session
+		// nonce). Either way the protocol must abort and identify the
+		// culprit before downstream proof verification could mask the cause.
+		senderMsg := round.temp.dgRound1Messages[j].Content().(*DGRound1Message)
+		if !bytes.Equal(senderMsg.GetSsid(), round.temp.ssid) {
+			return false, round.WrapError(errors.New("DGRound1Message ssid does not match locally-derived ssid — old-committee party broadcast inconsistent SSID"), msg.GetFrom())
+		}
 
 		// save the ecdsa pub received from the old committee
-		r1msg := round.temp.dgRound1Messages[0].Content().(*DGRound1Message)
-		candidate, err := r1msg.UnmarshalECDSAPub(round.Params().EC())
+		candidate, err := senderMsg.UnmarshalECDSAPub(round.Params().EC())
 		if err != nil {
 			return false, round.WrapError(errors.New("unable to unmarshal the ecdsa pub key"), msg.GetFrom())
 		}
@@ -111,8 +143,9 @@ func (round *round1) Update() (bool, *tss.Error) {
 			return false, round.WrapError(errors.New("ecdsa pub key did not match what we received previously"), msg.GetFrom())
 		}
 		round.save.ECDSAPub = candidate
+		round.oldOK[j] = true
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round1) NextRound() tss.Round {

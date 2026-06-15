@@ -49,6 +49,7 @@ func (round *round5) Start() *tss.Error {
 		if common.Eq(Pi.KeyInt(), Pj.KeyInt()) {
 			continue
 		}
+		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		go func(j int, ch chan<- proofOut) {
 			r4msg1 := round.temp.dgRound4Message1s[j].Content().(*DGRound4Message1)
 
@@ -59,21 +60,25 @@ func (round *round5) Start() *tss.Error {
 			pkN := pk.N
 			NTilde := round.save.LocalPreParams.NTildei
 			H1i, H2i := round.save.LocalPreParams.H1i, round.save.LocalPreParams.H2i
-			ok, err := FacProof.FactorVerify(pkN, NTilde, H1i, H2i)
+			ok, err := FacProof.FactorVerify(pkN, NTilde, H1i, H2i, contextJ)
 			if err != nil {
 				ch <- proofOut{err}
+				return
 			}
 			if !ok {
 				ch <- proofOut{errors.New("factor proof verify failed")}
+				return
 			}
 			FacProofTilde := r4msg1.UnmarshalFactorProofTilde()
 			NTildej := round.save.NTildej[j]
-			ok, err = FacProofTilde.FactorVerify(NTildej, NTilde, H1i, H2i)
+			ok, err = FacProofTilde.FactorVerify(NTildej, NTilde, H1i, H2i, contextJ)
 			if err != nil {
 				ch <- proofOut{err}
+				return
 			}
 			if !ok {
 				ch <- proofOut{errors.New("factor proof verify failed")}
+				return
 			}
 			// (9) handled above
 			ch <- proofOut{nil}
@@ -119,6 +124,7 @@ func (round *round5) CanAccept(msg tss.ParsedMessage) bool {
 }
 
 func (round *round5) Update() (bool, *tss.Error) {
+	ret := true
 	if round.ReSharingParameters.IsNewCommittee() || round.ReSharingParams().IsOldCommittee() {
 		// accept messages from new -> everyone
 		for j, msg := range round.temp.dgRound5Messages {
@@ -126,14 +132,15 @@ func (round *round5) Update() (bool, *tss.Error) {
 				continue
 			}
 			if msg == nil || !round.CanAccept(msg) {
-				return false, nil
+				ret = false
+				continue
 			}
 			round.newOK[j] = true
 		}
 	} else {
 		return false, round.WrapError(errors.New("this party is not in the old or the new committee"), round.PartyID())
 	}
-	return true, nil
+	return ret, nil
 }
 
 func (round *round5) NextRound() tss.Round {

@@ -7,7 +7,10 @@
 package signing
 
 import (
+	"math/big"
+
 	"github.com/bnb-chain/tss-lib/common"
+	"github.com/bnb-chain/tss-lib/crypto"
 	"github.com/bnb-chain/tss-lib/ecdsa/keygen"
 	"github.com/bnb-chain/tss-lib/tss"
 )
@@ -120,4 +123,26 @@ func (round *base) resetOK() {
 	for j := range round.ok {
 		round.ok[j] = false
 	}
+}
+
+func (round *base) getSSID() ([]byte, error) {
+	ssidList := []*big.Int{
+		round.EC().Params().P,
+		round.EC().Params().N,
+		round.EC().Params().B,
+		round.EC().Params().Gx,
+		round.EC().Params().Gy,
+	}
+	ssidList = append(ssidList, round.Parties().IDs().Keys()...)
+	bigXjList, err := crypto.FlattenECPoints(round.key.BigXj)
+	if err != nil {
+		return nil, err
+	}
+	ssidList = append(ssidList, bigXjList...)
+	ssidList = append(ssidList, round.key.NTildej...)
+	ssidList = append(ssidList, round.key.H1j...)
+	ssidList = append(ssidList, round.key.H2j...)
+	ssidList = append(ssidList, big.NewInt(int64(round.number)))
+	ssidList = append(ssidList, round.temp.ssidNonce)
+	return common.SHA512_256i(ssidList...).FillBytes(make([]byte, 32)), nil
 }

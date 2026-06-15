@@ -111,6 +111,10 @@ func isOnCurve(c elliptic.Curve, x, y *big.Int) bool {
 	if x == nil || y == nil {
 		return false
 	}
+	P := c.Params().P
+	if x.Sign() < 0 || x.Cmp(P) >= 0 || y.Sign() < 0 || y.Cmp(P) >= 0 {
+		return false
+	}
 	return c.IsOnCurve(x, y)
 }
 

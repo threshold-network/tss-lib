@@ -53,6 +53,8 @@ type (
 		shares        vss.Shares
 		deCommitPolyG cmt.HashDeCommitment
 		skTilde       *paillier.PrivateKey
+		ssid          []byte
+		ssidNonce     *big.Int
 	}
 )
 

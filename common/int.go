@@ -7,6 +7,7 @@
 package common
 
 import (
+	"encoding/binary"
 	"math/big"
 )
 
@@ -98,6 +99,24 @@ func (mi *modInt) ModInverse(g *big.Int) *big.Int {
 
 func (mi *modInt) i() *big.Int {
 	return (*big.Int)(mi)
+}
+
+func IsInInterval(b *big.Int, bound *big.Int) bool {
+	return b != nil && bound != nil && b.Cmp(bound) < 0 && b.Cmp(zero) >= 0
+}
+
+func AppendBigIntToBytesSlice(commonBytes []byte, appended *big.Int) []byte {
+	resultBytes := make([]byte, len(commonBytes), len(commonBytes)+len(appended.Bytes()))
+	copy(resultBytes, commonBytes)
+	return append(resultBytes, appended.Bytes()...)
+}
+
+func AppendUint64ToBytesSlice(commonBytes []byte, appended uint64) []byte {
+	resultBytes := make([]byte, len(commonBytes), len(commonBytes)+8)
+	copy(resultBytes, commonBytes)
+	idxBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(idxBytes, appended)
+	return append(resultBytes, idxBytes...)
 }
 
 // Marshal the given bigint into bytes.

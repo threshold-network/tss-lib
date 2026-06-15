@@ -31,7 +31,8 @@ var (
 	one = big.NewInt(1)
 )
 
-func NewDLNProof(h1, h2, x, p, q, N *big.Int) *Proof {
+func NewDLNProof(h1, h2, x, p, q, N *big.Int, session ...[]byte) *Proof {
+	Session := optionalSession(session)
 	pMulQ := new(big.Int).Mul(p, q)
 	modN, modPQ := common.ModInt(N), common.ModInt(pMulQ)
 	a := make([]*big.Int, Iterations)
@@ -41,7 +42,7 @@ func NewDLNProof(h1, h2, x, p, q, N *big.Int) *Proof {
 		alpha[i] = modN.Exp(h1, a[i])
 	}
 	msg := append([]*big.Int{h1, h2, N}, alpha[:]...)
-	c := common.SHA512_256i(msg...)
+	c := common.SHA512_256i_TAGGED(Session, msg...)
 	t := [Iterations]*big.Int{}
 	cIBI := new(big.Int)
 	for i := range t {
@@ -52,7 +53,8 @@ func NewDLNProof(h1, h2, x, p, q, N *big.Int) *Proof {
 	return &Proof{alpha, t}
 }
 
-func (p *Proof) Verify(h1, h2, N *big.Int) bool {
+func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
+	Session := optionalSession(session)
 	if p == nil {
 		return false
 	}
@@ -75,19 +77,21 @@ func (p *Proof) Verify(h1, h2, N *big.Int) bool {
 		return false
 	}
 	for i := range p.T {
-		a := new(big.Int).Mod(p.T[i], N)
-		if a.Cmp(one) != 1 || a.Cmp(N) != -1 {
+		if p.T[i] == nil || p.T[i].Cmp(one) <= 0 || p.T[i].Cmp(N) >= 0 {
 			return false
 		}
 	}
 	for i := range p.Alpha {
+		if p.Alpha[i] == nil {
+			return false
+		}
 		a := new(big.Int).Mod(p.Alpha[i], N)
-		if a.Cmp(one) != 1 || a.Cmp(N) != -1 {
+		if a.Cmp(one) <= 0 || a.Cmp(N) >= 0 {
 			return false
 		}
 	}
 	msg := append([]*big.Int{h1, h2, N}, p.Alpha[:]...)
-	c := common.SHA512_256i(msg...)
+	c := common.SHA512_256i_TAGGED(Session, msg...)
 	cIBI := new(big.Int)
 	for i := 0; i < Iterations; i++ {
 		if p.Alpha[i] == nil || p.T[i] == nil {
@@ -103,6 +107,16 @@ func (p *Proof) Verify(h1, h2, N *big.Int) bool {
 		}
 	}
 	return true
+}
+
+func optionalSession(session [][]byte) []byte {
+	if len(session) == 0 {
+		return nil
+	}
+	if len(session[0]) == 0 {
+		panic("dlnproof: session tag must be non-empty")
+	}
+	return session[0]
 }
 
 func UnmarshalDLNProof(alphas, ts [][]byte) (*Proof, error) {

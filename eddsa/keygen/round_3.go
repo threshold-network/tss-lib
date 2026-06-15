@@ -65,6 +65,7 @@ func (round *round3) Start() *tss.Error {
 		if j == PIdx {
 			continue
 		}
+		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		// 6-9.
 		go func(j int, ch chan<- vssOut) {
 			// 4-10.
@@ -79,20 +80,19 @@ func (round *round3) Start() *tss.Error {
 			}
 
 			PjVs, err := crypto.UnFlattenECPoints(round.Params().EC(), flatPolyGs)
-			for i, PjV := range PjVs {
-				PjVs[i] = PjV.EightInvEight()
-			}
-
 			if err != nil {
 				ch <- vssOut{err, nil}
 				return
+			}
+			for i, PjV := range PjVs {
+				PjVs[i] = PjV.EightInvEight()
 			}
 			proof, err := r2msg2.UnmarshalZKProof(round.Params().EC())
 			if err != nil {
 				ch <- vssOut{errors.New("failed to unmarshal schnorr proof"), nil}
 				return
 			}
-			ok = proof.Verify(PjVs[0])
+			ok = proof.VerifyWithSession(contextJ, PjVs[0])
 			if !ok {
 				ch <- vssOut{errors.New("failed to prove schnorr proof"), nil}
 				return

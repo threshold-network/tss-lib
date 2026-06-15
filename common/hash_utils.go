@@ -21,6 +21,14 @@ func LiterallyJustMod(q *big.Int, eHash *big.Int) *big.Int { // e' = eHash
 	return e
 }
 
+// RejectionSample preserves the upstream challenge-reduction function name.
+// This implementation reduces the hash modulo q rather than looping with fresh
+// hash material, so callers must only use it where modular-reduction bias is
+// acceptable for the proof challenge.
+func RejectionSample(q *big.Int, eHash *big.Int) *big.Int {
+	return LiterallyJustMod(q, eHash)
+}
+
 // Return a big.Int between 0 and N
 func HashToN(N *big.Int, in ...*big.Int) *big.Int {
 	bitCnt := N.BitLen()
@@ -41,5 +49,32 @@ func HashToN(N *big.Int, in ...*big.Int) *big.Int {
 
 	// dest has at least N.BitLen + 256 bits,
 	// thus it is safe to use Mod
+	return LiterallyJustMod(N, dest)
+}
+
+// HashToNTagged is the tagged-hash analogue of HashToN. It produces a value in
+// [0, N) by concatenating ((N.BitLen()/256) + 2) blocks of SHA512_256i_TAGGED
+// — one per block-index counter — and reducing modulo N. The total entropy
+// before reduction is at least N.BitLen() + 256 bits, so the modular reduction
+// has the same bias budget as HashToN (≤ 2^-256).
+//
+// Use this for Fiat-Shamir challenges over large moduli (e.g. Paillier N ≈ 2^2048)
+// when the derivation must be domain-separated by a session tag. Reducing a
+// single 256-bit SHA512_256i_TAGGED output modulo N would emit challenges in
+// [0, 2^256) instead of [0, N).
+func HashToNTagged(tag []byte, N *big.Int, in ...*big.Int) *big.Int {
+	bitCnt := N.BitLen()
+	blockCnt := (bitCnt / 256) + 2
+
+	dest := big.NewInt(0)
+	tmp := make([]*big.Int, 1, 1+len(in))
+	tmp = append(tmp, in...)
+
+	for i := 0; i < blockCnt; i++ {
+		tmp[0] = big.NewInt(int64(i))
+		dest.Lsh(dest, 256)
+		dest.Or(dest, SHA512_256i_TAGGED(tag, tmp...))
+	}
+
 	return LiterallyJustMod(N, dest)
 }

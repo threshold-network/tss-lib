@@ -8,6 +8,7 @@ package resharing_test
 
 import (
 	"math/big"
+	"reflect"
 	"sync/atomic"
 	"testing"
 
@@ -162,10 +163,18 @@ signing:
 	signErrCh := make(chan *tss.Error, len(signPIDs))
 	signOutCh := make(chan tss.Message, len(signPIDs))
 	signEndCh := make(chan common.SignatureData, len(signPIDs))
+	signResultCh := make(chan signatureDataParts, len(signPIDs))
+	go func() {
+		for i := 0; i < len(signPIDs); i++ {
+			signResultCh <- recvSignatureDataParts(signEndCh)
+		}
+	}()
 
+	signCeremonyNonce := big.NewInt(1)
 	for j, signPID := range signPIDs {
 		params := tss.NewParameters(tss.Edwards(), signP2pCtx, signPID, len(signPIDs), newThreshold)
-		P := signing.NewLocalParty(big.NewInt(42), params, signKeys[j], signOutCh, signEndCh).(*signing.LocalParty)
+		params.SetSessionNonce(signCeremonyNonce)
+		P := signing.NewLocalParty(big.NewInt(42), params, signKeys[j], signOutCh, signEndCh, 32).(*signing.LocalParty)
 		signParties = append(signParties, P)
 		go func(P *signing.LocalParty) {
 			if err := P.Start(); err != nil {
@@ -198,7 +207,7 @@ signing:
 				go updater(signParties[dest[0].Index], msg, signErrCh)
 			}
 
-		case signData := <-signEndCh:
+		case signData := <-signResultCh:
 			atomic.AddInt32(&signEnded, 1)
 			if atomic.LoadInt32(&signEnded) == int32(len(signPIDs)) {
 				t.Logf("Signing done. Received sign data from %d participants", signEnded)
@@ -211,13 +220,14 @@ signing:
 					Y:     pkY,
 				}
 
-				newSig, err := edwards.ParseSignature(signData.Signature)
+				newSig, err := edwards.ParseSignature(signData.signature)
 				if err != nil {
 					println("new sig error, ", err.Error())
 				}
 
-				ok := edwards.Verify(&pk, big.NewInt(42).Bytes(),
-					newSig.R, newSig.S)
+				msgBytes := make([]byte, 32)
+				big.NewInt(42).FillBytes(msgBytes)
+				ok := edwards.Verify(&pk, msgBytes, newSig.R, newSig.S)
 
 				assert.True(t, ok, "eddsa verify must pass")
 				t.Log("EDDSA signing test done.")
@@ -226,5 +236,22 @@ signing:
 				return
 			}
 		}
+	}
+}
+
+type signatureDataParts struct {
+	signature []byte
+}
+
+func recvSignatureDataParts(ch <-chan common.SignatureData) signatureDataParts {
+	_, value, ok := reflect.Select([]reflect.SelectCase{{
+		Dir:  reflect.SelectRecv,
+		Chan: reflect.ValueOf(ch),
+	}})
+	if !ok {
+		return signatureDataParts{}
+	}
+	return signatureDataParts{
+		signature: append([]byte(nil), value.FieldByName("Signature").Bytes()...),
 	}
 }

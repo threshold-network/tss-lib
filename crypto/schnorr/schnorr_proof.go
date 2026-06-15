@@ -28,6 +28,12 @@ type (
 
 // NewZKProof constructs a new Schnorr ZK proof of knowledge of the discrete logarithm (GG18Spec Fig. 16)
 func NewZKProof(x *big.Int, X *crypto.ECPoint) (*ZKProof, error) {
+	return NewZKProofWithSession(nil, x, X)
+}
+
+// NewZKProofWithSession constructs a Schnorr proof with the session bound into
+// the Fiat-Shamir challenge.
+func NewZKProofWithSession(session []byte, x *big.Int, X *crypto.ECPoint) (*ZKProof, error) {
 	if x == nil || X == nil || !X.ValidateBasic() {
 		return nil, errors.New("ZKProof constructor received nil or invalid value(s)")
 	}
@@ -39,7 +45,8 @@ func NewZKProof(x *big.Int, X *crypto.ECPoint) (*ZKProof, error) {
 	a := common.GetRandomPositiveInt(q)
 	alpha := crypto.ScalarBaseMult(ec, a)
 
-	c := common.HashToN(q, X.X(), X.Y(), g.X(), g.Y(), alpha.X(), alpha.Y())
+	cHash := common.SHA512_256i_TAGGED(session, X.X(), X.Y(), g.X(), g.Y(), alpha.X(), alpha.Y())
+	c := common.RejectionSample(q, cHash)
 	t := new(big.Int).Mul(c, x)
 	t = common.ModInt(q).Add(a, t)
 
@@ -48,6 +55,12 @@ func NewZKProof(x *big.Int, X *crypto.ECPoint) (*ZKProof, error) {
 
 // NewZKProof verifies a new Schnorr ZK proof of knowledge of the discrete logarithm (GG18Spec Fig. 16)
 func (pf *ZKProof) Verify(X *crypto.ECPoint) bool {
+	return pf.VerifyWithSession(nil, X)
+}
+
+// VerifyWithSession verifies a Schnorr proof with the session bound into the
+// Fiat-Shamir challenge.
+func (pf *ZKProof) VerifyWithSession(session []byte, X *crypto.ECPoint) bool {
 	if pf == nil || !pf.ValidateBasic() {
 		return false
 	}
@@ -56,7 +69,8 @@ func (pf *ZKProof) Verify(X *crypto.ECPoint) bool {
 	q := ecParams.N
 	g := crypto.NewECPointNoCurveCheck(ec, ecParams.Gx, ecParams.Gy)
 
-	c := common.HashToN(q, X.X(), X.Y(), g.X(), g.Y(), pf.Alpha.X(), pf.Alpha.Y())
+	cHash := common.SHA512_256i_TAGGED(session, X.X(), X.Y(), g.X(), g.Y(), pf.Alpha.X(), pf.Alpha.Y())
+	c := common.RejectionSample(q, cHash)
 
 	tG := crypto.ScalarBaseMult(ec, pf.T)
 	Xc := X.ScalarMult(c)
@@ -73,6 +87,12 @@ func (pf *ZKProof) ValidateBasic() bool {
 
 // NewZKProof constructs a new Schnorr ZK proof of knowledge s_i, l_i such that V_i = R^s_i, g^l_i (GG18Spec Fig. 17)
 func NewZKVProof(V, R *crypto.ECPoint, s, l *big.Int) (*ZKVProof, error) {
+	return NewZKVProofWithSession(nil, V, R, s, l)
+}
+
+// NewZKVProofWithSession constructs a Schnorr V proof with the session bound
+// into the Fiat-Shamir challenge.
+func NewZKVProofWithSession(session []byte, V, R *crypto.ECPoint, s, l *big.Int) (*ZKVProof, error) {
 	if V == nil || R == nil || s == nil || l == nil || !V.ValidateBasic() || !R.ValidateBasic() {
 		return nil, errors.New("ZKVProof constructor received nil value(s)")
 	}
@@ -86,7 +106,8 @@ func NewZKVProof(V, R *crypto.ECPoint, s, l *big.Int) (*ZKVProof, error) {
 	bG := crypto.ScalarBaseMult(ec, b)
 	alpha, _ := aR.Add(bG) // already on the curve.
 
-	c := common.HashToN(q, V.X(), V.Y(), R.X(), R.Y(), g.X(), g.Y(), alpha.X(), alpha.Y())
+	cHash := common.SHA512_256i_TAGGED(session, V.X(), V.Y(), R.X(), R.Y(), g.X(), g.Y(), alpha.X(), alpha.Y())
+	c := common.RejectionSample(q, cHash)
 
 	modQ := common.ModInt(q)
 	t := modQ.Add(a, new(big.Int).Mul(c, s))
@@ -96,6 +117,12 @@ func NewZKVProof(V, R *crypto.ECPoint, s, l *big.Int) (*ZKVProof, error) {
 }
 
 func (pf *ZKVProof) Verify(V, R *crypto.ECPoint) bool {
+	return pf.VerifyWithSession(nil, V, R)
+}
+
+// VerifyWithSession verifies a Schnorr V proof with the session bound into the
+// Fiat-Shamir challenge.
+func (pf *ZKVProof) VerifyWithSession(session []byte, V, R *crypto.ECPoint) bool {
 	if pf == nil || !pf.ValidateBasic() {
 		return false
 	}
@@ -104,7 +131,8 @@ func (pf *ZKVProof) Verify(V, R *crypto.ECPoint) bool {
 	q := ecParams.N
 	g := crypto.NewECPointNoCurveCheck(ec, ecParams.Gx, ecParams.Gy)
 
-	c := common.HashToN(q, V.X(), V.Y(), R.X(), R.Y(), g.X(), g.Y(), pf.Alpha.X(), pf.Alpha.Y())
+	cHash := common.SHA512_256i_TAGGED(session, V.X(), V.Y(), R.X(), R.Y(), g.X(), g.Y(), pf.Alpha.X(), pf.Alpha.Y())
+	c := common.RejectionSample(q, cHash)
 
 	tR := R.ScalarMult(pf.T)
 	uG := crypto.ScalarBaseMult(ec, pf.U)

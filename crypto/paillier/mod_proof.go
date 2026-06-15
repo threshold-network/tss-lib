@@ -25,7 +25,7 @@ type (
 // Canetti, R., Gennaro, R., Goldfeder, S., Makriyannis, N., Peled, U.:
 // UC Non-Interactive, Proactive, Threshold ECDSA with Identifiable Aborts.
 // In: Cryptology ePrint Archive 2021/060
-func (privateKey *PrivateKey) ModProof() *ModProof {
+func (privateKey *PrivateKey) ModProof(session ...[]byte) *ModProof {
 	N := privateKey.PublicKey.N
 	phiN := privateKey.PhiN
 	p, q := privateKey.GetPQ()
@@ -35,7 +35,7 @@ func (privateKey *PrivateKey) ModProof() *ModProof {
 		w = common.GetRandomPositiveInt(N)
 	}
 
-	y := ModChallenge(N, w)
+	y := ModChallenge(N, w, session...)
 
 	var x [PARAM_M]*big.Int
 	var a [PARAM_M]bool
@@ -67,7 +67,7 @@ func (privateKey *PrivateKey) ModProof() *ModProof {
 // – N is an odd composite number.
 // – z_i^N = y_i for every i ∈ [m]
 // – x_i^4 = (-1)^a_i * w^b_i * y_i mod N and a_i, b_i ∈ {0, 1} for every i ∈ [m].
-func (pf ModProof) ModVerify(N *big.Int) (bool, error) {
+func (pf ModProof) ModVerify(N *big.Int, session ...[]byte) (bool, error) {
 	if common.AnyIsNil(pf.W) || common.AnyIsNil(pf.X[:]...) || common.AnyIsNil(pf.Z[:]...) {
 		return false, fmt.Errorf("mod proof verify: nil inputs in proof")
 	}
@@ -83,22 +83,22 @@ func (pf ModProof) ModVerify(N *big.Int) (bool, error) {
 		return false, fmt.Errorf("mod proof verify: modulus %d seems prime", N)
 	}
 
+	if !common.Gt(pf.W, zero) || !common.Lt(pf.W, N) {
+		return false, fmt.Errorf("mod proof verify: w must be in [1, N), got %d", pf.W)
+	}
+
 	if big.Jacobi(pf.W, N) != -1 {
 		return false, fmt.Errorf("mod proof verify: w %d has invalid jacobi symbol %d", pf.W, big.Jacobi(pf.W, N))
 	}
 
-	if !common.Lt(pf.W, N) {
-		return false, fmt.Errorf("mod proof verify: w %d exceeds N %d", pf.W, N)
-	}
-
-	y := ModChallenge(N, pf.W)
+	y := ModChallenge(N, pf.W, session...)
 
 	for i, yi := range y {
-		if !common.Lt(pf.X[i], N) {
-			return false, fmt.Errorf("mod proof verify: x_%d %d exceeds N %d", i, pf.X[i], N)
+		if !common.Gt(pf.X[i], zero) || !common.Lt(pf.X[i], N) {
+			return false, fmt.Errorf("mod proof verify: x_%d must be in [1, N), got %d", i, pf.X[i])
 		}
-		if !common.Lt(pf.Z[i], N) {
-			return false, fmt.Errorf("mod proof verify: z_%d %d exceeds N %d", i, pf.Z[i], N)
+		if !common.Gt(pf.Z[i], zero) || !common.Lt(pf.Z[i], N) {
+			return false, fmt.Errorf("mod proof verify: z_%d must be in [1, N), got %d", i, pf.Z[i])
 		}
 
 		ziN := new(big.Int).Exp(pf.Z[i], N, N)
@@ -124,12 +124,29 @@ func (pf ModProof) ModVerify(N *big.Int) (bool, error) {
 	return true, nil
 }
 
-// Standard Fiat-Shamir transform
-func ModChallenge(N, w *big.Int) [PARAM_M]*big.Int {
+// Standard Fiat-Shamir transform.
+//
+// The session-tagged path uses HashToNTagged to derive each y_i with at least
+// N.BitLen() + 256 bits of entropy before reducing mod N. Reducing a single
+// 256-bit SHA512_256i_TAGGED output mod ~2^2048 would emit challenges in
+// [0, 2^256) instead of [0, N), giving the session-tagged path a strictly
+// weaker challenge distribution than the HashToN path it shares the
+// verifier with. Each iteration also chains the previously-derived challenges
+// (y[:i]) into the hash inputs, preserving the sequential-challenge property of
+// the original session-tagged construction.
+func ModChallenge(N, w *big.Int, session ...[]byte) [PARAM_M]*big.Int {
 	var y [PARAM_M]*big.Int
 
 	for i := range y {
-		y[i] = common.HashToN(N, w, big.NewInt(int64(i)))
+		if len(session) == 0 {
+			y[i] = common.HashToN(N, w, big.NewInt(int64(i)))
+			continue
+		}
+		if len(session[0]) == 0 {
+			panic("paillier: mod proof session tag must be non-empty")
+		}
+		inputs := append([]*big.Int{w, N}, y[:i]...)
+		y[i] = common.HashToNTagged(session[0], N, inputs...)
 	}
 
 	return y

@@ -10,7 +10,9 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"math/big"
+	"reflect"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -34,6 +36,38 @@ const (
 func setUp(level string) {
 	if err := log.SetLogLevel("tss-lib", level); err != nil {
 		panic(err)
+	}
+}
+
+// TestResharing_Start_RequiresSessionNonce pins that resharing fails closed
+// when no SessionNonce is set. Previously, round 1 fell back to a zero
+// nonce, neutralising the SSID binding for any caller that forgot
+// SetSessionNonce — two resharing ceremonies over identical committees
+// would derive the same SSID, breaking session binding (and the new
+// wire-format SSID broadcast check loses its meaning when the SSIDs
+// collapse to a single canonical zero-nonced value across all ceremonies).
+func TestResharing_Start_RequiresSessionNonce(t *testing.T) {
+	setUp("info")
+	oldKeys, oldPIDs, err := keygen.LoadKeygenTestFixtures(testThreshold + 1)
+	assert.NoError(t, err, "should load keygen fixtures")
+
+	oldP2PCtx := tss.NewPeerContext(oldPIDs)
+	newPIDs := tss.GenerateTestPartyIDs(testParticipants)
+	newP2PCtx := tss.NewPeerContext(newPIDs)
+
+	out := make(chan tss.Message, 8)
+	end := make(chan keygen.LocalPartySaveData, 8)
+
+	// Old-committee party 0, no SetSessionNonce.
+	params := tss.NewReSharingParameters(tss.S256(), oldP2PCtx, newP2PCtx, oldPIDs[0], testParticipants, testThreshold, len(newPIDs), testThreshold)
+
+	P := NewLocalParty(params, oldKeys[0], out, end).(*LocalParty)
+	tssErr := P.Start()
+	if tssErr == nil {
+		t.Fatal("Start must return an error without SessionNonce")
+	}
+	if !strings.Contains(tssErr.Error(), "SetSessionNonce") {
+		t.Fatalf("error must reference SetSessionNonce, got: %v", tssErr)
 	}
 }
 
@@ -71,14 +105,17 @@ func TestE2EConcurrent(t *testing.T) {
 	updater := test.SharedPartyUpdater
 
 	// init the old parties first
+	resharingCeremonyNonce := big.NewInt(7)
 	for j, pID := range oldPIDs {
 		params := tss.NewReSharingParameters(tss.S256(), oldP2PCtx, newP2PCtx, pID, testParticipants, threshold, newPCount, newThreshold)
+		params.SetSessionNonce(resharingCeremonyNonce)
 		P := NewLocalParty(params, oldKeys[j], outCh, endCh).(*LocalParty) // discard old key data
 		oldCommittee = append(oldCommittee, P)
 	}
 	// init the new parties
 	for j, pID := range newPIDs {
 		params := tss.NewReSharingParameters(tss.S256(), oldP2PCtx, newP2PCtx, pID, testParticipants, threshold, newPCount, newThreshold)
+		params.SetSessionNonce(resharingCeremonyNonce)
 		save := keygen.NewLocalPartySaveData(newPCount)
 		if j < len(fixtures) && len(newPIDs) <= len(fixtures) {
 			save.LocalPreParams = fixtures[j].LocalPreParams
@@ -169,10 +206,18 @@ signing:
 	signErrCh := make(chan *tss.Error, len(signPIDs))
 	signOutCh := make(chan tss.Message, len(signPIDs))
 	signEndCh := make(chan common.SignatureData, len(signPIDs))
+	signResultCh := make(chan signatureDataParts, len(signPIDs))
+	go func() {
+		for i := 0; i < len(signPIDs); i++ {
+			signResultCh <- recvSignatureDataParts(signEndCh)
+		}
+	}()
 
+	signCeremonyNonce := big.NewInt(1)
 	for j, signPID := range signPIDs {
 		params := tss.NewParameters(tss.S256(), signP2pCtx, signPID, len(signPIDs), newThreshold)
-		P := signing.NewLocalParty(big.NewInt(42), params, signKeys[j], signOutCh, signEndCh).(*signing.LocalParty)
+		params.SetSessionNonce(signCeremonyNonce)
+		P := signing.NewLocalParty(big.NewInt(42), params, signKeys[j], signOutCh, signEndCh, 32).(*signing.LocalParty)
 		signParties = append(signParties, P)
 		go func(P *signing.LocalParty) {
 			if err := P.Start(); err != nil {
@@ -206,7 +251,7 @@ signing:
 				go updater(signParties[dest[0].Index], msg, signErrCh)
 			}
 
-		case signData := <-signEndCh:
+		case signData := <-signResultCh:
 			atomic.AddInt32(&signEnded, 1)
 			if atomic.LoadInt32(&signEnded) == int32(len(signPIDs)) {
 				t.Logf("Signing done. Received sign data from %d participants", signEnded)
@@ -219,8 +264,8 @@ signing:
 					Y:     pkY,
 				}
 				ok := ecdsa.Verify(&pk, big.NewInt(42).Bytes(),
-					new(big.Int).SetBytes(signData.R),
-					new(big.Int).SetBytes(signData.S))
+					new(big.Int).SetBytes(signData.r),
+					new(big.Int).SetBytes(signData.s))
 
 				assert.True(t, ok, "ecdsa verify must pass")
 				t.Log("ECDSA signing test done.")
@@ -229,5 +274,26 @@ signing:
 				return
 			}
 		}
+	}
+}
+
+type signatureDataParts struct {
+	signature []byte
+	r         []byte
+	s         []byte
+}
+
+func recvSignatureDataParts(ch <-chan common.SignatureData) signatureDataParts {
+	_, value, ok := reflect.Select([]reflect.SelectCase{{
+		Dir:  reflect.SelectRecv,
+		Chan: reflect.ValueOf(ch),
+	}})
+	if !ok {
+		return signatureDataParts{}
+	}
+	return signatureDataParts{
+		signature: append([]byte(nil), value.FieldByName("Signature").Bytes()...),
+		r:         append([]byte(nil), value.FieldByName("R").Bytes()...),
+		s:         append([]byte(nil), value.FieldByName("S").Bytes()...),
 	}
 }
