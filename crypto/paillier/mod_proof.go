@@ -1,6 +1,7 @@
 package paillier
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math/big"
 
@@ -8,8 +9,13 @@ import (
 )
 
 const (
-	PARAM_M = 80 // ZKP iterations
+	PARAM_M             = 80 // ZKP iterations
+	fsDomainTagModProof = "tss-lib.threshold.modproof"
 )
+
+func fsSessionModProof(session []byte) []byte {
+	return append([]byte(fsDomainTagModProof+"|"), session...)
+}
 
 type (
 	ModProof struct {
@@ -72,15 +78,8 @@ func (pf ModProof) ModVerify(N *big.Int, session ...[]byte) (bool, error) {
 		return false, fmt.Errorf("mod proof verify: nil inputs in proof")
 	}
 
-	rem2 := new(big.Int).Mod(N, big.NewInt(2))
-	odd := rem2.Int64() == 1
-
-	if !odd {
-		return false, fmt.Errorf("mod proof verify: modulus %d is even", N)
-	}
-
-	if N.ProbablyPrime(30) {
-		return false, fmt.Errorf("mod proof verify: modulus %d seems prime", N)
+	if !common.IsUsableUnknownOrderModulus(N, verifyMinModulusBitLen) {
+		return false, fmt.Errorf("mod proof verify: invalid modulus %d", N)
 	}
 
 	if !common.Gt(pf.W, zero) || !common.Lt(pf.W, N) {
@@ -99,6 +98,12 @@ func (pf ModProof) ModVerify(N *big.Int, session ...[]byte) (bool, error) {
 		}
 		if !common.Gt(pf.Z[i], zero) || !common.Lt(pf.Z[i], N) {
 			return false, fmt.Errorf("mod proof verify: z_%d must be in [1, N), got %d", i, pf.Z[i])
+		}
+		if new(big.Int).GCD(nil, nil, pf.X[i], N).Cmp(one) != 0 {
+			return false, fmt.Errorf("mod proof verify: x_%d is not a unit modulo N", i)
+		}
+		if new(big.Int).GCD(nil, nil, pf.Z[i], N).Cmp(one) != 0 {
+			return false, fmt.Errorf("mod proof verify: z_%d is not a unit modulo N", i)
 		}
 
 		ziN := new(big.Int).Exp(pf.Z[i], N, N)
@@ -126,8 +131,8 @@ func (pf ModProof) ModVerify(N *big.Int, session ...[]byte) (bool, error) {
 
 // Standard Fiat-Shamir transform.
 //
-// The session-tagged path uses HashToNTagged to derive each y_i with at least
-// N.BitLen() + 256 bits of entropy before reducing mod N. Reducing a single
+// The session-tagged path uses expand-then-reject sampling to derive each y_i
+// uniformly in [0, N). Reducing a single
 // 256-bit SHA512_256i_TAGGED output mod ~2^2048 would emit challenges in
 // [0, 2^256) instead of [0, N), giving the session-tagged path a strictly
 // weaker challenge distribution than the HashToN path it shares the
@@ -146,10 +151,37 @@ func ModChallenge(N, w *big.Int, session ...[]byte) [PARAM_M]*big.Int {
 			panic("paillier: mod proof session tag must be non-empty")
 		}
 		inputs := append([]*big.Int{w, N}, y[:i]...)
-		y[i] = common.HashToNTagged(session[0], N, inputs...)
+		y[i] = sampleYModN(fsSessionModProof(session[0]), N, inputs...)
 	}
 
 	return y
+}
+
+func sampleYModN(tag []byte, N *big.Int, inputs ...*big.Int) *big.Int {
+	seedInt := common.SHA512_256i_TAGGED(tag, inputs...)
+	seed := seedInt.FillBytes(make([]byte, 32))
+	byteLen := (N.BitLen() + 7) / 8
+	blocks := (byteLen + 31) / 32
+	excessBits := uint(byteLen*8 - N.BitLen())
+
+	for counter := uint32(0); ; counter++ {
+		counterBytes := make([]byte, 4)
+		binary.BigEndian.PutUint32(counterBytes, counter)
+		out := make([]byte, 0, blocks*32)
+		for blockIdx := 0; blockIdx < blocks; blockIdx++ {
+			blockIdxBytes := make([]byte, 4)
+			binary.BigEndian.PutUint32(blockIdxBytes, uint32(blockIdx))
+			out = append(out, common.SHA512_256(seed, counterBytes, blockIdxBytes)...)
+		}
+		out = out[:byteLen]
+		if excessBits > 0 {
+			out[0] &= byte(0xff >> excessBits)
+		}
+		candidate := new(big.Int).SetBytes(out)
+		if candidate.Cmp(N) < 0 {
+			return candidate
+		}
+	}
 }
 
 // Determine values a_i and b_i so that a valid x_i exists,

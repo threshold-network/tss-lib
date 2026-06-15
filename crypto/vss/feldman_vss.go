@@ -59,6 +59,9 @@ func CheckIndexes(ec elliptic.Curve, indexes []*big.Int) ([]*big.Int, error) {
 // Returns a new array of secret shares created by Shamir's Secret Sharing Algorithm,
 // requiring a minimum number of shares to recreate, of length shares, from the input secret
 func Create(ec elliptic.Curve, threshold int, secret *big.Int, indexes []*big.Int) (Vs, Shares, error) {
+	if ec == nil {
+		return nil, nil, fmt.Errorf("vss ec == nil")
+	}
 	if secret == nil || indexes == nil {
 		return nil, nil, fmt.Errorf("vss secret or indexes == nil: %v %v", secret, indexes)
 	}
@@ -72,7 +75,7 @@ func Create(ec elliptic.Curve, threshold int, secret *big.Int, indexes []*big.In
 	}
 
 	num := len(indexes)
-	if num < threshold {
+	if num < threshold+1 {
 		return nil, nil, ErrNumSharesBelowThreshold
 	}
 
@@ -104,21 +107,21 @@ func (share *Share) Verify(ec elliptic.Curve, threshold int, vs Vs) bool {
 	var err error
 	modQ := common.ModInt(q)
 	v, t := vs[0], one // YRO : we need to have our accumulator outside of the loop
-	if v == nil || !v.SetCurve(ec).ValidateBasic() {
+	if v == nil || !crypto.SameCurve(v.Curve(), ec) || !v.ValidateBasic() {
 		return false
 	}
 	for j := 1; j <= threshold; j++ {
-		if vs[j] == nil || !vs[j].SetCurve(ec).ValidateBasic() {
+		if vs[j] == nil || !crypto.SameCurve(vs[j].Curve(), ec) || !vs[j].ValidateBasic() {
 			return false
 		}
 		// t = k_i^j
 		t = modQ.Mul(t, share.ID)
 		// v = v * v_j^t
-		vjt := vs[j].SetCurve(ec).ScalarMult(t)
+		vjt := vs[j].ScalarMult(t)
 		if vjt == nil {
 			return false
 		}
-		v, err = v.SetCurve(ec).Add(vjt)
+		v, err = v.Add(vjt)
 		if err != nil {
 			return false
 		}
@@ -131,17 +134,49 @@ func (share *Share) Verify(ec elliptic.Curve, threshold int, vs Vs) bool {
 }
 
 func (shares Shares) ReConstruct(ec elliptic.Curve) (secret *big.Int, err error) {
+	if ec == nil {
+		return nil, errors.New("vss reconstruct: ec is nil")
+	}
 	if len(shares) == 0 {
 		return nil, ErrNumSharesBelowThreshold
 	}
-	if shares != nil && shares[0].Threshold+1 > len(shares) {
+	if shares[0] == nil {
+		return nil, errors.New("vss reconstruct: nil share")
+	}
+	threshold := shares[0].Threshold
+	for idx, share := range shares {
+		if share == nil || share.ID == nil || share.Share == nil {
+			return nil, fmt.Errorf("vss reconstruct: nil share or share field at index %d", idx)
+		}
+		if share.Threshold != threshold {
+			return nil, fmt.Errorf("vss reconstruct: share %d has threshold %d, want %d", idx, share.Threshold, threshold)
+		}
+	}
+	if threshold+1 > len(shares) {
 		return nil, ErrNumSharesBelowThreshold
 	}
-	modN := common.ModInt(ec.Params().N)
+	q := ec.Params().N
+	modN := common.ModInt(q)
 
-	// x coords
-	xs := make([]*big.Int, 0)
+	// x coords. Reject zero or duplicate share IDs (mod q) up front: a zero
+	// ID encodes the secret directly, and two equal IDs make the Lagrange
+	// denominator xs[j]-share.ID zero, which would otherwise propagate into
+	// ModInverse(0) → nil → nil-deref in the interpolation loop below.
+	xs := make([]*big.Int, 0, len(shares))
+	seen := make(map[string]struct{}, len(shares))
 	for _, share := range shares {
+		if share == nil || share.ID == nil || share.Share == nil {
+			return nil, errors.New("vss reconstruct: nil share or share field")
+		}
+		id := new(big.Int).Mod(share.ID, q)
+		if id.Sign() == 0 {
+			return nil, errors.New("vss reconstruct: share ID is zero mod q")
+		}
+		key := id.String()
+		if _, dup := seen[key]; dup {
+			return nil, fmt.Errorf("vss reconstruct: duplicate share ID %s", key)
+		}
+		seen[key] = struct{}{}
 		xs = append(xs, share.ID)
 	}
 

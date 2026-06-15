@@ -83,6 +83,32 @@ func (p *ECPoint) Curve() elliptic.Curve {
 	return p.curve
 }
 
+// SameCurve compares curve domain parameters, not implementation identity. It
+// intentionally accepts distinct elliptic.Curve implementations with identical
+// parameters; callers must still trust the curve implementation they pass in.
+func SameCurve(lhs, rhs elliptic.Curve) bool {
+	if lhs == nil || rhs == nil {
+		return false
+	}
+	lParams, rParams := lhs.Params(), rhs.Params()
+	if lParams == nil || rParams == nil {
+		return false
+	}
+	return sameBigInt(lParams.P, rParams.P) &&
+		sameBigInt(lParams.N, rParams.N) &&
+		sameBigInt(lParams.B, rParams.B) &&
+		sameBigInt(lParams.Gx, rParams.Gx) &&
+		sameBigInt(lParams.Gy, rParams.Gy) &&
+		lParams.BitSize == rParams.BitSize
+}
+
+func sameBigInt(lhs, rhs *big.Int) bool {
+	if lhs == nil || rhs == nil {
+		return lhs == rhs
+	}
+	return lhs.Cmp(rhs) == 0
+}
+
 func (p *ECPoint) Equals(p2 *ECPoint) bool {
 	if p == nil || p2 == nil {
 		return false
@@ -90,6 +116,11 @@ func (p *ECPoint) Equals(p2 *ECPoint) bool {
 	return p.X().Cmp(p2.X()) == 0 && p.Y().Cmp(p2.Y()) == 0
 }
 
+// SetCurve mutates the receiver's curve field in place and returns the same
+// pointer. The chained-call style (`p.SetCurve(ec).ScalarMult(k)`) reads as
+// fluent but is a footgun when p is shared — every alias observes the new
+// curve. Callers that need to ensure the curve without mutating a shared point
+// should construct a fresh ECPoint via NewECPoint instead.
 func (p *ECPoint) SetCurve(curve elliptic.Curve) *ECPoint {
 	if p == nil {
 		return nil
@@ -99,7 +130,19 @@ func (p *ECPoint) SetCurve(curve elliptic.Curve) *ECPoint {
 }
 
 func (p *ECPoint) ValidateBasic() bool {
-	return p != nil && p.coords[0] != nil && p.coords[1] != nil && p.IsOnCurve()
+	return p != nil && p.coords[0] != nil && p.coords[1] != nil && p.IsOnCurve() && !p.IsIdentity()
+}
+
+func (p *ECPoint) IsIdentity() bool {
+	if p == nil || p.coords[0] == nil || p.coords[1] == nil {
+		return false
+	}
+	// The supported curves encode usable affine points away from x=0; reject
+	// common identity-like encodings before arithmetic reaches curve methods.
+	if p.coords[0].Sign() != 0 {
+		return false
+	}
+	return p.coords[1].Sign() == 0 || p.coords[1].Cmp(big.NewInt(1)) == 0
 }
 
 func ScalarBaseMult(curve elliptic.Curve, k *big.Int) *ECPoint {

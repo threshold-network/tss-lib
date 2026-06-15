@@ -31,9 +31,10 @@ import (
 )
 
 const (
-	ProofIters         = 13
-	verifyPrimesUntil  = 1000 // Verify uses primes <1000
-	pQBitLenDifference = 3    // >1020-bit P-Q
+	ProofIters             = 13
+	verifyPrimesUntil      = 1000 // Verify uses primes <1000
+	pQBitLenDifference     = 3    // >1020-bit P-Q
+	verifyMinModulusBitLen = 2048
 )
 
 type (
@@ -207,7 +208,24 @@ func (privateKey *PrivateKey) Proof(k *big.Int, ecdsaPub *crypto2.ECPoint) Proof
 }
 
 func (pf Proof) Verify(pkN, k *big.Int, ecdsaPub *crypto2.ECPoint) (bool, error) {
+	if pkN == nil || k == nil || ecdsaPub == nil || !ecdsaPub.ValidateBasic() {
+		return false, nil
+	}
+	if k.Sign() < 0 {
+		return false, nil
+	}
+	if !common.IsUsableUnknownOrderModulus(pkN, verifyMinModulusBitLen) {
+		return false, nil
+	}
 	iters := ProofIters
+	for i := 0; i < iters; i++ {
+		if pf[i] == nil || pf[i].Sign() != 1 || pf[i].Cmp(pkN) != -1 {
+			return false, nil
+		}
+		if new(big.Int).GCD(nil, nil, pf[i], pkN).Cmp(one) != 0 {
+			return false, nil
+		}
+	}
 	pch, xch := make(chan bool, 1), make(chan []*big.Int, 1) // buffered to allow early exit
 	prms := primes.Until(verifyPrimesUntil).List()           // uses cache primed in init()
 	go func(ch chan<- bool) {

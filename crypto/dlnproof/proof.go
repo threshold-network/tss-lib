@@ -18,7 +18,15 @@ import (
 	"github.com/bnb-chain/tss-lib/common"
 )
 
-const Iterations = 128
+const (
+	Iterations             = 128
+	verifyMinModulusBitLen = 2048
+	fsDomainTagDLNProof    = "tss-lib.threshold.dlnproof"
+)
+
+func fsSessionDLNProof(session []byte) []byte {
+	return append([]byte(fsDomainTagDLNProof+"|"), session...)
+}
 
 type (
 	Proof struct {
@@ -42,7 +50,7 @@ func NewDLNProof(h1, h2, x, p, q, N *big.Int, session ...[]byte) *Proof {
 		alpha[i] = modN.Exp(h1, a[i])
 	}
 	msg := append([]*big.Int{h1, h2, N}, alpha[:]...)
-	c := common.SHA512_256i_TAGGED(Session, msg...)
+	c := common.SHA512_256i_TAGGED(fsSessionDLNProof(Session), msg...)
 	t := [Iterations]*big.Int{}
 	cIBI := new(big.Int)
 	for i := range t {
@@ -58,22 +66,14 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 	if p == nil {
 		return false
 	}
-	if h1 == nil || h2 == nil || N == nil || N.Sign() != 1 {
+	if !common.IsUsableUnknownOrderModulus(N, verifyMinModulusBitLen) {
 		return false
 	}
 	modN := common.ModInt(N)
-	h1_ := new(big.Int).Mod(h1, N)
-	if h1_.Cmp(one) != 1 || h1_.Cmp(N) != -1 {
+	if !common.IsCanonicalGenerator(N, h1) || !common.IsCanonicalGenerator(N, h2) {
 		return false
 	}
-	h2_ := new(big.Int).Mod(h2, N)
-	if h2_.Cmp(one) != 1 || h2_.Cmp(N) != -1 {
-		return false
-	}
-	if h1_.Cmp(h2_) == 0 {
-		return false
-	}
-	if !common.Coprime(h1_, N) || !common.Coprime(h2_, N) {
+	if h1.Cmp(h2) == 0 {
 		return false
 	}
 	for i := range p.T {
@@ -82,12 +82,12 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 		}
 	}
 	for i := range p.Alpha {
-		if p.Alpha[i] == nil || p.Alpha[i].Cmp(one) <= 0 || p.Alpha[i].Cmp(N) >= 0 {
+		if !common.IsCanonicalGenerator(N, p.Alpha[i]) {
 			return false
 		}
 	}
 	msg := append([]*big.Int{h1, h2, N}, p.Alpha[:]...)
-	c := common.SHA512_256i_TAGGED(Session, msg...)
+	c := common.SHA512_256i_TAGGED(fsSessionDLNProof(Session), msg...)
 	cIBI := new(big.Int)
 	for i := 0; i < Iterations; i++ {
 		cI := c.Bit(i)

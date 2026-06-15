@@ -7,6 +7,7 @@
 package vss_test
 
 import (
+	"crypto/elliptic"
 	"math/big"
 	"testing"
 
@@ -90,6 +91,23 @@ func TestVerify(t *testing.T) {
 	assert.False(t, shares[0].Verify(tss.EC(), threshold, vs[:threshold]))
 }
 
+func TestVerifyAllowsUnregisteredCurve(t *testing.T) {
+	ec := elliptic.P256()
+	num, threshold := 5, 3
+	secret := common.GetRandomPositiveInt(ec.Params().N)
+
+	ids := make([]*big.Int, 0, num)
+	for i := 1; i <= num; i++ {
+		ids = append(ids, big.NewInt(int64(i)))
+	}
+
+	vs, shares, err := Create(ec, threshold, secret, ids)
+	assert.NoError(t, err)
+	for i := 0; i < num; i++ {
+		assert.True(t, shares[i].Verify(ec, threshold, vs))
+	}
+}
+
 func TestVerifyRejectsMalformedShare(t *testing.T) {
 	num, threshold := 5, 3
 
@@ -168,4 +186,86 @@ func TestReconstruct(t *testing.T) {
 	assert.NoError(t, err4)
 	assert.NotZero(t, secret4)
 	assert.Zero(t, secret.Cmp(secret4))
+}
+
+// TestReconstructRejectsMalformedShares pins ReConstruct's input validation:
+// nil share, nil ID, nil Share, zero-mod-q ID, and duplicate IDs must all be
+// rejected up front instead of propagating into ModInverse(0) → nil-deref in
+// the Lagrange interpolation loop.
+func TestReconstructRejectsMalformedShares(t *testing.T) {
+	num, threshold := 5, 3
+	q := tss.EC().Params().N
+
+	secret := common.GetRandomPositiveInt(q)
+	ids := make([]*big.Int, 0, num)
+	for i := 0; i < num; i++ {
+		ids = append(ids, common.GetRandomPositiveInt(q))
+	}
+	_, shares, err := Create(tss.EC(), threshold, secret, ids)
+	assert.NoError(t, err)
+
+	cases := []struct {
+		name   string
+		mutate func(Shares) Shares
+	}{
+		{
+			name: "nil share entry",
+			mutate: func(in Shares) Shares {
+				out := append(Shares(nil), in...)
+				out[1] = nil
+				return out
+			},
+		},
+		{
+			name: "nil ID",
+			mutate: func(in Shares) Shares {
+				out := append(Shares(nil), in...)
+				bad := *in[1]
+				bad.ID = nil
+				out[1] = &bad
+				return out
+			},
+		},
+		{
+			name: "nil Share",
+			mutate: func(in Shares) Shares {
+				out := append(Shares(nil), in...)
+				bad := *in[1]
+				bad.Share = nil
+				out[1] = &bad
+				return out
+			},
+		},
+		{
+			name: "zero ID mod q",
+			mutate: func(in Shares) Shares {
+				out := append(Shares(nil), in...)
+				bad := *in[1]
+				bad.ID = new(big.Int).Set(q) // q mod q == 0
+				out[1] = &bad
+				return out
+			},
+		},
+		{
+			name: "duplicate ID",
+			mutate: func(in Shares) Shares {
+				out := append(Shares(nil), in...)
+				dup := *in[0]
+				dup.ID = new(big.Int).Set(in[1].ID)
+				out[0] = &dup
+				return out
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mutated := tc.mutate(shares[:threshold+1])
+			assert.NotPanics(t, func() {
+				got, err := mutated.ReConstruct(tss.EC())
+				assert.Error(t, err)
+				assert.Nil(t, got)
+			})
+		})
+	}
 }

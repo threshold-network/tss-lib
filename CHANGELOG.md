@@ -32,6 +32,7 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #2** — base BNB hardening integration.
 - **PR #4** — BNB #332 tBTC-relevant hardening backport (stacked on PR #2).
 - **PR #5** — removal of EdDSA and ECDSA resharing protocols (stacked on PR #4).
+- **PR #6** — remaining BNB cryptographic hardening follow-ups (stacked on PR #5).
 
 ### ⚠️ Compatibility — read before upgrading
 
@@ -120,13 +121,48 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
   so in practice this is active on the protocol path.
 - **Migration:** Covered by the coordinated upgrade in Breaking Change 1/3.
 
-> Every session / `fullBytesLen` parameter was added as a trailing variadic argument, so the
-> hardening itself changed no exported signatures (verified by diffing exported signatures
-> between base and HEAD); those breaks are runtime/wire, not compile-time. The source/compile
-> breaks in this set come from PR #5's protocol removal, which deleted the exported
+#### 5. Per-proof-system Fiat-Shamir domain tags (PR #6)
+- **What:** DLN, Schnorr, MtA, and Paillier challenges now prepend a per-proof-system domain
+  tag (e.g. `dlnproof|`, `zk|`, `zkv|`, via `fsDomainTag*` / `fsSession*`) to the session
+  before tagged hashing. This further changes every proof transcript relative to Breaking
+  Change 3.
+- **Break type:** Wire/protocol — compounds Breaking Change 3; still a single coordinated
+  upgrade (a PR #6 node and a PR #2–#5 node will not cross-verify).
+- **Motivation:** Distinct domain separation per proof system, so a challenge from one proof
+  type can never be reused in another.
+- **Provenance:** `BNB #252` / `BNB #256` domain-tag design; PR #6.
+- **Migration:** Covered by the coordinated upgrade in Breaking Change 1/3.
+
+#### 6. `ecdsa/signing.PrepareForSigning` returns an error (PR #6)
+- **What:** the exported signature changed from `(wi, bigWs)` to `(wi, bigWs, err)`; it now
+  validates its inputs and returns an error instead of proceeding on malformed data
+  (`ecdsa/signing/prepare.go`).
+- **Break type:** Source/compile — downstream callers must handle the third return value.
+- **Motivation:** Surface invalid signing-preparation inputs instead of producing corrupt
+  signing state.
+- **Provenance:** BNB hardening follow-ups; PR #6. (A code search found no current
+  `threshold-network/keep-core` callers.)
+- **Migration:** Update call sites to handle the returned `error`.
+
+#### 7. Stricter `tss.NewParameters` and `SortPartyIDs` validation (PR #6)
+- **What:** `NewParameters` now panics on a party count below 2, a threshold outside
+  `[1, partyCount)`, a `PartyID` key congruent to 0 mod q, or two `PartyID`s colliding mod q;
+  `SortPartyIDs` panics on duplicate raw party keys (`tss/params.go`, `tss/party_id.go`).
+- **Break type:** Runtime — rejects previously-accepted but invalid/degenerate party sets.
+  Honest setups with ≥2 distinct, non-colliding parties and a valid threshold are unaffected.
+- **Motivation:** Fail fast on malformed party sets that would otherwise corrupt VSS or the
+  protocol.
+- **Provenance:** `threshold-original` / BNB hardening; PR #6.
+- **Migration:** Ensure ceremonies use ≥2 distinct parties, a threshold in `[1, partyCount)`,
+  and non-colliding keys (normal configurations already satisfy this).
+
+> Source/compile breaks in this set: `ecdsa/signing.PrepareForSigning` gained an `error` return
+> (Breaking Change 6, PR #6), and PR #5's protocol removal deleted the exported
 > `tss.ReSharingParameters` / `tss.NewReSharingParameters`, `crypto.ECPoint.EightInvEight`, and
-> `ecdsa/resharing.NewDGRound1Message` API (see Removed). Downstream code using EdDSA, ECDSA
-> resharing, or those symbols must adapt.
+> `ecdsa/resharing.NewDGRound1Message` API (see Removed). Otherwise every session /
+> `fullBytesLen` parameter was added as a trailing variadic argument, so all remaining call
+> sites compile unchanged; those breaks are runtime/wire. Verified by diffing exported
+> signatures between base and HEAD.
 
 ### Removed
 
@@ -227,6 +263,20 @@ rejecting input that an honest caller would previously have produced.
 - **ECDSA signing round-4 nil theta-inverse guard (PR #4):** a non-invertible theta
   (`ModInverse` returning nil) is rejected with a clean error instead of propagating nil
   (`ecdsa/signing/round_4.go`). _Provenance: `BNB #332`, PR #4._
+- **Shared cryptographic input validators (PR #6):** `common/validation.go` adds reusable
+  canonical checks for unknown-order moduli, generators, and Paillier ciphertexts, wired into
+  the proof verifiers and round handlers. _Provenance: `BNB #252`/`BNB #332`, PR #6._
+- **VSS reconstruction input validation (PR #6):** `feldman_vss` rejects malformed
+  reconstruction inputs and out-of-bound parameters before use (`crypto/vss/feldman_vss.go`).
+  _Provenance: `BNB #332`, PR #6._
+- **Idempotent message redelivery (PR #6):** keygen/signing message storage treats an
+  identical redelivery from a party as a no-op while rejecting a content-different replay,
+  preventing duplicate-message state corruption (`tss/message.go`). _Provenance: `threshold-original`, PR #6._
+- **Review follow-up correctness fixes (PR #6):** Schnorr verification accepts unregistered
+  generic curves; `common.GetRandomInt`'s zero-inclusive range is corrected; message wire
+  bytes are made deterministic; large-modulus `sampleYModN` block indexing is fixed; and
+  canonical-generator checks were added in `crypto/commitments` and `crypto/paillier`.
+  _Provenance: `BNB #332` + `threshold-original`, PR #6._
 
 ### Added
 

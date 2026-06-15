@@ -7,6 +7,7 @@
 package tss
 
 import (
+	"bytes"
 	"fmt"
 
 	"google.golang.org/protobuf/proto"
@@ -81,7 +82,15 @@ var (
 // NewMessageWrapper constructs a MessageWrapper from routing metadata and content
 func NewMessageWrapper(routing MessageRouting, content MessageContent) *MessageWrapper {
 	// marshal the content to the ProtoBuf Any type
-	any, _ := anypb.New(content)
+	any, err := anypb.New(content)
+	if err != nil {
+		panic(fmt.Errorf("NewMessageWrapper: marshal content into Any: %w", err))
+	}
+	bz, err := (proto.MarshalOptions{Deterministic: true}).Marshal(content)
+	if err != nil {
+		panic(fmt.Errorf("NewMessageWrapper: deterministic marshal content: %w", err))
+	}
+	any.Value = bz
 	// convert given PartyIDs to the wire format
 	var to []*MessageWrapper_PartyID
 	if routing.To != nil {
@@ -137,7 +146,7 @@ func (mm *MessageImpl) IsToOldAndNewCommittees() bool {
 }
 
 func (mm *MessageImpl) WireBytes() ([]byte, *MessageRouting, error) {
-	bz, err := proto.Marshal(mm.wire.Message)
+	bz, err := proto.MarshalOptions{Deterministic: true}.Marshal(mm.wire.Message)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -166,4 +175,18 @@ func (mm *MessageImpl) String() string {
 		extraStr = " (To Old Committee)"
 	}
 	return fmt.Sprintf("Type: %s, From: %s, To: %s%s", mm.Type(), mm.From.String(), toStr, extraStr)
+}
+
+func IsSameMessage(lhs, rhs ParsedMessage) bool {
+	if lhs == nil || rhs == nil {
+		return lhs == rhs
+	}
+	lhsBytes, _, lhsErr := lhs.WireBytes()
+	rhsBytes, _, rhsErr := rhs.WireBytes()
+	if lhsErr != nil || rhsErr != nil {
+		return false
+	}
+	return lhs.Type() == rhs.Type() &&
+		lhs.IsBroadcast() == rhs.IsBroadcast() &&
+		bytes.Equal(lhsBytes, rhsBytes)
 }
