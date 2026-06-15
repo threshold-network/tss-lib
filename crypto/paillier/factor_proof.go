@@ -114,6 +114,13 @@ func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int, session ...[]byte) (bo
 		}
 	}
 
+	// The Pedersen-style bases s and t must be distinct; with s == t the
+	// binding degenerates. Sibling proofs (dlnproof, MtA range/respondent)
+	// reject equal generators, so mirror that policy here.
+	if s.Cmp(t) == 0 {
+		return false, fmt.Errorf("fac proof verify: generators s and t must be distinct")
+	}
+
 	limit := big.NewInt(1)
 	limit.Lsh(limit, PARAM_L+PARAM_E)
 	limit.Mul(limit, new(big.Int).Sqrt(pkN))
