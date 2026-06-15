@@ -120,11 +120,13 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
   so in practice this is active on the protocol path.
 - **Migration:** Covered by the coordinated upgrade in Breaking Change 1/3.
 
-> Every session / `fullBytesLen` parameter was added as a trailing variadic argument, so all
-> existing call sites compile unchanged — no exported signature changed. The breaks above are
-> runtime/wire, not compile-time. (The one source/compile break that previously existed,
-> `NewDGRound1Message`, was removed along with ECDSA resharing in PR #5.) Verified by diffing
-> every exported signature between the base and HEAD.
+> Every session / `fullBytesLen` parameter was added as a trailing variadic argument, so the
+> hardening itself changed no exported signatures (verified by diffing exported signatures
+> between base and HEAD); those breaks are runtime/wire, not compile-time. The source/compile
+> breaks in this set come from PR #5's protocol removal, which deleted the exported
+> `tss.ReSharingParameters` / `tss.NewReSharingParameters`, `crypto.ECPoint.EightInvEight`, and
+> `ecdsa/resharing.NewDGRound1Message` API (see Removed). Downstream code using EdDSA, ECDSA
+> resharing, or those symbols must adapt.
 
 ### Removed
 
@@ -132,19 +134,26 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
 - The `eddsa/keygen`, `eddsa/signing`, and `eddsa/resharing` packages and their protobuf
   definitions (`protob/eddsa-*.proto`) were deleted; this fork now targets ECDSA only (the
   tBTC use case). The `Ed25519` curve registration and `tss.Edwards()` helper
-  (`tss/curve.go`), the EdDSA message types (`protob/message.proto`), the EdDSA keygen test
-  fixtures, and the `github.com/agl/ed25519` and `github.com/decred/dcrd/dcrec/edwards/v2`
-  dependencies (with the `binance-chain/edwards25519` replace) were removed accordingly. The
-  EdDSA-specific hardening from PR #2 — full-length round-3 message hashing, the EdDSA keygen
-  `NewECPoint` nil-pointer fix, EdDSA signing session-nonce fail-closed — is moot on this fork
-  and has been dropped from the entries above. _Provenance: `threshold-original`, PR #5._
+  (`tss/curve.go`), the EdDSA cofactor helper `crypto.ECPoint.EightInvEight()`, the EdDSA
+  keygen test fixtures, and the `github.com/agl/ed25519` and
+  `github.com/decred/dcrd/dcrec/edwards/v2` dependencies (with the `binance-chain/edwards25519`
+  replace) were removed accordingly; `protob/message.proto`'s resharing routing fields were
+  re-commented as legacy. Removing the exported `EightInvEight` method is a source/compile
+  break for any caller of it. The EdDSA-specific hardening from PR #2 — full-length round-3
+  message hashing, the EdDSA keygen `NewECPoint` nil-pointer fix, EdDSA signing session-nonce
+  fail-closed — is moot on this fork and has been dropped from the entries above.
+  _Provenance: `threshold-original`, PR #5._
 
 #### ECDSA resharing protocol (PR #5)
 - The `ecdsa/resharing` package, its protobuf (`protob/ecdsa-resharing.proto`), the
-  `DGRound1Message` SSID wire field, and the exported `NewDGRound1Message` constructor were
-  deleted. The resharing SSID-broadcast wire break and the `NewDGRound1Message` source/compile
-  break documented for PR #2 therefore no longer apply, and the session-nonce fail-closed
-  requirement (Breaking Change 1) no longer covers resharing. _Provenance: `threshold-original`, PR #5._
+  `DGRound1Message` SSID wire field, the exported `NewDGRound1Message` constructor, and the
+  exported `tss.ReSharingParameters` type with its `tss.NewReSharingParameters` constructor and
+  methods (`OldParties`, `OldPartyCount`, `NewParties`, `NewPartyCount`, `NewThreshold`,
+  `OldAndNewParties`, `OldAndNewPartyCount`, `IsOldCommittee`, `IsNewCommittee`) were deleted.
+  Removing these exported symbols is a source/compile break for any resharing caller. The
+  resharing SSID-broadcast wire break and the `NewDGRound1Message` source/compile break
+  documented for PR #2 therefore no longer apply, and the session-nonce fail-closed requirement
+  (Breaking Change 1) no longer covers resharing. _Provenance: `threshold-original`, PR #5._
 
 ### Security & correctness hardening (non-breaking)
 
@@ -184,7 +193,7 @@ rejecting input that an honest caller would previously have produced.
 - **`BaseParty.String()` nil guard:** returns `"No more rounds"` instead of panicking after
   completion. _Provenance: `BNB #276` (`f3aad28`)._
 - **Panic/DoS guards on EC point operations (PR #4):** `ECPoint.ScalarMult`,
-  `ScalarBaseMult`, `Add`, `SetCurve`, `EightInvEight`, and `isOnCurve` return nil/error on
+  `ScalarBaseMult`, `Add`, `SetCurve`, and `isOnCurve` return nil/error on
   nil or invalid inputs instead of panicking (`crypto/ecpoint.go`). Signatures unchanged;
   honest callers never pass nil. _Provenance: `BNB #332`, PR #4._
 - **Schnorr verifier pre-checks (PR #4):** `Verify`/`VerifyWithSession` reject nil/invalid
