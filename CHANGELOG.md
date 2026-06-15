@@ -20,6 +20,8 @@ Provenance notation. Each entry carries two kinds of reference:
 
 Security and correctness hardening ported or manually adapted from `bnb-chain/tss-lib`,
 without replacing Threshold's existing Paillier/NTilde `ModProof`/`FactorProof` remediation.
+As of PR #5 this fork targets **ECDSA only** (keygen and signing); EdDSA and ECDSA resharing
+were removed (see Removed).
 
 - Threshold base: `2e712689cfbeefede15f95a0ec7112227d86f702`
 - BNB upstream head compared: `3f677ff761fcf692edb0243a5d812930844d879a`
@@ -29,17 +31,18 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 `PR #N`.** Composing PRs:
 - **PR #2** — base BNB hardening integration.
 - **PR #4** — BNB #332 tBTC-relevant hardening backport (stacked on PR #2).
+- **PR #5** — removal of EdDSA and ECDSA resharing protocols (stacked on PR #4).
 
 ### ⚠️ Compatibility — read before upgrading
 
 **This release is a protocol/wire compatibility break and must be rolled out as a
 coordinated protocol upgrade.** Fiat-Shamir proof challenges now use tagged hashing,
 session context, and fixed-width message encoding. Parties running pre-upgrade code
-**cannot** interoperate with upgraded parties in the same keygen, signing, or resharing
-ceremony, even though the Go API remains source-compatible for nearly all call sites.
+**cannot** interoperate with upgraded parties in the same keygen or signing ceremony,
+even though the Go API remains source-compatible.
 
-Do not mix pre- and post-upgrade parties in one ceremony. All participants (and, for
-resharing, **both** committees) must run the upgraded build simultaneously.
+Do not mix pre- and post-upgrade parties in one ceremony; all participants must run the
+upgraded build simultaneously.
 
 Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2):
 1. Set a per-ceremony session nonce before `Start()`.
@@ -48,15 +51,12 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
 ### Breaking changes
 
 #### 1. Session nonce is now mandatory and fails closed
-- **What:** ECDSA keygen, ECDSA signing, ECDSA resharing, EdDSA keygen, and EdDSA signing
-  now require a positive session nonce. Each protocol's `Start()` (round 1) returns an
-  error if `Parameters.SetSessionNonce` / `SetSessionNonceBytes` was not called, e.g.
+- **What:** ECDSA keygen and ECDSA signing now require a positive session nonce. Each
+  protocol's `Start()` (round 1) returns an error if `Parameters.SetSessionNonce` /
+  `SetSessionNonceBytes` was not called, e.g.
   `"keygen requires tss.Parameters.SetSessionNonce(...) before Start"`
-  (`ecdsa/keygen/round_1.go`, `ecdsa/signing/round_1.go`,
-  `ecdsa/resharing/round_1_old_step_1.go`, `eddsa/keygen/round_1.go`,
-  `eddsa/signing/round_1.go`). The nonce is folded into the SSID that binds every proof
-  transcript. **EdDSA resharing is intentionally excluded** — it has no SSID-bound
-  transcript in this port (see Residual risks).
+  (`ecdsa/keygen/round_1.go`, `ecdsa/signing/round_1.go`). The nonce is folded into the SSID
+  that binds every proof transcript.
 - **Break type:** Runtime (previously-succeeding honest callers now error) **and** wire
   (proofs are now SSID-bound, so transcripts differ from pre-upgrade peers).
 - **Motivation:** Without a unique per-ceremony SSID folded into every Fiat-Shamir
@@ -73,12 +73,11 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
   must agree on the same value.
 
 #### 2. `fullBytesLen` is required at runtime for signing
-- **What:** ECDSA and EdDSA signing constructors (`NewLocalParty`, `NewLocalPartyWithKDD`)
-  accept `fullBytesLen` as a **variadic** argument for source compatibility, but exactly
-  one **positive** value is now required at construction time and is bounded to
+- **What:** The ECDSA signing constructors (`NewLocalParty`, `NewLocalPartyWithKDD`) accept
+  `fullBytesLen` as a **variadic** argument for source compatibility, but exactly one
+  **positive** value is now required at construction time and is bounded to
   `[ceil(msg.BitLen()/8), curveOrderBytes]`. Passing none, zero, multiple, or an
-  out-of-range value panics in the constructor (`ecdsa/signing/local_party.go`,
-  `eddsa/signing/local_party.go`).
+  out-of-range value panics in the constructor (`ecdsa/signing/local_party.go`).
 - **Break type:** Runtime (the variadic signature still compiles unchanged, but unupdated
   callers panic at runtime).
 - **Motivation:** Pins a fixed, ceremony-wide message byte width so leading zero bytes are
@@ -88,19 +87,7 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
 - **Migration:** Pass a positive `fullBytesLen` (the fixed message/hash width, e.g. `32`)
   to every signing constructor call. The value must be identical across all signers.
 
-#### 3. EdDSA round-3 hashes the full-length message
-- **What:** EdDSA signing round 3 now hashes the message left-padded to `fullBytesLen`
-  (`m.FillBytes`) instead of the minimal `m.Bytes()` when deriving `lambda`
-  (`eddsa/signing/round_3.go`). This changes each signer's `s` share, hence the final
-  signature scalar, whenever `fullBytesLen` exceeds the message's minimal byte length.
-- **Break type:** Wire/protocol (cross-version EdDSA signers compute incompatible shares
-  and produce an invalid aggregate signature).
-- **Motivation:** Canonical fixed-width message encoding; removes the leading-zero
-  ambiguity of minimal encoding.
-- **Provenance:** `BNB #284`.
-- **Migration:** Upgrade all EdDSA signers in lockstep with an identical `fullBytesLen`.
-
-#### 4. Tagged-hash / session-bound Fiat-Shamir challenges (DLN, Schnorr, MtA, range proof)
+#### 3. Tagged-hash / session-bound Fiat-Shamir challenges (DLN, Schnorr, MtA, range proof)
 - **What:** Challenge derivation for DLN (`crypto/dlnproof`), Schnorr
   (`crypto/schnorr`), MtA `ProofBob`/`ProofBobWC` (`crypto/mta/proofs.go`), and
   `RangeProofAlice` (`crypto/mta/range_proof.go`) now uses length-delimited tagged hashing
@@ -119,7 +106,7 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
 - **Migration:** Coordinated network-wide upgrade; no mixed old/new parties. Any persisted
   pre-upgrade proofs are not re-verifiable.
 
-#### 5. Tagged Fiat-Shamir for Paillier ModProof / FactorProof (active on the protocol path)
+#### 4. Tagged Fiat-Shamir for Paillier ModProof / FactorProof (active on the protocol path)
 - **What:** `ModProof`/`ModVerify` and `FactorProof`/`FactorVerify`
   (`crypto/paillier/mod_proof.go`, `factor_proof.go`) gain an optional session tag. When a
   session tag **is** supplied they use tagged hashing (`common.HashToNTagged`, sized to the
@@ -131,30 +118,33 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
   was retained; no BNB no-proof escape hatches were introduced.
 - **Provenance:** `BNB #252`, `BNB #257`; the in-tree round code now passes session tags,
   so in practice this is active on the protocol path.
-- **Migration:** Covered by the coordinated upgrade in Breaking Change 1/4.
+- **Migration:** Covered by the coordinated upgrade in Breaking Change 1/3.
 
-#### 6. ECDSA resharing broadcasts and validates an SSID (`DGRound1Message`)
-- **What:** `DGRound1Message` gains a new wire field `bytes ssid = 4`
-  (`protob/ecdsa-resharing.proto`). The new committee rejects any DGRound1 broadcast whose
-  SSID does not equal its locally-derived SSID, with culprit attribution
-  (`ecdsa/resharing/round_1_old_step_1.go`), and `ValidateBasic` now requires a 32-byte
-  SSID (`ecdsa/resharing/messages.go`). The exported constructor `NewDGRound1Message` gains
-  a required `ssid []byte` parameter.
-- **Break type:** Wire/protocol (old and new resharing parties cannot interoperate) **and
-  source/compile** — this is the **only** exported signature in the whole integration that
-  changed in a source-breaking way; external callers constructing `DGRound1Message`
-  directly must update.
-- **Motivation:** Lets the new committee detect a corrupted old-committee party that
-  broadcasts an inconsistent SSID (committee-substitution / context-disagreement
-  detection).
-- **Provenance:** `threshold-original`, derived from the `BNB fc38979` session work.
-- **Migration:** Upgrade both committees in lockstep; set a session nonce (Breaking Change
-  1); update any direct `NewDGRound1Message` callers to pass `ssid`.
+> Every session / `fullBytesLen` parameter was added as a trailing variadic argument, so all
+> existing call sites compile unchanged — no exported signature changed. The breaks above are
+> runtime/wire, not compile-time. (The one source/compile break that previously existed,
+> `NewDGRound1Message`, was removed along with ECDSA resharing in PR #5.) Verified by diffing
+> every exported signature between the base and HEAD.
 
-> Aside from `NewDGRound1Message` (Breaking Change 6), every session / `fullBytesLen`
-> parameter was added as a trailing variadic argument, so all other existing call sites
-> compile unchanged. The breaks above are runtime/wire, not compile-time. This was verified
-> by diffing every exported signature between the base and HEAD.
+### Removed
+
+#### EdDSA protocols (PR #5)
+- The `eddsa/keygen`, `eddsa/signing`, and `eddsa/resharing` packages and their protobuf
+  definitions (`protob/eddsa-*.proto`) were deleted; this fork now targets ECDSA only (the
+  tBTC use case). The `Ed25519` curve registration and `tss.Edwards()` helper
+  (`tss/curve.go`), the EdDSA message types (`protob/message.proto`), the EdDSA keygen test
+  fixtures, and the `github.com/agl/ed25519` and `github.com/decred/dcrd/dcrec/edwards/v2`
+  dependencies (with the `binance-chain/edwards25519` replace) were removed accordingly. The
+  EdDSA-specific hardening from PR #2 — full-length round-3 message hashing, the EdDSA keygen
+  `NewECPoint` nil-pointer fix, EdDSA signing session-nonce fail-closed — is moot on this fork
+  and has been dropped from the entries above. _Provenance: `threshold-original`, PR #5._
+
+#### ECDSA resharing protocol (PR #5)
+- The `ecdsa/resharing` package, its protobuf (`protob/ecdsa-resharing.proto`), the
+  `DGRound1Message` SSID wire field, and the exported `NewDGRound1Message` constructor were
+  deleted. The resharing SSID-broadcast wire break and the `NewDGRound1Message` source/compile
+  break documented for PR #2 therefore no longer apply, and the session-nonce fail-closed
+  requirement (Breaking Change 1) no longer covers resharing. _Provenance: `threshold-original`, PR #5._
 
 ### Security & correctness hardening (non-breaking)
 
@@ -187,15 +177,12 @@ rejecting input that an honest caller would previously have produced.
   (`crypto/ecpoint.go`, backing `NewECPoint`, `GobDecode`, `UnmarshalJSON`) now rejects
   coordinates outside `[0, P)`. Honest callers never produce out-of-range coordinates;
   this hardens against malicious peer input. _Provenance: `BNB 685c2af`._
-- **`round.ok` accumulation fix:** all non-terminal ECDSA/EdDSA keygen, signing, and
-  resharing rounds now accumulate per-party readiness across the whole message set instead
-  of bailing on the first not-ready party, fixing inconsistent bookkeeping under
-  out-of-order message delivery. Internal only; no wire or API change. _Provenance:
-  `BNB #282` (`409542e`)._
-- **Nil-guards:** `BaseParty.String()` returns `"No more rounds"` instead of panicking
-  after completion (`BNB #276`, `f3aad28`); the EdDSA resharing round-1 party-0 broadcast
-  and EdDSA keygen `NewECPoint`-error path are guarded against nil dereference
-  (`BNB #282`, `BNB 5d0d0f3`).
+- **`round.ok` accumulation fix:** all non-terminal ECDSA keygen and signing rounds now
+  accumulate per-party readiness across the whole message set instead of bailing on the
+  first not-ready party, fixing inconsistent bookkeeping under out-of-order message
+  delivery. Internal only; no wire or API change. _Provenance: `BNB #282` (`409542e`)._
+- **`BaseParty.String()` nil guard:** returns `"No more rounds"` instead of panicking after
+  completion. _Provenance: `BNB #276` (`f3aad28`)._
 - **Panic/DoS guards on EC point operations (PR #4):** `ECPoint.ScalarMult`,
   `ScalarBaseMult`, `Add`, `SetCurve`, `EightInvEight`, and `isOnCurve` return nil/error on
   nil or invalid inputs instead of panicking (`crypto/ecpoint.go`). Signatures unchanged;
@@ -271,9 +258,8 @@ rejecting input that an honest caller would previously have produced.
 
 ### Residual risks
 
-- Applications **must** call `SetSessionNonce`/`SetSessionNonceBytes` before keygen,
-  signing, and ECDSA resharing; those protocols fail closed without it.
-- EdDSA resharing has no SSID-bound proof transcript in this port.
+- Applications **must** call `SetSessionNonce`/`SetSessionNonceBytes` before keygen and
+  signing; those protocols fail closed without it.
 - The optional constant-time work is not integrated.
 
 [Unreleased]: https://github.com/threshold-network/tss-lib/compare/2e712689...HEAD
