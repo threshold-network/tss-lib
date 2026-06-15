@@ -33,6 +33,7 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #4** — BNB #332 tBTC-relevant hardening backport (stacked on PR #2).
 - **PR #5** — removal of EdDSA and ECDSA resharing protocols (stacked on PR #4).
 - **PR #6** — remaining BNB cryptographic hardening follow-ups (stacked on PR #5).
+- **PR #7** — signing round-9 decommitment validation and related fixes (stacked on PR #6).
 
 ### ⚠️ Compatibility — read before upgrading
 
@@ -277,6 +278,24 @@ rejecting input that an honest caller would previously have produced.
   bytes are made deterministic; large-modulus `sampleYModN` block indexing is fixed; and
   canonical-generator checks were added in `crypto/commitments` and `crypto/paillier`.
   _Provenance: `BNB #332` + `threshold-original`, PR #6._
+- **ECDSA signing round-9 decommitment curve-point validation (PR #7):** decommitted
+  `Uj`/`Tj` coordinates are now validated as canonical curve points (`crypto.NewECPoint`)
+  before any group operation, with failures attributed to the sending party
+  (`ecdsa/signing/round_9.go`). Previously off-curve coordinates went straight into
+  `elliptic.Curve.Add`, which panics for Go's stdlib curves and yields undefined coordinates
+  for btcec — turning a malformed decommitment into a crash or an unattributed `U != T` abort
+  that blamed the honest reporter. Layered on PR #4's `decommitFour` length guard. Honest
+  decommitments are unaffected. _Provenance: `BNB #332`, PR #7._
+- **ECDSA signing round-1 message-range validation (PR #7):** signing `Start()` now rejects a
+  nil, negative, or `>= curve order` hashed message instead of panicking on `Cmp` (nil) or
+  surfacing later as an unattributed finalize verification failure (negative)
+  (`ecdsa/signing/round_1.go`). Honest callers passing a hash in `[0, N)` are unaffected.
+  _Provenance: `threshold-original`, PR #7._
+- **Paillier FactorVerify distinct-generator check (PR #7):** `FactorVerify` rejects equal
+  Pedersen bases (`s == t`), under which the binding degenerates, mirroring the
+  distinct-generator policy already enforced by DLN and MtA proofs
+  (`crypto/paillier/factor_proof.go`). Honest setups use distinct generators.
+  _Provenance: `threshold-original`, PR #7._
 
 ### Added
 
