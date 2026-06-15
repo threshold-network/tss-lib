@@ -7,10 +7,12 @@ This fork follows the upstream [`bnb-chain/tss-lib`](https://github.com/bnb-chai
 SemVer line for provenance but has not yet published its own tagged release; all changes
 below are therefore listed under `[Unreleased]`.
 
-Provenance notation:
-- `BNB #NNN` / `BNB <sha>` — adapted from the named upstream pull request or commit. Most
-  were **manually adapted**, not cherry-picked, so behavior may differ from upstream.
-- `threshold-original` — introduced in this fork with no direct upstream counterpart.
+Provenance notation. Each entry carries two kinds of reference:
+- **Upstream source** — `BNB #NNN` / `BNB <sha>` is the upstream pull request or commit the
+  change was adapted from. Most were **manually adapted**, not cherry-picked, so behavior may
+  differ from upstream. `threshold-original` means there is no direct upstream counterpart.
+- **Fork PR** — `PR #N` is the `threshold-network/tss-lib` pull request that introduced the
+  change into this fork, for traceability.
 
 ---
 
@@ -21,6 +23,11 @@ without replacing Threshold's existing Paillier/NTilde `ModProof`/`FactorProof` 
 
 - Threshold base: `2e712689cfbeefede15f95a0ec7112227d86f702`
 - BNB upstream head compared: `3f677ff761fcf692edb0243a5d812930844d879a`
+
+This unreleased set is delivered through a stack of fork pull requests. **Every entry below
+belongs to PR #2 (the base BNB hardening integration) unless it is tagged with another
+`PR #N`.** Composing PRs:
+- **PR #2** — base BNB hardening integration.
 
 ### ⚠️ Compatibility — read before upgrading
 
