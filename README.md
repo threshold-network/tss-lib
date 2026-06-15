@@ -13,20 +13,17 @@ Permissively MIT Licensed.
 Note! This is a library for developers. You may find a TSS tool that you can use with the Binance Chain CLI [here](https://docs.binance.org/tss.html).
 
 ## Introduction
-This is an implementation of multi-party {t,n}-threshold ECDSA (Elliptic Curve Digital Signature Algorithm) based on Gennaro and Goldfeder CCS 2018 [1] and EdDSA (Edwards-curve Digital Signature Algorithm) following a similar approach.
+This Threshold-maintained fork is an implementation of multi-party {t,n}-threshold ECDSA (Elliptic Curve Digital Signature Algorithm) based on Gennaro and Goldfeder CCS 2018 [1].
 
-This library includes three protocols:
+This fork includes the protocols used by Threshold/tBTC:
 
 * Key Generation for creating secret shares with no trusted dealer ("keygen").
 * Signing for using the secret shares to generate a signature ("signing").
-* Dynamic Groups to change the group of participants while keeping the secret ("resharing").
 
 ⚠️ Do not miss [these important notes](#how-to-use-this-securely) on implementing this library securely
 
 ## Rationale
-ECDSA is used extensively for crypto-currencies such as Bitcoin, Ethereum (secp256k1 curve), NEO (NIST P-256 curve) and many more. 
-
-EdDSA is used extensively for crypto-currencies such as Cardano, Aeternity, Stellar Lumens and many more.
+ECDSA is used extensively for crypto-currencies such as Bitcoin, Ethereum (secp256k1 curve), NEO (NIST P-256 curve) and many more.
 
 For such currencies this technique may be used to create crypto wallets where multiple parties must collaborate to sign transactions. See [MultiSig Use Cases](https://en.bitcoin.it/wiki/Multisignature#Multisignature_Applications)
 
@@ -39,7 +36,7 @@ There is also a performance bonus in that blockchain nodes may check the validit
 ## Usage
 You should start by creating an instance of a `LocalParty` and giving it the arguments that it needs.
 
-The `LocalParty` that you use should be from the `keygen`, `signing` or `resharing` package depending on what you want to do.
+The `LocalParty` that you use should be from the `keygen` or `signing` package depending on what you want to do.
 
 ### Setup
 ```go
@@ -57,11 +54,8 @@ parties := tss.SortPartyIDs(getParticipantPartyIDs())
 thisParty := tss.NewPartyID(id, moniker, uniqueKey)
 ctx := tss.NewPeerContext(parties)
 
-// Select an elliptic curve
-// use ECDSA
+// Select an elliptic curve.
 curve := tss.S256()
-// or use EdDSA
-// curve := tss.Edwards()
 
 params := tss.NewParameters(curve, ctx, thisParty, len(parties), threshold)
 
@@ -97,21 +91,6 @@ go func() {
 }()
 ```
 
-### Re-Sharing
-Use the `resharing.LocalParty` to re-distribute the secret shares. The save data received through the `endCh` should overwrite the existing key data in storage, or write new data if the party is receiving a new share.
-
-Please note that `ReSharingParameters` is used to give this Party more context about the re-sharing that should be carried out.
-
-```go
-party := resharing.NewLocalParty(params, ourKeyData, outCh, endCh)
-go func() {
-    err := party.Start()
-    // handle err ...
-}()
-```
-
-⚠️ During re-sharing the key data may be modified during the rounds. Do not ever overwrite any data saved on disk until the final struct has been received through the `end` channel.
-
 ## Messaging
 In these examples the `outCh` will collect outgoing messages from the party and the `endCh` will receive save data or a signature when the protocol is complete.
 
@@ -145,7 +124,7 @@ The transport for messaging is left to the application layer and is not provided
 
 When you build a transport, it should offer a broadcast channel as well as point-to-point channels connecting every pair of parties. Your transport should also employ suitable end-to-end encryption (TLS with an [AEAD cipher](https://en.wikipedia.org/wiki/Authenticated_encryption#Authenticated_encryption_with_associated_data_(AEAD)) is recommended) between parties to ensure that a party can only read the messages sent to it.
 
-Within your transport, each message should be wrapped with a **session ID** that is unique to a single run of the keygen, signing or re-sharing rounds. This session ID should be agreed upon out-of-band and known only by the participating parties before the rounds begin. Upon receiving any message, your program should make sure that the received session ID matches the one that was agreed upon at the start.
+Within your transport, each message should be wrapped with a **session ID** that is unique to a single run of the keygen or signing rounds. This session ID should be agreed upon out-of-band and known only by the participating parties before the rounds begin. Upon receiving any message, your program should make sure that the received session ID matches the one that was agreed upon at the start.
 
 The same session ID should be bound into the protocol parameters before constructing local parties:
 
@@ -154,7 +133,7 @@ params := tss.NewParameters(curve, ctx, thisParty, len(parties), threshold)
 params.SetSessionNonceBytes([]byte(sessionID))
 ```
 
-All parties in the run must use the same high-entropy session ID of at least 16 bytes, and it must be unique to the ceremony. Keygen, signing, and ECDSA re-sharing fail closed if no session nonce is set; reusing a session ID across otherwise identical ceremonies reintroduces transcript-splicing risk.
+All parties in the run must use the same high-entropy session ID of at least 16 bytes, and it must be unique to the ceremony. Keygen and signing fail closed if no session nonce is set; reusing a session ID across otherwise identical ceremonies reintroduces transcript-splicing risk.
 
 Additionally, there should be a mechanism in your transport to allow for "reliable broadcasts", meaning parties can broadcast a message to other parties such that it's guaranteed that each one receives the same message. There are several examples of algorithms online that do this by sharing and comparing hashes of received messages.
 

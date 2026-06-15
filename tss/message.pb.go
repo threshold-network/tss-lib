@@ -36,9 +36,9 @@ type MessageWrapper struct {
 	// Metadata optionally un-marshalled and used by the transport to route this message.
 	IsBroadcast bool `protobuf:"varint,1,opt,name=is_broadcast,json=isBroadcast,proto3" json:"is_broadcast,omitempty"`
 	// Metadata optionally un-marshalled and used by the transport to route this message.
-	IsToOldCommittee bool `protobuf:"varint,2,opt,name=is_to_old_committee,json=isToOldCommittee,proto3" json:"is_to_old_committee,omitempty"` // used only in certain resharing messages
+	IsToOldCommittee bool `protobuf:"varint,2,opt,name=is_to_old_committee,json=isToOldCommittee,proto3" json:"is_to_old_committee,omitempty"` // legacy resharing routing field
 	// Metadata optionally un-marshalled and used by the transport to route this message.
-	IsToOldAndNewCommittees bool `protobuf:"varint,5,opt,name=is_to_old_and_new_committees,json=isToOldAndNewCommittees,proto3" json:"is_to_old_and_new_committees,omitempty"` // used only in certain resharing messages
+	IsToOldAndNewCommittees bool `protobuf:"varint,5,opt,name=is_to_old_and_new_committees,json=isToOldAndNewCommittees,proto3" json:"is_to_old_and_new_committees,omitempty"` // legacy resharing routing field
 	// Metadata optionally un-marshalled and used by the transport to route this message.
 	From *MessageWrapper_PartyID `protobuf:"bytes,3,opt,name=from,proto3" json:"from,omitempty"`
 	// Metadata optionally un-marshalled and used by the transport to route this message.
