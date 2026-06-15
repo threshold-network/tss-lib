@@ -28,6 +28,7 @@ This unreleased set is delivered through a stack of fork pull requests. **Every 
 belongs to PR #2 (the base BNB hardening integration) unless it is tagged with another
 `PR #N`.** Composing PRs:
 - **PR #2** — base BNB hardening integration.
+- **PR #4** — BNB #332 tBTC-relevant hardening backport (stacked on PR #2).
 
 ### ⚠️ Compatibility — read before upgrading
 
@@ -195,6 +196,41 @@ rejecting input that an honest caller would previously have produced.
   after completion (`BNB #276`, `f3aad28`); the EdDSA resharing round-1 party-0 broadcast
   and EdDSA keygen `NewECPoint`-error path are guarded against nil dereference
   (`BNB #282`, `BNB 5d0d0f3`).
+- **Panic/DoS guards on EC point operations (PR #4):** `ECPoint.ScalarMult`,
+  `ScalarBaseMult`, `Add`, `SetCurve`, `EightInvEight`, and `isOnCurve` return nil/error on
+  nil or invalid inputs instead of panicking (`crypto/ecpoint.go`). Signatures unchanged;
+  honest callers never pass nil. _Provenance: `BNB #332`, PR #4._
+- **Schnorr verifier pre-checks (PR #4):** `Verify`/`VerifyWithSession` reject nil/invalid
+  public points, zero or out-of-range scalars, a zero challenge, and nil scalar-mult results
+  before use (`crypto/schnorr/schnorr_proof.go`). Challenge derivation is unchanged;
+  malicious/degenerate input only. _Provenance: `BNB #332`, PR #4._
+- **DLN verifier canonical `Alpha` check (PR #4):** `Verify` requires each `Alpha` to be
+  canonically in `(1, N)` instead of accepting values that only landed in range after
+  reduction mod `N`, and guards nil `h1`/`h2`/`N`/`Alpha`/`T` (`crypto/dlnproof/proof.go`).
+  Honest provers already produce canonical `Alpha`. _Provenance: `BNB #332`, PR #4._
+- **Paillier FactorProof response bounds (PR #4):** the verifier rejects `W1`, `W2`,
+  `Sigma`, and `V` outside their absolute bounds (keeping the existing inclusive `Z1`/`Z2`
+  style) before verification (`crypto/paillier/factor_proof.go`). Honest proofs pass.
+  _Provenance: `BNB #332`, PR #4._
+- **MtA / range-proof bounds and nil guards (PR #4):** `ProofBob`/`ProofBobWC`/
+  `RangeProofAlice` verifiers reject nil moduli/inputs, tighten the `S2`/`T2` upper bounds to
+  exclusive, and add an explicit nil-result check after `xE.Add(pf.U)` (`crypto/mta/*.go`).
+  Honest proofs pass. _Provenance: `BNB #332`, PR #4._
+- **VSS share-verification guards (PR #4):** `Verify` rejects nil, zero, and out-of-range
+  shares and verifier points (and validates each commitment point) before scalar
+  multiplication (`crypto/vss/feldman_vss.go`). _Provenance: `BNB #332`, PR #4._
+- **ECDSA keygen round-1 modulus-width check (PR #4):** `KGRound1Message.ValidateBasic`
+  rejects Paillier `N` / `NTilde` that are not exactly 2048 bits, failing fast on malformed
+  peer messages and mirroring the pre-existing round-2 contract. Honest 2048-bit keys are
+  unaffected. _Provenance: `BNB #332`, PR #4._
+- **ECDSA signing round-9 decommitment guard fix (PR #4):** corrected the de-commitment
+  validation from `!ok && len(values) != 4` to `!ok || len(values) != 4` (extracted as
+  `decommitFour`), closing a soundness/DoS gap where a malformed or oversized de-commitment
+  could be read as attacker-chosen point coordinates or cause an out-of-range panic
+  (`ecdsa/signing/round_9.go`). _Provenance: `BNB #332`, PR #4._
+- **ECDSA signing round-4 nil theta-inverse guard (PR #4):** a non-invertible theta
+  (`ModInverse` returning nil) is rejected with a clean error instead of propagating nil
+  (`ecdsa/signing/round_4.go`). _Provenance: `BNB #332`, PR #4._
 
 ### Added
 
@@ -209,6 +245,9 @@ rejecting input that an honest caller would previously have produced.
 - `schnorr.NewZKProofWithSession`, `NewZKVProofWithSession`, `VerifyWithSession` — session-
   aware Schnorr proof overloads (the original signatures are retained and delegate with a
   nil session).
+- `mta.ErrRangeProofVerify` (PR #4) — sentinel error letting ECDSA signing round 2 attribute
+  a peer's MtA range-proof rejection to the offending party (`crypto/mta/share_protocol.go`,
+  `ecdsa/signing/round_2.go`). _Provenance: `BNB #332`, PR #4._
 
 ### Notes
 
