@@ -131,6 +131,18 @@ func TestFactorProofVerifyFail3(t *testing.T) {
 	assert.False(t, res, "proof verify result must be false")
 }
 
+func TestFactorProofVerifyRejectsEqualGenerators(t *testing.T) {
+	facSetUp(t)
+	// A proof built with identical Pedersen bases (s == t) is internally
+	// self-consistent and would otherwise verify, but equal generators make
+	// the commitment binding degenerate. Sibling proofs (dlnproof, MtA
+	// range/respondent) reject equal generators, so FactorVerify must too.
+	proof := privateKey.FactorProof(auxPrime.N, s, s)
+	res, err := proof.FactorVerify(publicKey.N, auxPrime.N, s, s)
+	assert.Error(t, err)
+	assert.False(t, res, "proof with s == t must be rejected")
+}
+
 func TestFactorProofVerifyRejectsNonInvertibleBase(t *testing.T) {
 	facSetUp(t)
 	proof := privateKey.FactorProof(auxPrime.N, s, tt)

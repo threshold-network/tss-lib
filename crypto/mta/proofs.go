@@ -98,7 +98,7 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 
 	// 11-12. e'
 	var e *big.Int
-	{ // must use RejectionSample
+	{ // derive the Fiat-Shamir challenge by reducing the hash mod q
 		var eHash *big.Int
 		// X is nil if called by ProveBob (Bob's proof "without check")
 		if X == nil {
@@ -293,7 +293,7 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 
 	// 1-2. e'
 	var e *big.Int
-	{ // must use RejectionSample
+	{ // derive the Fiat-Shamir challenge by reducing the hash mod q
 		var eHash *big.Int
 		// X is nil if called on a ProveBob (Bob's proof "without check")
 		if X == nil {

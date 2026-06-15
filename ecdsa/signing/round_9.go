@@ -10,6 +10,9 @@ import (
 	"errors"
 	"math/big"
 
+	errors2 "github.com/pkg/errors"
+
+	"github.com/bnb-chain/tss-lib/crypto"
 	"github.com/bnb-chain/tss-lib/crypto/commitments"
 	"github.com/bnb-chain/tss-lib/tss"
 )
@@ -35,8 +38,8 @@ func (round *round9) Start() *tss.Error {
 	round.started = true
 	round.resetOK()
 
-	UX, UY := round.temp.Ui.X(), round.temp.Ui.Y()
-	TX, TY := round.temp.Ti.X(), round.temp.Ti.Y()
+	U := round.temp.Ui
+	T := round.temp.Ti
 	for j, Pj := range round.Parties().IDs() {
 		if j == round.PartyID().Index {
 			continue
@@ -47,14 +50,36 @@ func (round *round9) Start() *tss.Error {
 		cj, dj := r7msg.UnmarshalCommitment(), r8msg.UnmarshalDeCommitment()
 		values, ok := decommitFour(commitments.HashCommitDecommit{C: cj, D: dj})
 		if !ok {
-			return round.WrapError(errors.New("de-commitment for bigVj and bigAj failed"), Pj)
+			return round.WrapError(errors.New("de-commitment for bigUj and bigTj failed"), Pj)
 		}
-		UjX, UjY, TjX, TjY := values[0], values[1], values[2], values[3]
-		UX, UY = round.Params().EC().Add(UX, UY, UjX, UjY)
-		TX, TY = round.Params().EC().Add(TX, TY, TjX, TjY)
+		// The decommitted coordinates are adversarial wire data; validate them
+		// as canonical curve points before any group operation. Go's stdlib
+		// curves panic on off-curve inputs to Add, and btcec returns undefined
+		// coordinates, which would have turned a malformed decommitment into a
+		// crash or an unattributed U != T abort.
+		bigUj, err := crypto.NewECPoint(round.Params().EC(), values[0], values[1])
+		if err != nil {
+			return round.WrapError(errors2.Wrapf(err, "NewECPoint(bigUj)"), Pj)
+		}
+		bigTj, err := crypto.NewECPoint(round.Params().EC(), values[2], values[3])
+		if err != nil {
+			return round.WrapError(errors2.Wrapf(err, "NewECPoint(bigTj)"), Pj)
+		}
+		U, err = U.Add(bigUj)
+		if err != nil {
+			return round.WrapError(errors2.Wrapf(err, "U.Add(bigUj)"), Pj)
+		}
+		T, err = T.Add(bigTj)
+		if err != nil {
+			return round.WrapError(errors2.Wrapf(err, "T.Add(bigTj)"), Pj)
+		}
 	}
-	if UX.Cmp(TX) != 0 || UY.Cmp(TY) != 0 {
-		return round.WrapError(errors.New("U doesn't equal T"), round.PartyID())
+	// A mismatch here proves some party misbehaved in phase 5 but does not
+	// identify which one, so no culprit is attributed. The previous behaviour
+	// blamed the honest reporting party itself, which would misdirect any
+	// orchestration layer that acts on culprits.
+	if !U.Equals(T) {
+		return round.WrapError(errors.New("U doesn't equal T"))
 	}
 
 	r9msg := NewSignRound9Message(round.PartyID(), round.temp.si)
