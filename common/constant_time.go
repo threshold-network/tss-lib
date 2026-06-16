@@ -4,23 +4,37 @@
 // terms governing use, modification, and redistribution, is contained in the
 // file LICENSE at the root of the source code distribution tree.
 
-// Package common provides constant-time big integer operations for cryptographic use.
+// Package common provides constant-time big integer helpers for cryptographic use.
 //
 // SECURITY NOTE: Go's math/big package is NOT constant-time and should not be used
-// with secret values. This module provides constant-time alternatives using
-// filippo.io/bigmod, which is the same library used by Go's crypto/rsa.
+// with secret values. This module provides constant-time helpers for the
+// secret-exponent operations enumerated below, using filippo.io/bigmod (the same
+// constant-time core used by Go's crypto/rsa).
+//
+// COVERAGE: When enabled via EnableConstantTimeOps, the constant-time path is applied
+// to modular exponentiations whose EXPONENT is a long-term secret, witness, trapdoor,
+// or secret plaintext/scalar: Paillier Decrypt / Encrypt (gamma^m) / HomoMult, the
+// Paillier mod- and factor-proofs, the DLN proof, the ring-Pedersen trapdoor setup in
+// keygen, and the MtA range and regular proofs.
+//
+// Deliberately NOT hardened (left on math/big), and the reasons:
+//   - Public-exponent operations, where the timing reveals only public data: x^N in
+//     Encrypt, r^e, and every verifier-side exponentiation (challenges and proof
+//     responses are public).
+//   - One-time random per-proof blinds (e.g. h2^rho, h1^alpha in the MtA proofs). These
+//     are the same class as the secrets but are fresh, single-use auxiliary randomness;
+//     leaving them on math/big is a pragmatic deferral, NOT a safety guarantee.
+//   - Exponentiations modulo an even value (e.g. inverses mod phi(N)): bigmod requires
+//     an odd modulus, so these stay on math/big.
 //
 // Reference: https://github.com/golang/go/issues/20654
 
 package common
 
 import (
-	"crypto/rand"
-	"crypto/subtle"
 	"math/big"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"filippo.io/bigmod"
 )
@@ -45,11 +59,8 @@ func IsConstantTimeEnabled() bool {
 	return atomic.LoadInt32(&constantTimeEnabled) == 1
 }
 
-// CTModInt provides constant-time modular arithmetic using filippo.io/bigmod.
-// This is the recommended implementation as bigmod is:
-// 1. Maintained by the Go crypto team lead (Filippo Valsorda)
-// 2. The same code used internally by crypto/rsa and crypto/ecdsa
-// 3. Highly optimized with architecture-specific assembly
+// CTModInt provides constant-time modular arithmetic backed by filippo.io/bigmod
+// (the same constant-time core used by Go's crypto/rsa and crypto/ecdsa).
 type CTModInt struct {
 	mod        *bigmod.Modulus
 	modBigInt  *big.Int
@@ -58,9 +69,27 @@ type CTModInt struct {
 	bytePool   sync.Pool
 }
 
+// leftPad returns b left-padded with zero bytes to width; if b is already at least
+// width bytes it is returned unchanged. Padding a secret exponent to a fixed width
+// keeps bigmod.Nat.Exp's running time independent of the exponent's magnitude (its
+// work is proportional to len(e)); leading zero bytes are no-op squarings and do not
+// change the result.
+func leftPad(b []byte, width int) []byte {
+	if len(b) >= width {
+		return b
+	}
+	padded := make([]byte, width)
+	copy(padded[width-len(b):], b)
+	return padded
+}
+
 // NewCTModInt creates a constant-time modular context using bigmod.
-// Note: bigmod requires odd modulus for Exp operations.
+// The modulus must be odd (a requirement of bigmod's Exp); this is asserted here so
+// the failure surfaces at construction rather than at the first ExpCT call.
 func NewCTModInt(mod *big.Int) *CTModInt {
+	if mod.Bit(0) == 0 {
+		panic("NewCTModInt: modulus must be odd")
+	}
 	modBytes := mod.Bytes()
 	m, err := bigmod.NewModulus(modBytes)
 	if err != nil {
@@ -75,7 +104,7 @@ func NewCTModInt(mod *big.Int) *CTModInt {
 	return &CTModInt{
 		mod:        m,
 		modBigInt:  new(big.Int).Set(mod),
-		inverseExp: modMinusTwo.Bytes(),
+		inverseExp: leftPad(modMinusTwo.Bytes(), byteLen),
 		byteLen:    byteLen,
 		bytePool: sync.Pool{
 			New: func() interface{} {
@@ -85,14 +114,14 @@ func NewCTModInt(mod *big.Int) *CTModInt {
 	}
 }
 
-// reduceToPaddedBytes reduces val mod ct.modBigInt and returns a zero-padded
-// byte slice of length ct.byteLen suitable for bigmod.Nat.SetBytes.
-// The reduction uses big.Int.Mod which is safe here because the modulus is public.
+// reduceToPaddedBytes reduces val into [0, modulus) and returns a zero-padded
+// big-endian byte slice of length ct.byteLen suitable for bigmod.Nat.SetBytes.
+// NOTE: big.Int.Mod is not constant-time, but it is applied unconditionally (no
+// secret-dependent branch) and the bases reduced here are public or already in range
+// at every call site. A caller passing a secret base near the modulus should be aware
+// the reduction's timing depends on the value.
 func (ct *CTModInt) reduceToPaddedBytes(val *big.Int) []byte {
-	reduced := val
-	if val.Sign() < 0 || val.Cmp(ct.modBigInt) >= 0 {
-		reduced = new(big.Int).Mod(val, ct.modBigInt)
-	}
+	reduced := new(big.Int).Mod(val, ct.modBigInt)
 
 	buf := ct.bytePool.Get().([]byte)
 	for i := range buf {
@@ -124,7 +153,14 @@ func (ct *CTModInt) ExpCT(base, exp *big.Int) *big.Int {
 	baseNat := bigmod.NewNat()
 	baseNat.SetBytes(paddedBase, ct.mod)
 
-	expBytes := exp.Bytes()
+	// Pad the exponent to a fixed width so the exponentiation's running time does not
+	// leak the secret exponent's magnitude (see leftPad).
+	expBytes := leftPad(exp.Bytes(), ct.byteLen)
+	defer func() {
+		for i := range expBytes {
+			expBytes[i] = 0
+		}
+	}()
 	result := bigmod.NewNat()
 	result.Exp(baseNat, expBytes, ct.mod)
 
@@ -155,13 +191,16 @@ func (ct *CTModInt) ModInverseCT(a *big.Int) *big.Int {
 
 	result := bigmod.NewNat()
 	result.Exp(aNat, ct.inverseExp, ct.mod)
+	inv := new(big.Int).SetBytes(result.Bytes(ct.mod))
 
-	return new(big.Int).SetBytes(result.Bytes(ct.mod))
-}
-
-// Mod returns the modulus as a big.Int.
-func (ct *CTModInt) Mod() *big.Int {
-	return new(big.Int).Set(ct.modBigInt)
+	// The Fermat/Euler inverse a^(mod-2) (or a^(phi-1)) is only the true inverse when
+	// gcd(a, mod) == 1; for non-coprime a it returns a well-defined but WRONG value
+	// rather than failing. Verify a*inv == 1 and return nil otherwise, so this matches
+	// math/big.ModInverse's nil-on-no-inverse contract and both code paths agree.
+	if ct.MulCT(a, inv).Cmp(big.NewInt(1)) != 0 {
+		return nil
+	}
+	return inv
 }
 
 // MulCT performs constant-time modular multiplication using bigmod.
@@ -195,6 +234,9 @@ func (ct *CTModInt) MulCT(x, y *big.Int) *big.Int {
 // This is required for correct ModInverse on composite moduli where phi(n) is known.
 // For RSA-like moduli n = p*q, pass phiN = (p-1)*(q-1).
 func NewCTModIntWithPhi(mod, phiN *big.Int) *CTModInt {
+	if mod.Bit(0) == 0 {
+		panic("NewCTModIntWithPhi: modulus must be odd")
+	}
 	modBytes := mod.Bytes()
 	m, err := bigmod.NewModulus(modBytes)
 	if err != nil {
@@ -208,7 +250,7 @@ func NewCTModIntWithPhi(mod, phiN *big.Int) *CTModInt {
 	return &CTModInt{
 		mod:        m,
 		modBigInt:  new(big.Int).Set(mod),
-		inverseExp: phiMinusOne.Bytes(), // Use phi(n)-1 instead of n-2
+		inverseExp: leftPad(phiMinusOne.Bytes(), byteLen), // Use phi(n)-1 instead of n-2
 		byteLen:    byteLen,
 		bytePool: sync.Pool{
 			New: func() interface{} {
@@ -216,73 +258,4 @@ func NewCTModIntWithPhi(mod, phiN *big.Int) *CTModInt {
 			},
 		},
 	}
-}
-
-// TimingProtection provides response time normalization to prevent timing attacks.
-type TimingProtection struct {
-	targetDuration time.Duration
-	jitterRange    time.Duration
-}
-
-// NewTimingProtection creates a TimingProtection with custom parameters.
-// targetDuration is the minimum padded duration for every operation.
-// jitterRange adds a random delay on top of targetDuration to prevent fingerprinting
-// the fixed padding boundary.
-func NewTimingProtection(targetDuration, jitterRange time.Duration) *TimingProtection {
-	return &TimingProtection{
-		targetDuration: targetDuration,
-		jitterRange:    jitterRange,
-	}
-}
-
-// ProtectBigInt wraps a function that returns *big.Int with timing normalization.
-// The total execution time is always >= targetDuration + a random jitter, regardless
-// of how long the actual operation takes.
-func (tp *TimingProtection) ProtectBigInt(fn func() (*big.Int, error)) (*big.Int, error) {
-	startTime := time.Now()
-	result, err := fn()
-	elapsed := time.Since(startTime)
-
-	padTo := tp.targetDuration
-	if elapsed > padTo {
-		padTo = elapsed
-	}
-	if tp.jitterRange > 0 {
-		jitterNanos, _ := rand.Int(rand.Reader, big.NewInt(int64(tp.jitterRange)))
-		padTo += time.Duration(jitterNanos.Int64())
-	}
-	if remaining := padTo - elapsed; remaining > 0 {
-		time.Sleep(remaining)
-	}
-	return result, err
-}
-
-// ConstantTimeCompare compares two big.Int values in constant time.
-// Both values are padded to padLen bytes before comparison to avoid leaking
-// relative magnitude. If padLen is 0, the maximum of the two byte lengths is used.
-func ConstantTimeCompare(a, b *big.Int, padLen int) int {
-	aBytes := a.Bytes()
-	bBytes := b.Bytes()
-
-	if padLen <= 0 {
-		padLen = len(aBytes)
-		if len(bBytes) > padLen {
-			padLen = len(bBytes)
-		}
-	}
-
-	padA := make([]byte, padLen)
-	padB := make([]byte, padLen)
-	if len(aBytes) <= padLen {
-		copy(padA[padLen-len(aBytes):], aBytes)
-	} else {
-		copy(padA, aBytes[len(aBytes)-padLen:])
-	}
-	if len(bBytes) <= padLen {
-		copy(padB[padLen-len(bBytes):], bBytes)
-	} else {
-		copy(padB, bBytes[len(bBytes)-padLen:])
-	}
-
-	return subtle.ConstantTimeCompare(padA, padB)
 }

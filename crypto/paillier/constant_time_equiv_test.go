@@ -45,6 +45,53 @@ func TestDecryptCTEquivalence(t *testing.T) {
 	assert.Zero(t, pt.Cmp(mOn), "CT Decrypt must recover the plaintext")
 }
 
+// TestHomoMultCTEquivalence: HomoMult(m, c1) = c1^m mod N2 is deterministic; CT and
+// non-CT must agree byte-for-byte, and the homomorphic multiplication property must
+// hold under CT. m is the secret scalar exponent hardened by the CT path.
+func TestHomoMultCTEquivalence(t *testing.T) {
+	facSetUp(t)
+
+	a := big.NewInt(111111)
+	b := big.NewInt(222222)
+	cA, err := publicKey.Encrypt(a)
+	assert.NoError(t, err)
+
+	cbOff, err := publicKey.HomoMult(b, cA)
+	assert.NoError(t, err)
+
+	common.EnableConstantTimeOps()
+	defer common.DisableConstantTimeOps()
+	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
+	cbOn, err := publicKey.HomoMult(b, cA)
+	assert.NoError(t, err)
+
+	assert.Zero(t, cbOff.Cmp(cbOn), "CT and non-CT HomoMult must be byte-identical")
+
+	// Dec(HomoMult(b, Enc(a))) must equal a*b mod N.
+	dec, err := privateKey.Decrypt(cbOn)
+	assert.NoError(t, err)
+	want := new(big.Int).Mod(new(big.Int).Mul(a, b), publicKey.N)
+	assert.Zero(t, want.Cmp(dec), "CT HomoMult must satisfy the homomorphic multiplication property")
+}
+
+// TestEncryptCTRoundTrip: Encrypt is randomised (fresh nonce x), so CT and non-CT
+// ciphertexts differ; instead verify that a CT-produced ciphertext decrypts back to the
+// plaintext, exercising the constant-time gamma^m path (m is the secret exponent).
+func TestEncryptCTRoundTrip(t *testing.T) {
+	facSetUp(t)
+
+	pt := big.NewInt(987654321)
+
+	common.EnableConstantTimeOps()
+	defer common.DisableConstantTimeOps()
+	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
+	cipher, err := publicKey.Encrypt(pt)
+	assert.NoError(t, err)
+	dec, err := privateKey.Decrypt(cipher)
+	assert.NoError(t, err)
+	assert.Zero(t, pt.Cmp(dec), "CT Encrypt must round-trip through Decrypt")
+}
+
 // TestPaillierProofCTEquivalence: the Paillier square-free Proof is deterministic
 // given (k, key, ecdsaPub); CT and non-CT must agree byte-for-byte and both verify.
 func TestPaillierProofCTEquivalence(t *testing.T) {

@@ -7,6 +7,7 @@
 package common
 
 import (
+	"bytes"
 	"crypto/rand"
 	"math/big"
 	"testing"
@@ -167,63 +168,53 @@ func TestCTModIntWithPhi(t *testing.T) {
 	}
 }
 
-// TestConstantTimeCompare verifies constant-time comparison
-func TestConstantTimeCompare(t *testing.T) {
-	a := big.NewInt(12345)
-	b := big.NewInt(12345)
-	c := big.NewInt(54321)
+// TestModInverseCTNonCoprime: for a base that shares a factor with the modulus there
+// is no inverse; ModInverseCT must return nil, matching math/big.ModInverse. Regression
+// for the Fermat/Euler-inverse silent-wrong-answer issue.
+func TestModInverseCTNonCoprime(t *testing.T) {
+	p, _ := rand.Prime(rand.Reader, 256)
+	q, _ := rand.Prime(rand.Reader, 256)
+	n := new(big.Int).Mul(p, q)
+	pMinus1 := new(big.Int).Sub(p, big.NewInt(1))
+	qMinus1 := new(big.Int).Sub(q, big.NewInt(1))
+	phiN := new(big.Int).Mul(pMinus1, qMinus1)
 
-	// Use explicit padLen to avoid leaking relative magnitude
-	if ConstantTimeCompare(a, b, 128) != 1 {
-		t.Error("ConstantTimeCompare should return 1 for equal values")
+	ctMod := NewCTModIntWithPhi(n, phiN)
+
+	// a = p shares the factor p with n, so it is not invertible mod n.
+	if got := ctMod.ModInverseCT(p); got != nil {
+		t.Errorf("ModInverseCT(p) for non-coprime input must be nil, got %v", got)
 	}
-
-	if ConstantTimeCompare(a, c, 128) != 0 {
-		t.Error("ConstantTimeCompare should return 0 for different values")
-	}
-
-	large := new(big.Int).Lsh(big.NewInt(1), 1024)
-	small := big.NewInt(1)
-	if ConstantTimeCompare(large, small, 128) != 0 {
-		t.Error("ConstantTimeCompare should return 0 for values with different magnitudes")
-	}
-
-	// Test with padLen=0 (fallback to maxLen)
-	if ConstantTimeCompare(a, b, 0) != 1 {
-		t.Error("ConstantTimeCompare with padLen=0 should return 1 for equal values")
+	if std := new(big.Int).ModInverse(p, n); std != nil {
+		t.Errorf("sanity: math/big.ModInverse(p, n) should also be nil, got %v", std)
 	}
 }
 
-// TestTimingProtectionBigInt verifies timing protection for BigInt operations
-func TestTimingProtectionBigInt(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping timing test in short mode")
+// TestExpCTExponentPadding verifies that padding the exponent to a fixed width (the
+// fix that hides the secret exponent's magnitude) does not change the result: leftPad
+// zero-extends correctly, and a short exponent still produces the same value as
+// math/big.Exp. Regression for the fixed-width exponent padding.
+func TestExpCTExponentPadding(t *testing.T) {
+	if got := leftPad([]byte{0x12, 0x34}, 5); !bytes.Equal(got, []byte{0, 0, 0, 0x12, 0x34}) {
+		t.Errorf("leftPad zero-extension = %v, want [0 0 0 18 52]", got)
 	}
-
-	tp := NewTimingProtection(50*time.Millisecond, 0)
+	if got := leftPad([]byte{0x12, 0x34}, 1); !bytes.Equal(got, []byte{0x12, 0x34}) {
+		t.Errorf("leftPad with width <= len must return input unchanged, got %v", got)
+	}
 
 	p, _ := rand.Prime(rand.Reader, 512)
 	q, _ := rand.Prime(rand.Reader, 512)
 	N := new(big.Int).Mul(p, q)
-
+	ctMod := NewCTModInt(N)
 	base, _ := rand.Int(rand.Reader, N)
-	exp, _ := rand.Int(rand.Reader, big.NewInt(1000))
 
-	start := time.Now()
-	result, err := tp.ProtectBigInt(func() (*big.Int, error) {
-		return new(big.Int).Exp(base, exp, N), nil
-	})
-	elapsed := time.Since(start)
-
-	if err != nil {
-		t.Errorf("ProtectBigInt returned error: %v", err)
-	}
-	if result == nil {
-		t.Error("ProtectBigInt returned nil result")
-	}
-
-	if elapsed < 20*time.Millisecond {
-		t.Errorf("TimingProtection should normalize to ~50ms, got %v", elapsed)
+	// A short exponent is padded to the full modulus width internally; the result must
+	// still match math/big.Exp.
+	for _, exp := range []*big.Int{big.NewInt(1), big.NewInt(0x010203), big.NewInt(255)} {
+		want := new(big.Int).Exp(base, exp, N)
+		if got := ctMod.ExpCT(base, exp); got.Cmp(want) != 0 {
+			t.Errorf("ExpCT(base, %v) = %v, want %v", exp, got, want)
+		}
 	}
 }
 
