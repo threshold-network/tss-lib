@@ -42,14 +42,27 @@ func (privateKey *PrivateKey) ModProof() *ModProof {
 	var b [PARAM_M]bool
 	var z [PARAM_M]*big.Int
 
+	// invN = N^(-1) mod phiN. phiN is even, so this inverse stays on math/big (bigmod
+	// requires an odd modulus); it is a prover-side value, never transmitted. Only the
+	// Exp mod N (odd) below carries the secret exponent and gets the constant-time path.
+	invN := new(big.Int).ModInverse(N, phiN)
+	var ctModN *common.CTModInt
+	if common.IsConstantTimeEnabled() {
+		ctModN = common.NewCTModInt(N)
+	}
+
 	for i, y_i := range y {
 		a_i, b_i, x_i := defineXi(w, y_i, p, q, N, phiN)
 		x[i] = x_i
 		a[i] = a_i
 		b[i] = b_i
 
-		z_i := new(big.Int).ModInverse(N, phiN)
-		z_i.Exp(y_i, z_i, N)
+		var z_i *big.Int
+		if common.IsConstantTimeEnabled() {
+			z_i = ctModN.ExpCT(y_i, invN)
+		} else {
+			z_i = new(big.Int).Exp(y_i, invN, N)
+		}
 
 		z[i] = z_i
 	}
@@ -173,6 +186,11 @@ func isQuadResidueModPrime(x, p *big.Int) bool {
 	ps := new(big.Int).Sub(p, big.NewInt(1))
 	ps = ps.Div(ps, big.NewInt(2))
 
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: p is a secret prime (odd) and the exponent (p-1)/2 is secret-derived;
+		// use the constant-time path.
+		return common.Eq(common.NewCTModInt(p).ExpCT(x, ps), big.NewInt(1))
+	}
 	return common.Eq(new(big.Int).Exp(x, ps, p), big.NewInt(1))
 }
 
@@ -182,6 +200,13 @@ func quadResidueModComposite(x, p, q, n, phiN *big.Int) *big.Int {
 	e := new(big.Int).Add(phiN, big.NewInt(4))
 	e = e.Div(e, big.NewInt(8))
 
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: the fourth-root exponent e derives from secret phiN; the modulus
+		// n = N is odd, so use the constant-time path for both square-root steps.
+		ctModN := common.NewCTModInt(n)
+		res := ctModN.ExpCT(x, e)
+		return ctModN.ExpCT(res, e)
+	}
 	res := new(big.Int).Exp(x, e, n)
 	res = res.Exp(res, e, n)
 

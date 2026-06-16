@@ -36,18 +36,38 @@ func NewDLNProof(h1, h2, x, p, q, N *big.Int) *Proof {
 	modN, modPQ := common.ModInt(N), common.ModInt(pMulQ)
 	a := make([]*big.Int, Iterations)
 	alpha := [Iterations]*big.Int{}
-	for i := range alpha {
-		a[i] = common.GetRandomPositiveInt(pMulQ)
-		alpha[i] = modN.Exp(h1, a[i])
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: h1^a[i] mod N uses the constant-time path (N is odd).
+		ctModN := common.NewCTModInt(N)
+		for i := range alpha {
+			a[i] = common.GetRandomPositiveInt(pMulQ)
+			alpha[i] = ctModN.ExpCT(h1, a[i])
+		}
+	} else {
+		for i := range alpha {
+			a[i] = common.GetRandomPositiveInt(pMulQ)
+			alpha[i] = modN.Exp(h1, a[i])
+		}
 	}
 	msg := append([]*big.Int{h1, h2, N}, alpha[:]...)
 	c := common.SHA512_256i(msg...)
 	t := [Iterations]*big.Int{}
 	cIBI := new(big.Int)
-	for i := range t {
-		cI := c.Bit(i)
-		cIBI = cIBI.SetInt64(int64(cI))
-		t[i] = modPQ.Add(a[i], modPQ.Mul(cIBI, x))
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: x is the secret discrete-log witness; multiply it in constant time
+		// (the modulus p*q is odd).
+		ctModPQ := common.NewCTModInt(pMulQ)
+		for i := range t {
+			cI := c.Bit(i)
+			cIBI = cIBI.SetInt64(int64(cI))
+			t[i] = modPQ.Add(a[i], ctModPQ.MulCT(cIBI, x))
+		}
+	} else {
+		for i := range t {
+			cI := c.Bit(i)
+			cIBI = cIBI.SetInt64(int64(cI))
+			t[i] = modPQ.Add(a[i], modPQ.Mul(cIBI, x))
+		}
 	}
 	return &Proof{alpha, t}
 }

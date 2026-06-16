@@ -52,8 +52,18 @@ func (privateKey *PrivateKey) FactorProof(N, s, t *big.Int) *FactorProof {
 
 	modN := common.ModInt(N)
 
-	P := modN.ExpMulExp(s, p, t, mu)
-	Q := modN.ExpMulExp(s, q, t, v)
+	var P, Q *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: p and q are the secret prime factors; their exponentiations get the
+		// constant-time path (N is the verifier's odd ring-Pedersen modulus). The t^mu /
+		// t^v blinds use random exponents and stay on math/big.
+		ctModN := common.NewCTModInt(N)
+		P = modN.Mul(ctModN.ExpCT(s, p), modN.Exp(t, mu))
+		Q = modN.Mul(ctModN.ExpCT(s, q), modN.Exp(t, v))
+	} else {
+		P = modN.ExpMulExp(s, p, t, mu)
+		Q = modN.ExpMulExp(s, q, t, v)
+	}
 	A := modN.ExpMulExp(s, a, t, x)
 	B := modN.ExpMulExp(s, b, t, y)
 	T := modN.ExpMulExp(Q, a, t, r)
