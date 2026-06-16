@@ -128,7 +128,15 @@ consumer:
 	alpha := common.GetRandomPositiveRelativelyPrimeInt(NTildei)
 	beta := modPQ.ModInverse(alpha)
 	h1i := modNTildeI.Mul(f1, f1)
-	h2i := modNTildeI.Exp(h1i, alpha)
+	var h2i *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: alpha is the secret ring-Pedersen trapdoor (stored long-term in
+		// LocalPreParams.Alpha and the discrete-log witness for the DLN proofs);
+		// exponentiate in constant time (NTildei is odd).
+		h2i = common.NewCTModInt(NTildei).ExpCT(h1i, alpha)
+	} else {
+		h2i = modNTildeI.Exp(h1i, alpha)
+	}
 
 	preParams := &LocalPreParams{
 		PaillierSK: paiSK,

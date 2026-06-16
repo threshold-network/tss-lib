@@ -56,8 +56,16 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 
 	// 5.
 	modNTilde := common.ModInt(NTilde)
-	z := modNTilde.Exp(h1, m)
-	z = modNTilde.Mul(z, modNTilde.Exp(h2, rho))
+	var z *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: m is Alice's secret value used as the exponent; exponentiate in
+		// constant time (NTilde is odd). The h2^rho blind and the u/w terms use one-time
+		// randomness and stay on math/big (see common/constant_time.go).
+		z = modNTilde.Mul(common.NewCTModInt(NTilde).ExpCT(h1, m), modNTilde.Exp(h2, rho))
+	} else {
+		z = modNTilde.Exp(h1, m)
+		z = modNTilde.Mul(z, modNTilde.Exp(h2, rho))
+	}
 
 	// 6.
 	modNSquared := common.ModInt(pk.NSquare())

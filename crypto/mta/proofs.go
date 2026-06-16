@@ -70,18 +70,24 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 		u = crypto.ScalarBaseMult(ec, alpha)
 	}
 
-	// 6.
+	// 6, 7, 8: z and t carry the secret MtA witnesses x and y as exponents; zPrm and the
+	// h2^* terms use one-time random blinds. Harden only the secret-exponent terms.
 	modNTilde := common.ModInt(NTilde)
-	z := modNTilde.Exp(h1, x)
-	z = modNTilde.Mul(z, modNTilde.Exp(h2, rho))
-
-	// 7.
 	zPrm := modNTilde.Exp(h1, alpha)
 	zPrm = modNTilde.Mul(zPrm, modNTilde.Exp(h2, rhoPrm))
 
-	// 8.
-	t := modNTilde.Exp(h1, y)
-	t = modNTilde.Mul(t, modNTilde.Exp(h2, sigma))
+	var z, t *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: x and y are Bob's secret MtA inputs; exponentiate them in constant
+		// time (NTilde is odd). The h2^rho / h2^sigma blinds use one-time randomness and
+		// stay on math/big (see the coverage note in common/constant_time.go).
+		ctModNTilde := common.NewCTModInt(NTilde)
+		z = modNTilde.Mul(ctModNTilde.ExpCT(h1, x), modNTilde.Exp(h2, rho))
+		t = modNTilde.Mul(ctModNTilde.ExpCT(h1, y), modNTilde.Exp(h2, sigma))
+	} else {
+		z = modNTilde.Mul(modNTilde.Exp(h1, x), modNTilde.Exp(h2, rho))
+		t = modNTilde.Mul(modNTilde.Exp(h1, y), modNTilde.Exp(h2, sigma))
+	}
 
 	// 9.
 	modNSquared := common.ModInt(NSquared)

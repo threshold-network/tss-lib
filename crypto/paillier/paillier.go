@@ -116,8 +116,15 @@ func (publicKey *PublicKey) EncryptAndReturnRandomness(m *big.Int) (c *big.Int, 
 	x = common.GetRandomPositiveRelativelyPrimeInt(publicKey.N)
 	N2 := publicKey.NSquare()
 	// 1. gamma^m mod N2
-	Gm := new(big.Int).Exp(publicKey.Gamma(), m, N2)
-	// 2. x^N mod N2
+	var Gm *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: m is the (often secret) plaintext used as the exponent; exponentiate
+		// in constant time (N2 is odd).
+		Gm = common.NewCTModInt(N2).ExpCT(publicKey.Gamma(), m)
+	} else {
+		Gm = new(big.Int).Exp(publicKey.Gamma(), m, N2)
+	}
+	// 2. x^N mod N2 (exponent N is public; the secret base x stays on math/big)
 	xN := new(big.Int).Exp(x, publicKey.N, N2)
 	// 3. (1) * (2) mod N2
 	c = common.ModInt(N2).Mul(Gm, xN)
@@ -138,6 +145,11 @@ func (publicKey *PublicKey) HomoMult(m, c1 *big.Int) (*big.Int, error) {
 		return nil, ErrMessageTooLong
 	}
 	// cipher^m mod N2
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: m is the secret scalar multiplier used as the exponent; exponentiate
+		// in constant time (N2 is odd).
+		return common.NewCTModInt(N2).ExpCT(c1, m), nil
+	}
 	return common.ModInt(N2).Exp(c1, m), nil
 }
 
