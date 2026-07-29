@@ -59,7 +59,7 @@ func NewDLNProof(h1, h2, x, p, q, N *big.Int, session ...[]byte) *Proof {
 		}
 	}
 	msg := append([]*big.Int{h1, h2, N}, alpha[:]...)
-	c := common.SHA512_256i_TAGGED(fsSessionDLNProof(Session), msg...)
+	c := proofChallenge(Session, msg...)
 	t := [Iterations]*big.Int{}
 	cIBI := new(big.Int)
 	if common.IsConstantTimeEnabled() {
@@ -107,7 +107,7 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 		}
 	}
 	msg := append([]*big.Int{h1, h2, N}, p.Alpha[:]...)
-	c := common.SHA512_256i_TAGGED(fsSessionDLNProof(Session), msg...)
+	c := proofChallenge(Session, msg...)
 	cIBI := new(big.Int)
 	for i := 0; i < Iterations; i++ {
 		cI := c.Bit(i)
@@ -120,6 +120,13 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 		}
 	}
 	return true
+}
+
+func proofChallenge(session []byte, values ...*big.Int) *big.Int {
+	if session == nil {
+		return common.SHA512_256i(values...)
+	}
+	return common.SHA512_256i_TAGGED(fsSessionDLNProof(session), values...)
 }
 
 func optionalSession(session [][]byte) []byte {

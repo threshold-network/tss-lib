@@ -9,7 +9,24 @@ package dlnproof
 import (
 	"math/big"
 	"testing"
+
+	"github.com/bnb-chain/tss-lib/common"
 )
+
+func TestLegacyChallengeMatchesHistoricalTranscript(t *testing.T) {
+	values := []*big.Int{
+		big.NewInt(2),
+		big.NewInt(3),
+		big.NewInt(5),
+		big.NewInt(7),
+	}
+
+	expected := common.SHA512_256i(values...)
+	actual := proofChallenge(nil, values...)
+	if expected.Cmp(actual) != 0 {
+		t.Fatalf("legacy challenge changed: expected %v, got %v", expected, actual)
+	}
+}
 
 func TestDLNProofRejectsEmptySessionTag(t *testing.T) {
 	assertPanics(t, func() {

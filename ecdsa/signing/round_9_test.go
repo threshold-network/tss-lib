@@ -193,6 +193,7 @@ func TestSigning_Start_RejectsInvalidMessage(t *testing.T) {
 		endCh := make(chan common.SignatureData, len(signPIDs))
 
 		params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[0], len(signPIDs), testThreshold)
+		params.SetProtocolMode(tss.ProtocolModeSecurityV2)
 		params.SetSessionNonce(big.NewInt(1))
 
 		P := NewLocalParty(msg, params, keys[0], outCh, endCh, 32).(*LocalParty)

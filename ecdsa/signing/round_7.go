@@ -51,13 +51,35 @@ func (round *round7) Start() *tss.Error {
 			return round.WrapError(errors2.Wrapf(err, "NewECPoint(bigAj)"), Pj)
 		}
 		bigAjs[j] = bigAj
-		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		pijA, err := r6msg.UnmarshalZKProof(round.Params().EC())
-		if err != nil || !pijA.VerifyWithSession(contextJ, bigAj) {
+		validProofA := false
+		if err == nil {
+			if round.ProtocolMode() == tss.ProtocolModeLegacy {
+				validProofA = pijA.Verify(bigAj)
+			} else {
+				validProofA = pijA.VerifyWithSession(
+					round.proofContext(j)[0],
+					bigAj,
+				)
+			}
+		}
+		if !validProofA {
 			return round.WrapError(errors.New("schnorr verify for Aj failed"), Pj)
 		}
 		pijV, err := r6msg.UnmarshalZKVProof(round.Params().EC())
-		if err != nil || !pijV.VerifyWithSession(contextJ, bigVj, round.temp.bigR) {
+		validProofV := false
+		if err == nil {
+			if round.ProtocolMode() == tss.ProtocolModeLegacy {
+				validProofV = pijV.Verify(bigVj, round.temp.bigR)
+			} else {
+				validProofV = pijV.VerifyWithSession(
+					round.proofContext(j)[0],
+					bigVj,
+					round.temp.bigR,
+				)
+			}
+		}
+		if !validProofV {
 			return round.WrapError(errors.New("vverify for Vj failed"), Pj)
 		}
 	}
