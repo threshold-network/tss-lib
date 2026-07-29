@@ -38,7 +38,6 @@ func (round *round3) Start() *tss.Error {
 		if j == i {
 			continue
 		}
-		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		// Alice_end
 		go func(j int, Pj *tss.PartyID) {
 			defer wg.Done()
@@ -58,7 +57,7 @@ func (round *round3) Start() *tss.Error {
 				new(big.Int).SetBytes(r2msg.GetC1()),
 				round.key.NTildej[i],
 				round.key.PaillierSK,
-				contextJ)
+				round.proofContext(j)...)
 			alphas[j] = alphaIj
 			if err != nil {
 				errChs <- round.WrapError(err, Pj)
@@ -84,7 +83,7 @@ func (round *round3) Start() *tss.Error {
 				round.key.H1j[i],
 				round.key.H2j[i],
 				round.key.PaillierSK,
-				contextJ)
+				round.proofContext(j)...)
 			us[j] = uIj
 			if err != nil {
 				errChs <- round.WrapError(err, Pj)

@@ -97,17 +97,23 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 	w = modNTilde.Mul(w, modNTilde.Exp(h2, tau))
 
 	// 11-12. e'
-	var e *big.Int
-	{ // derive the Fiat-Shamir challenge by reducing the hash mod q
-		var eHash *big.Int
-		// X is nil if called by ProveBob (Bob's proof "without check")
-		if X == nil {
-			eHash = common.SHA512_256i_TAGGED(fsSessionBob(Session), append(pk.AsInts(), NTilde, h1, h2, c1, c2, z, zPrm, t, v, w)...)
-		} else {
-			eHash = common.SHA512_256i_TAGGED(fsSessionBobWC(Session), append(pk.AsInts(), NTilde, h1, h2, X.X(), X.Y(), c1, c2, u.X(), u.Y(), z, zPrm, t, v, w)...)
-		}
-		e = common.ModReduceHash(q, eHash)
-	}
+	e := bobProofChallenge(
+		Session,
+		q,
+		pk,
+		NTilde,
+		h1,
+		h2,
+		c1,
+		c2,
+		X,
+		u,
+		z,
+		zPrm,
+		t,
+		v,
+		w,
+	)
 
 	// 13.
 	modN := common.ModInt(pk.N)
@@ -292,23 +298,31 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	}
 
 	// 1-2. e'
-	var e *big.Int
-	{ // derive the Fiat-Shamir challenge by reducing the hash mod q
-		var eHash *big.Int
-		// X is nil if called on a ProveBob (Bob's proof "without check")
-		if X == nil {
-			eHash = common.SHA512_256i_TAGGED(fsSessionBob(Session), append(pk.AsInts(), NTilde, h1, h2, c1, c2, pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)
-		} else {
-			if !X.ValidateBasic() || !crypto.SameCurve(ec, X.Curve()) {
-				return false
-			}
-			if !pf.U.ValidateBasic() || !crypto.SameCurve(ec, pf.U.Curve()) {
-				return false
-			}
-			eHash = common.SHA512_256i_TAGGED(fsSessionBobWC(Session), append(pk.AsInts(), NTilde, h1, h2, X.X(), X.Y(), c1, c2, pf.U.X(), pf.U.Y(), pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)
+	if X != nil {
+		if !X.ValidateBasic() || !crypto.SameCurve(ec, X.Curve()) {
+			return false
 		}
-		e = common.ModReduceHash(q, eHash)
+		if !pf.U.ValidateBasic() || !crypto.SameCurve(ec, pf.U.Curve()) {
+			return false
+		}
 	}
+	e := bobProofChallenge(
+		Session,
+		q,
+		pk,
+		NTilde,
+		h1,
+		h2,
+		c1,
+		c2,
+		X,
+		pf.U,
+		pf.Z,
+		pf.ZPrm,
+		pf.T,
+		pf.V,
+		pf.W,
+	)
 	if e.Sign() == 0 {
 		return false
 	}
@@ -370,6 +384,83 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 		}
 	}
 	return true
+}
+
+func bobProofChallenge(
+	session []byte,
+	q *big.Int,
+	pk *paillier.PublicKey,
+	nTilde, h1, h2, c1, c2 *big.Int,
+	x, u *crypto.ECPoint,
+	z, zPrime, t, v, w *big.Int,
+) *big.Int {
+	if session == nil {
+		if x == nil {
+			return common.HashToN(
+				q,
+				append(pk.AsInts(), c1, c2, z, zPrime, t, v, w)...,
+			)
+		}
+		return common.HashToN(
+			q,
+			append(
+				pk.AsInts(),
+				x.X(),
+				x.Y(),
+				c1,
+				c2,
+				u.X(),
+				u.Y(),
+				z,
+				zPrime,
+				t,
+				v,
+				w,
+			)...,
+		)
+	}
+
+	if x == nil {
+		challengeHash := common.SHA512_256i_TAGGED(
+			fsSessionBob(session),
+			append(
+				pk.AsInts(),
+				nTilde,
+				h1,
+				h2,
+				c1,
+				c2,
+				z,
+				zPrime,
+				t,
+				v,
+				w,
+			)...,
+		)
+		return common.ModReduceHash(q, challengeHash)
+	}
+
+	challengeHash := common.SHA512_256i_TAGGED(
+		fsSessionBobWC(session),
+		append(
+			pk.AsInts(),
+			nTilde,
+			h1,
+			h2,
+			x.X(),
+			x.Y(),
+			c1,
+			c2,
+			u.X(),
+			u.Y(),
+			z,
+			zPrime,
+			t,
+			v,
+			w,
+		)...,
+	)
+	return common.ModReduceHash(q, challengeHash)
 }
 
 // ProveBob.Verify implements verification of Bob's proof without check "VerifyMta_Bob" used in the MtA protocol from GG18Spec (9) Fig. 11.

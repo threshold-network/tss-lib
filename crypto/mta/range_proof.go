@@ -86,8 +86,7 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 	w = modNTilde.Mul(w, modNTilde.Exp(h2, gamma))
 
 	// 8-9. e'
-	eHash := common.SHA512_256i_TAGGED(fsSessionRangeAlice(Session), append(pk.AsInts(), NTilde, h1, h2, c, z, u, w)...)
-	e := common.ModReduceHash(q, eHash)
+	e := rangeProofChallenge(Session, q, pk, NTilde, h1, h2, c, z, u, w)
 
 	modN := common.ModInt(pk.N)
 	s := modN.Exp(r, e)
@@ -196,8 +195,18 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 	}
 
 	// 1-2. e'
-	eHash := common.SHA512_256i_TAGGED(fsSessionRangeAlice(Session), append(pk.AsInts(), NTilde, h1, h2, c, pf.Z, pf.U, pf.W)...)
-	e := common.ModReduceHash(q, eHash)
+	e := rangeProofChallenge(
+		Session,
+		q,
+		pk,
+		NTilde,
+		h1,
+		h2,
+		c,
+		pf.Z,
+		pf.U,
+		pf.W,
+	)
 	if e.Sign() == 0 {
 		return false
 	}
@@ -233,6 +242,25 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 		}
 	}
 	return true
+}
+
+func rangeProofChallenge(
+	session []byte,
+	q *big.Int,
+	pk *paillier.PublicKey,
+	nTilde, h1, h2, c, z, u, w *big.Int,
+) *big.Int {
+	if session == nil {
+		// Historical GG20 transcript. The auxiliary modulus and generators
+		// were not included in the challenge input.
+		return common.HashToN(q, append(pk.AsInts(), c, z, u, w)...)
+	}
+
+	challengeHash := common.SHA512_256i_TAGGED(
+		fsSessionRangeAlice(session),
+		append(pk.AsInts(), nTilde, h1, h2, c, z, u, w)...,
+	)
+	return common.ModReduceHash(q, challengeHash)
 }
 
 func (pf *RangeProofAlice) ValidateBasic() bool {

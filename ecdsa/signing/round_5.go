@@ -46,8 +46,14 @@ func (round *round5) Start() *tss.Error {
 		if err != nil {
 			return round.WrapError(errors.New("failed to unmarshal bigGamma proof"), Pj)
 		}
-		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
-		ok = proof.VerifyWithSession(contextJ, bigGammaJPoint)
+		if round.ProtocolMode() == tss.ProtocolModeLegacy {
+			ok = proof.Verify(bigGammaJPoint)
+		} else {
+			ok = proof.VerifyWithSession(
+				round.proofContext(j)[0],
+				bigGammaJPoint,
+			)
+		}
 		if !ok {
 			return round.WrapError(errors.New("failed to prove bigGamma"), Pj)
 		}

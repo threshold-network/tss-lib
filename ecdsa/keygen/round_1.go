@@ -84,18 +84,17 @@ func (round *round1) Start() *tss.Error {
 	round.save.NTildej[i] = preParams.NTildei
 	round.save.H1j[i], round.save.H2j[i] = preParams.H1i, preParams.H2i
 
-	// Keygen fails closed if no SessionNonce is set. The previous zero
-	// fallback neutralised the SSID binding for any caller that forgot
-	// SetSessionNonce — two keygen ceremonies over otherwise identical
-	// committees would derive the same SSID, exposing proof transcripts
-	// to splicing between runs.
-	nonce := round.Params().SessionNonce()
-	if nonce == nil || nonce.Sign() <= 0 {
-		return round.WrapError(errors.New("keygen requires tss.Parameters.SetSessionNonce(<unique positive per-ceremony nonce>) before Start"), Pi)
+	if round.ProtocolMode() == tss.ProtocolModeSecurityV2 {
+		// Security-v2 fails closed if no SessionNonce is set. Legacy mode
+		// intentionally has no nonce and uses the historical untagged proof
+		// transcript.
+		nonce := round.Params().SessionNonce()
+		if nonce == nil || nonce.Sign() <= 0 {
+			return round.WrapError(errors.New("security-v2 keygen requires tss.Parameters.SetSessionNonce(<unique positive per-ceremony nonce>) before Start"), Pi)
+		}
+		round.temp.ssidNonce = new(big.Int).Set(nonce)
+		round.temp.ssid = round.getSSID()
 	}
-	round.temp.ssidNonce = new(big.Int).Set(nonce)
-	round.temp.ssid = round.getSSID()
-	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 
 	// generate the dlnproofs for keygen
 	h1i, h2i, alpha, beta, p, q, NTildei :=
@@ -106,10 +105,26 @@ func (round *round1) Start() *tss.Error {
 		preParams.P,
 		preParams.Q,
 		preParams.NTildei
-	dlnProof1 := dlnproof.NewDLNProof(h1i, h2i, alpha, p, q, NTildei, round.temp.ssid)
-	dlnProof2 := dlnproof.NewDLNProof(h2i, h1i, beta, p, q, NTildei, round.temp.ssid)
+	dlnProof1 := dlnproof.NewDLNProof(
+		h1i,
+		h2i,
+		alpha,
+		p,
+		q,
+		NTildei,
+		round.proofSession()...,
+	)
+	dlnProof2 := dlnproof.NewDLNProof(
+		h2i,
+		h1i,
+		beta,
+		p,
+		q,
+		NTildei,
+		round.proofSession()...,
+	)
 
-	modProof := preParams.PaillierSK.ModProof(contextI)
+	modProof := preParams.PaillierSK.ModProof(round.proofContext(i)...)
 
 	// NTildei = (2p+1) * (2q+1)
 	// phi(NTildei) = ((2p+1) - 1) * ((2q+1) - 1) = 2p * 2q
@@ -122,7 +137,7 @@ func (round *round1) Start() *tss.Error {
 	pkTilde := &paillier.PublicKey{N: NTildei}
 	skTilde := &paillier.PrivateKey{PublicKey: *pkTilde, LambdaN: lambdaNTilde, PhiN: phiNTilde}
 
-	modProofTilde := skTilde.ModProof(contextI)
+	modProofTilde := skTilde.ModProof(round.proofContext(i)...)
 
 	// for this P: SAVE
 	// - shareID

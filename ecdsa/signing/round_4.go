@@ -45,8 +45,20 @@ func (round *round4) Start() *tss.Error {
 		return round.WrapError(errors.New("theta inverse is nil"))
 	}
 	i := round.PartyID().Index
-	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
-	piGamma, err := schnorr.NewZKProofWithSession(contextI, round.temp.gamma, round.temp.pointGamma)
+	var piGamma *schnorr.ZKProof
+	var err error
+	if round.ProtocolMode() == tss.ProtocolModeLegacy {
+		piGamma, err = schnorr.NewZKProof(
+			round.temp.gamma,
+			round.temp.pointGamma,
+		)
+	} else {
+		piGamma, err = schnorr.NewZKProofWithSession(
+			round.proofContext(i)[0],
+			round.temp.gamma,
+			round.temp.pointGamma,
+		)
+	}
 	if err != nil {
 		return round.WrapError(errors2.Wrapf(err, "NewZKProof(gamma, bigGamma)"))
 	}
