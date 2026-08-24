@@ -39,14 +39,45 @@ func fsSessionZKV(session []byte) []byte {
 	return append([]byte(fsDomainTagZKV+"|"), session...)
 }
 
-// NewZKProof constructs a new Schnorr ZK proof of knowledge of the discrete logarithm (GG18Spec Fig. 16)
+// NewZKProof constructs a legacy Schnorr ZK proof of knowledge of the discrete
+// logarithm (GG18Spec Fig. 16).
+//
+// Legacy is an exact transcript contract, not merely the absence of a session:
+// the challenge is HashToN(q, Xx, Xy, Gx, Gy, AlphaX, AlphaY), in that order,
+// matching threshold-network/tss-lib@2e712689cfbe. New protocols should call
+// NewZKProofWithSession with a non-empty, ceremony-unique session instead.
 func NewZKProof(x *big.Int, X *crypto.ECPoint) (*ZKProof, error) {
-	return NewZKProofWithSession(nil, x, X)
+	return newZKProof(x, X, legacyZKChallenge)
 }
 
-// NewZKProofWithSession constructs a Schnorr proof with the session bound into
-// the Fiat-Shamir challenge.
+// NewZKProofWithSession constructs a security-v2 Schnorr proof with a non-empty
+// session and the ZK domain tag bound into the Fiat-Shamir challenge. A nil or
+// empty session is rejected; callers selecting the historical transcript must
+// use NewZKProof, so this API can never silently downgrade to legacy.
 func NewZKProofWithSession(session []byte, x *big.Int, X *crypto.ECPoint) (*ZKProof, error) {
+	if len(session) == 0 {
+		return nil, errors.New("schnorr: ZK proof session tag must be non-empty")
+	}
+
+	return newZKProof(
+		x,
+		X,
+		func(q *big.Int, X, g, alpha *crypto.ECPoint) *big.Int {
+			return sessionBoundZKChallenge(session, q, X, g, alpha)
+		},
+	)
+}
+
+type zkChallenge func(
+	q *big.Int,
+	X, g, alpha *crypto.ECPoint,
+) *big.Int
+
+func newZKProof(
+	x *big.Int,
+	X *crypto.ECPoint,
+	challenge zkChallenge,
+) (*ZKProof, error) {
 	if x == nil || X == nil || !X.ValidateBasic() {
 		return nil, errors.New("ZKProof constructor received nil or invalid value(s)")
 	}
@@ -58,22 +89,67 @@ func NewZKProofWithSession(session []byte, x *big.Int, X *crypto.ECPoint) (*ZKPr
 	a := common.GetRandomPositiveInt(q)
 	alpha := crypto.ScalarBaseMult(ec, a)
 
-	cHash := common.SHA512_256i_TAGGED(fsSessionZK(session), X.X(), X.Y(), g.X(), g.Y(), alpha.X(), alpha.Y())
-	c := common.ModReduceHash(q, cHash)
+	c := challenge(q, X, g, alpha)
 	t := new(big.Int).Mul(c, x)
 	t = common.ModInt(q).Add(a, t)
 
 	return &ZKProof{Alpha: alpha, T: t}, nil
 }
 
-// NewZKProof verifies a new Schnorr ZK proof of knowledge of the discrete logarithm (GG18Spec Fig. 16)
-func (pf *ZKProof) Verify(X *crypto.ECPoint) bool {
-	return pf.VerifyWithSession(nil, X)
+// legacyZKChallenge reproduces the historical HashToN input sequence and its
+// expand-then-reduce behavior exactly. Keep it separate from the tagged path:
+// treating a nil session as a tag would change legacy proof bytes.
+func legacyZKChallenge(
+	q *big.Int,
+	X, g, alpha *crypto.ECPoint,
+) *big.Int {
+	return common.HashToN(
+		q,
+		X.X(), X.Y(),
+		g.X(), g.Y(),
+		alpha.X(), alpha.Y(),
+	)
 }
 
-// VerifyWithSession verifies a Schnorr proof with the session bound into the
-// Fiat-Shamir challenge.
+// sessionBoundZKChallenge derives the security-v2 ZK challenge. Its callers
+// validate that session is non-empty before reaching this function.
+func sessionBoundZKChallenge(
+	session []byte,
+	q *big.Int,
+	X, g, alpha *crypto.ECPoint,
+) *big.Int {
+	cHash := common.SHA512_256i_TAGGED(
+		fsSessionZK(session),
+		X.X(), X.Y(),
+		g.X(), g.Y(),
+		alpha.X(), alpha.Y(),
+	)
+	return common.ModReduceHash(q, cHash)
+}
+
+// Verify verifies a ZK proof against the exact historical legacy challenge.
+// Session-bound proofs must be verified with VerifyWithSession.
+func (pf *ZKProof) Verify(X *crypto.ECPoint) bool {
+	return pf.verify(X, legacyZKChallenge)
+}
+
+// VerifyWithSession verifies a security-v2 Schnorr proof with a non-empty
+// session bound into the challenge. Nil and empty sessions fail closed; use
+// Verify for the historical transcript.
 func (pf *ZKProof) VerifyWithSession(session []byte, X *crypto.ECPoint) bool {
+	if len(session) == 0 {
+		return false
+	}
+
+	return pf.verify(
+		X,
+		func(q *big.Int, X, g, alpha *crypto.ECPoint) *big.Int {
+			return sessionBoundZKChallenge(session, q, X, g, alpha)
+		},
+	)
+}
+
+func (pf *ZKProof) verify(X *crypto.ECPoint, challenge zkChallenge) bool {
 	if pf == nil || !pf.ValidateBasic() || X == nil || !X.ValidateBasic() {
 		return false
 	}
@@ -88,8 +164,7 @@ func (pf *ZKProof) VerifyWithSession(session []byte, X *crypto.ECPoint) bool {
 	}
 	g := crypto.NewECPointNoCurveCheck(ec, ecParams.Gx, ecParams.Gy)
 
-	cHash := common.SHA512_256i_TAGGED(fsSessionZK(session), X.X(), X.Y(), g.X(), g.Y(), pf.Alpha.X(), pf.Alpha.Y())
-	c := common.ModReduceHash(q, cHash)
+	c := challenge(q, X, g, pf.Alpha)
 	if c.Sign() == 0 {
 		return false
 	}
@@ -110,16 +185,50 @@ func (pf *ZKProof) ValidateBasic() bool {
 	return pf.T != nil && pf.Alpha != nil && pf.Alpha.ValidateBasic()
 }
 
-// NewZKProof constructs a new Schnorr ZK proof of knowledge s_i, l_i such that V_i = R^s_i, g^l_i (GG18Spec Fig. 17)
+// NewZKVProof constructs a legacy Schnorr proof of knowledge of s_i and l_i
+// such that V_i = R^s_i g^l_i (GG18Spec Fig. 17).
+//
+// Its challenge is exactly HashToN(q, Vx, Vy, Rx, Ry, Gx, Gy, AlphaX,
+// AlphaY), matching threshold-network/tss-lib@2e712689cfbe. New protocols
+// should call NewZKVProofWithSession instead.
 func NewZKVProof(V, R *crypto.ECPoint, s, l *big.Int) (*ZKVProof, error) {
-	return NewZKVProofWithSession(nil, V, R, s, l)
+	return newZKVProof(V, R, s, l, legacyZKVChallenge)
 }
 
-// NewZKVProofWithSession constructs a Schnorr V proof with the session bound
-// into the Fiat-Shamir challenge.
+// NewZKVProofWithSession constructs a security-v2 Schnorr V proof with a
+// non-empty session and the ZKV domain tag bound into the challenge. A nil or
+// empty session is rejected; use NewZKVProof for the historical transcript.
 func NewZKVProofWithSession(session []byte, V, R *crypto.ECPoint, s, l *big.Int) (*ZKVProof, error) {
+	if len(session) == 0 {
+		return nil, errors.New("schnorr: ZKV proof session tag must be non-empty")
+	}
+
+	return newZKVProof(
+		V,
+		R,
+		s,
+		l,
+		func(q *big.Int, V, R, g, alpha *crypto.ECPoint) *big.Int {
+			return sessionBoundZKVChallenge(session, q, V, R, g, alpha)
+		},
+	)
+}
+
+type zkvChallenge func(
+	q *big.Int,
+	V, R, g, alpha *crypto.ECPoint,
+) *big.Int
+
+func newZKVProof(
+	V, R *crypto.ECPoint,
+	s, l *big.Int,
+	challenge zkvChallenge,
+) (*ZKVProof, error) {
 	if V == nil || R == nil || s == nil || l == nil || !V.ValidateBasic() || !R.ValidateBasic() {
 		return nil, errors.New("ZKVProof constructor received nil value(s)")
+	}
+	if !crypto.SameCurve(V.Curve(), R.Curve()) {
+		return nil, errors.New("ZKVProof constructor received points on different curves")
 	}
 	ec := V.Curve()
 	ecParams := ec.Params()
@@ -131,8 +240,7 @@ func NewZKVProofWithSession(session []byte, V, R *crypto.ECPoint, s, l *big.Int)
 	bG := crypto.ScalarBaseMult(ec, b)
 	alpha, _ := aR.Add(bG) // already on the curve.
 
-	cHash := common.SHA512_256i_TAGGED(fsSessionZKV(session), V.X(), V.Y(), R.X(), R.Y(), g.X(), g.Y(), alpha.X(), alpha.Y())
-	c := common.ModReduceHash(q, cHash)
+	c := challenge(q, V, R, g, alpha)
 
 	modQ := common.ModInt(q)
 	t := modQ.Add(a, new(big.Int).Mul(c, s))
@@ -141,13 +249,65 @@ func NewZKVProofWithSession(session []byte, V, R *crypto.ECPoint, s, l *big.Int)
 	return &ZKVProof{Alpha: alpha, T: t, U: u}, nil
 }
 
-func (pf *ZKVProof) Verify(V, R *crypto.ECPoint) bool {
-	return pf.VerifyWithSession(nil, V, R)
+// legacyZKVChallenge reproduces the historical HashToN input sequence and
+// modular reduction exactly.
+func legacyZKVChallenge(
+	q *big.Int,
+	V, R, g, alpha *crypto.ECPoint,
+) *big.Int {
+	return common.HashToN(
+		q,
+		V.X(), V.Y(),
+		R.X(), R.Y(),
+		g.X(), g.Y(),
+		alpha.X(), alpha.Y(),
+	)
 }
 
-// VerifyWithSession verifies a Schnorr V proof with the session bound into the
-// Fiat-Shamir challenge.
+// sessionBoundZKVChallenge derives the security-v2 ZKV challenge. Its callers
+// validate that session is non-empty before reaching this function.
+func sessionBoundZKVChallenge(
+	session []byte,
+	q *big.Int,
+	V, R, g, alpha *crypto.ECPoint,
+) *big.Int {
+	cHash := common.SHA512_256i_TAGGED(
+		fsSessionZKV(session),
+		V.X(), V.Y(),
+		R.X(), R.Y(),
+		g.X(), g.Y(),
+		alpha.X(), alpha.Y(),
+	)
+	return common.ModReduceHash(q, cHash)
+}
+
+// Verify verifies a ZKV proof against the exact historical legacy challenge.
+// Session-bound proofs must be verified with VerifyWithSession.
+func (pf *ZKVProof) Verify(V, R *crypto.ECPoint) bool {
+	return pf.verify(V, R, legacyZKVChallenge)
+}
+
+// VerifyWithSession verifies a security-v2 Schnorr V proof with a non-empty
+// session bound into the challenge. Nil and empty sessions fail closed; use
+// Verify for the historical transcript.
 func (pf *ZKVProof) VerifyWithSession(session []byte, V, R *crypto.ECPoint) bool {
+	if len(session) == 0 {
+		return false
+	}
+
+	return pf.verify(
+		V,
+		R,
+		func(q *big.Int, V, R, g, alpha *crypto.ECPoint) *big.Int {
+			return sessionBoundZKVChallenge(session, q, V, R, g, alpha)
+		},
+	)
+}
+
+func (pf *ZKVProof) verify(
+	V, R *crypto.ECPoint,
+	challenge zkvChallenge,
+) bool {
 	if pf == nil || !pf.ValidateBasic() ||
 		V == nil || R == nil || !V.ValidateBasic() || !R.ValidateBasic() {
 		return false
@@ -163,8 +323,7 @@ func (pf *ZKVProof) VerifyWithSession(session []byte, V, R *crypto.ECPoint) bool
 	}
 	g := crypto.NewECPointNoCurveCheck(ec, ecParams.Gx, ecParams.Gy)
 
-	cHash := common.SHA512_256i_TAGGED(fsSessionZKV(session), V.X(), V.Y(), R.X(), R.Y(), g.X(), g.Y(), pf.Alpha.X(), pf.Alpha.Y())
-	c := common.ModReduceHash(q, cHash)
+	c := challenge(q, V, R, g, pf.Alpha)
 	if c.Sign() == 0 {
 		return false
 	}
