@@ -47,6 +47,10 @@ Run both independent directions from the repository root:
 
 The first oracle is the checked-out implementation verifying PRIOR-generated
 proofs. The second runs the same parser and equations in a nested module pinned
-to the historical commit, verifying R1-generated proofs. The nested `go.mod`
-and `go.sum` make the historical module identity independent of a developer's
-module cache.
+to the historical commit, verifying R1-generated proofs. The checked-in
+`historical/go.mod.fixture` and `historical/go.sum.fixture` are copied into a
+temporary module for that direction. The `.fixture` suffix is intentional: Go
+prunes nested modules from a parent module zip, while ordinary fixture files are
+part of the immutable module keep-core downloads. The pinned fixture therefore
+makes the historical identity independent of a developer's module cache without
+disappearing from the release artifact being qualified.
