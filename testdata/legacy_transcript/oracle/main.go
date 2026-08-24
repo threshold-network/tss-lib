@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
@@ -108,14 +109,24 @@ type proofRecord struct {
 	B       []bool            `json:"b"`
 	Z       []string          `json:"z"`
 	Wire    string            `json:"wire"`
+	// CarrierWireSHA256 binds a proof family to a shared serialized carrier
+	// stored once elsewhere in the document. Keygen round 1 carries both DLN
+	// and ModProof, and duplicating its large wire bytes in both proof records
+	// would add no evidence.
+	CarrierWireSHA256 string `json:"carrier_wire_sha256"`
+}
+
+type wireRecord struct {
+	Wire string `json:"wire"`
 }
 
 type vectorDocument struct {
-	DLN    proofRecord `json:"dln"`
-	Range  proofRecord `json:"range"`
-	Bob    proofRecord `json:"bob"`
-	Mod    proofRecord `json:"mod"`
-	Factor proofRecord `json:"factor"`
+	DLN          proofRecord `json:"dln"`
+	Range        proofRecord `json:"range"`
+	Bob          proofRecord `json:"bob"`
+	Mod          proofRecord `json:"mod"`
+	Factor       proofRecord `json:"factor"`
+	KeygenRound1 wireRecord  `json:"keygen_round1"`
 }
 
 func parseHex(value string) *big.Int {
@@ -236,6 +247,29 @@ func verifyDocument(path string) {
 		panic(err)
 	}
 	modOK, modErr := modProof.ModVerify(parseHex(document.Mod.Inputs["n"]))
+	keygenRound1Message, keygenRound1Err := keygen.NewKGRound1Message(
+		partyIDs[0],
+		big.NewInt(1),
+		&paillier.PublicKey{N: parseHex(document.Mod.Inputs["n"])},
+		parseHex(document.DLN.Inputs["n"]),
+		parseHex(document.DLN.Inputs["h1"]),
+		parseHex(document.DLN.Inputs["h2"]),
+		dln,
+		dln,
+		modProof,
+		modProof,
+	)
+	var keygenRound1Wire []byte
+	if keygenRound1Err == nil {
+		keygenRound1Wire = wireBytes(keygenRound1Message)
+	}
+	keygenRound1WireDigest := sha256.Sum256(keygenRound1Wire)
+	keygenRound1WireDigestHex := hex.EncodeToString(keygenRound1WireDigest[:])
+	keygenRound1WireOK := keygenRound1Err == nil &&
+		document.KeygenRound1.Wire != "" &&
+		hex.EncodeToString(keygenRound1Wire) == document.KeygenRound1.Wire &&
+		document.DLN.CarrierWireSHA256 == keygenRound1WireDigestHex &&
+		document.Mod.CarrierWireSHA256 == keygenRound1WireDigestHex
 
 	factorValues := parseHexes(document.Factor.Proof)
 	factorProof := paillier.FactorProof{
@@ -259,11 +293,12 @@ func verifyDocument(path string) {
 	)) == document.Factor.Wire
 
 	fmt.Printf(
-		"dln=%t range=%t range_wire=%t bob=%t bob_wc=%t bob_wire=%t mod=%t mod_err=%v factor=%t factor_wire=%t factor_err=%v\n",
-		dlnOK, rangeOK, rangeWireOK, bobOK, bobWCOK, bobWireOK,
-		modOK, modErr, factorOK, factorWireOK, factorErr,
+		"dln=%t dln_mod_keygen_round1_wire=%t range=%t range_wire=%t bob=%t bob_wc=%t bob_wire=%t mod=%t mod_err=%v factor=%t factor_wire=%t factor_err=%v\n",
+		dlnOK, keygenRound1WireOK, rangeOK, rangeWireOK, bobOK, bobWCOK,
+		bobWireOK, modOK, modErr, factorOK, factorWireOK, factorErr,
 	)
-	if !dlnOK || !rangeOK || !rangeWireOK || !bobOK || !bobWCOK ||
+	if !dlnOK || !keygenRound1WireOK || !rangeOK || !rangeWireOK ||
+		!bobOK || !bobWCOK ||
 		!bobWireOK || !modOK || modErr != nil || !factorOK ||
 		!factorWireOK || factorErr != nil {
 		os.Exit(1)
@@ -450,14 +485,37 @@ func main() {
 		panic(fmt.Sprintf("mod proof failed: %v", err))
 	}
 	modChallenges := paillier.ModChallenge(pk.N, modProof.W)
+	keygenRound1Message, err := keygen.NewKGRound1Message(
+		partyIDs[0],
+		big.NewInt(1),
+		pk,
+		owner.NTildei,
+		owner.H1i,
+		owner.H2i,
+		dln,
+		dln,
+		modProof,
+		modProof,
+	)
+	if err != nil {
+		panic(fmt.Sprintf("keygen round-1 message failed: %v", err))
+	}
+	keygenRound1WireBytes := wireBytes(keygenRound1Message)
+	keygenRound1Wire := hex.EncodeToString(keygenRound1WireBytes)
+	keygenRound1WireDigest := sha256.Sum256(keygenRound1WireBytes)
+	keygenRound1WireDigestHex := hex.EncodeToString(keygenRound1WireDigest[:])
+	output["keygen_round1"] = map[string]any{"wire": keygenRound1Wire}
+	dlnRecord := output["dln"].(map[string]any)
+	dlnRecord["carrier_wire_sha256"] = keygenRound1WireDigestHex
 	output["mod"] = map[string]any{
-		"inputs":    map[string]string{"n": h(pk.N)},
-		"w":         h(modProof.W),
-		"challenge": hs(modChallenges[:]),
-		"x":         hs(modProof.X[:]),
-		"a":         bools(modProof.A[:]),
-		"b":         bools(modProof.B[:]),
-		"z":         hs(modProof.Z[:]),
+		"inputs":              map[string]string{"n": h(pk.N)},
+		"w":                   h(modProof.W),
+		"challenge":           hs(modChallenges[:]),
+		"x":                   hs(modProof.X[:]),
+		"a":                   bools(modProof.A[:]),
+		"b":                   bools(modProof.B[:]),
+		"z":                   hs(modProof.Z[:]),
+		"carrier_wire_sha256": keygenRound1WireDigestHex,
 	}
 
 	fixedRandom("factor")

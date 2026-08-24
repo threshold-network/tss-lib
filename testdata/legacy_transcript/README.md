@@ -9,16 +9,23 @@ protocol.
 `threshold-network/tss-lib@2e712689cfbe`. `r1_fixed.json` was generated from
 the R01 compatibility patch. Each document records the Go toolchain, exact
 input-fixture digests, proof-source digest, public inputs, challenges, proof
-scalars, and the serialized TSS messages that carry range, Bob/BobWC, and
-factor proofs. The adjacent SHA-256 sidecars cover the raw JSON bytes.
+scalars, and the serialized TSS messages that carry every mandatory family.
+In particular, `keygen_round1.wire` is a fixed broadcast containing both DLN
+slots and both ModProof slots. `dln.carrier_wire_sha256` and
+`mod.carrier_wire_sha256` independently bind their proof records to those shared
+wire bytes without duplicating the large message. The fixture places the
+qualified proof in each paired slot so the serialized carrier adds no second,
+unrecorded proof oracle. Range, Bob/BobWC, and FactorProof retain their own
+signing/keygen carrier messages. The adjacent SHA-256 sidecars cover the raw JSON
+bytes.
 
 The two documents differ only in their provenance object. After deleting that
 object and canonicalizing the JSON, every DLN, range, Bob, BobWC, ModProof, and
 FactorProof public input, challenge, proof scalar, and serialized message is
 byte-for-byte identical. The checked-in raw-document digests are:
 
-- PRIOR: `ff447af7aa603ad55a0915f102eb49f96800feedf52ec171f1e4a10149d6ce7a`
-- R1 fixed: `ab614a7daa6f3ada416fe7b4758dcc50c8ac052433aaa27c2ab8363b2d079ff9`
+- PRIOR: `41c0e14b086cb3046353298887edb9ba08e2706fd38df572f425ff5954bb9fc9`
+- R1 fixed: `5d0ebead52362cda3eb8f7b14afc5e1d161e9bd531bb2b0a79f0c643b35e0b09`
 
 The R1 proof-source digest recorded in its provenance is
 `69a2480cadd102d35c0b017f448733c50645e3bc1148b869fe84f03ae4850e79`.
