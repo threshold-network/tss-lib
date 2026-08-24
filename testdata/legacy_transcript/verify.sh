@@ -4,6 +4,8 @@ set -euo pipefail
 
 data_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd "${data_dir}/../.." && pwd)"
+historical_module="$(mktemp -d "${TMPDIR:-/tmp}/tss-legacy-oracle.XXXXXX")"
+trap 'chmod -R u+w "${historical_module}" 2>/dev/null || true; rm -rf "${historical_module}"' EXIT
 
 if command -v sha256sum >/dev/null 2>&1; then
   (
@@ -26,7 +28,10 @@ fi
     ./testdata/legacy_transcript/r1_fixed.json
 )
 
+cp "${data_dir}/historical/go.mod.fixture" "${historical_module}/go.mod"
+cp "${data_dir}/historical/go.sum.fixture" "${historical_module}/go.sum"
+cp "${data_dir}/oracle/main.go" "${historical_module}/main.go"
 (
-  cd "${data_dir}/historical"
-  go run -mod=readonly ../oracle/main.go ../r1_fixed.json
+  cd "${historical_module}"
+  go run -mod=readonly ./main.go "${data_dir}/r1_fixed.json"
 )
