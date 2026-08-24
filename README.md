@@ -144,6 +144,30 @@ legacy and security-v2 parties cannot interoperate. The selected mode is frozen
 when the local party is constructed and cannot change while the protocol is in
 flight.
 
+The low-level proof APIs follow the same unambiguous split. The historical
+generic APIs (for example `schnorr.NewZKProof` / `ZKProof.Verify`) reproduce the
+exact pre-hardening `HashToN` transcript. Their `WithSession` counterparts are
+security-v2-only, require a non-empty session, and never interpret nil or an
+empty slice as legacy. DLN, MtA range/Bob/BobWC, ModProof, and FactorProof retain
+their source-compatible optional session argument: omitting the argument is
+legacy, while supplying one requires a non-empty value and selects the tagged
+transcript. The legacy Bob/BobWC path also restores the historical `tau` and
+relatively-prime Paillier `gamma` sampling ranges; security-v2 retains its
+hardened `q^3*N-tilde` and `q^7` ranges.
+
+The checked-in bidirectional compatibility oracle and release test commands
+are:
+
+```sh
+./testdata/legacy_transcript/verify.sh
+go test ./crypto/schnorr ./ecdsa/signing ./ecdsa/keygen -count=20
+go test ./... -count=1
+```
+
+On slower builders, preserve the package list and repeat count while extending
+only Go's harness timeout, for example `-timeout=30m`. The default ten-minute
+timeout can expire while the keygen package is still generating safe primes.
+
 Additionally, there should be a mechanism in your transport to allow for "reliable broadcasts", meaning parties can broadcast a message to other parties such that it's guaranteed that each one receives the same message. There are several examples of algorithms online that do this by sharing and comparing hashes of received messages.
 
 Timeouts and errors should be handled by your application. The method `WaitingFor` may be called on a `Party` to get the set of other parties that it is still waiting for messages from. You may also get the set of culprit parties that caused an error from a `*tss.Error`.

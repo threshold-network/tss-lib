@@ -58,14 +58,30 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 	// 2.
 	rho := common.GetRandomPositiveInt(qNTilde)
 	sigma := common.GetRandomPositiveInt(qNTilde)
-	tau := common.GetRandomPositiveInt(q3NTilde)
+	var tau *big.Int
+	if Session == nil {
+		// The legacy transcript samples tau below q*N-tilde. Keep that exact
+		// distribution for byte-compatible proof generation; security-v2 uses
+		// the wider q^3*N-tilde range.
+		tau = common.GetRandomPositiveInt(qNTilde)
+	} else {
+		tau = common.GetRandomPositiveInt(q3NTilde)
+	}
 
 	// 3.
 	rhoPrm := common.GetRandomPositiveInt(q3NTilde)
 
 	// 4.
 	beta := common.GetRandomPositiveRelativelyPrimeInt(pk.N)
-	gamma := common.GetRandomPositiveInt(q7)
+	var gamma *big.Int
+	if Session == nil {
+		// Historical Bob proofs sample gamma as a unit modulo the Paillier
+		// modulus. Besides reproducing PRIOR proof bytes, this is why the legacy
+		// verifier must accept T1 above q^7.
+		gamma = common.GetRandomPositiveRelativelyPrimeInt(pk.N)
+	} else {
+		gamma = common.GetRandomPositiveInt(q7)
+	}
 
 	// 5.
 	u := crypto.NewECPointNoCurveCheck(ec, zero, zero) // initialization suppresses an IDE warning
@@ -229,6 +245,22 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	q3NTilde := new(big.Int).Mul(q3, NTilde)
 	maxS2 := new(big.Int).Lsh(q3NTilde, 1)
 	maxT2 := new(big.Int).Set(maxS2)
+	// The session-bound verifier historically accepted T1 == q^7; express the
+	// exclusive upper bound as q^7 + 1 so the shared >= check below preserves
+	// that behavior exactly.
+	maxT1 := new(big.Int).Add(q7, big.NewInt(1))
+	if Session == nil {
+		// The historical prover sampled gamma in [1, pk.N), while the
+		// security-v2 prover samples it below q^7. Since T1 = e*y + gamma
+		// with e < q and the MtA blinding value y < q^5, an honest legacy
+		// response is below pk.N + q^6.
+		// Applying the security-v2 q^7 cap to a PRIOR proof rejects almost
+		// every legitimate 2048-bit gamma and breaks mixed-binary legacy
+		// signing. Keep a finite legacy-specific cap so adversarial exponents
+		// remain bounded without rewriting the historical acceptance range.
+		q6 := new(big.Int).Mul(q3, q3)
+		maxT1 = new(big.Int).Add(pk.N, q6)
+	}
 
 	if !common.IsInIntervalPositive(pf.Z, NTilde) {
 		return false
@@ -290,7 +322,7 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	if pf.S2.Cmp(maxS2) >= 0 {
 		return false
 	}
-	if pf.T1.Cmp(q7) > 0 {
+	if pf.T1.Cmp(maxT1) >= 0 {
 		return false
 	}
 	if pf.T2.Cmp(maxT2) >= 0 {
