@@ -7,15 +7,145 @@
 package paillier
 
 import (
+	"crypto/rand"
+	"fmt"
 	"math/big"
+	mathrand "math/rand"
+	"runtime"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
 	"github.com/bnb-chain/tss-lib/tss"
 )
+
+func TestFactorProofUnequalWidthsCTEquivalence(t *testing.T) {
+	// Fixed test-only safe primes. Both factors exceed the entire byte width of
+	// the independent auxiliary modulus, while their public product bounds them.
+	p, ok := new(big.Int).SetString("170141183460469231731687303715884114527", 10)
+	require.True(t, ok)
+	q, ok := new(big.Int).SetString("170141183460469231731687303715884116147", 10)
+	require.True(t, ok)
+	require.True(t, p.ProbablyPrime(32))
+	require.True(t, q.ProbablyPrime(32))
+	pMinus1, qMinus1 := new(big.Int).Sub(p, big.NewInt(1)), new(big.Int).Sub(q, big.NewInt(1))
+	phiN := new(big.Int).Mul(pMinus1, qMinus1)
+	lambdaN := new(big.Int).Div(phiN, new(big.Int).GCD(nil, nil, pMinus1, qMinus1))
+	key := &PrivateKey{PublicKey: PublicKey{N: new(big.Int).Mul(p, q)}, PhiN: phiN, LambdaN: lambdaN}
+	N, s, tt := big.NewInt(11*23), big.NewInt(4), big.NewInt(9)
+	require.True(t, p.BitLen() > 8*len(N.Bytes()))
+	require.True(t, q.BitLen() > 8*len(N.Bytes()))
+	gotP, gotQ := key.GetPQ()
+	require.Zero(t, gotP.Cmp(q))
+	require.Zero(t, gotQ.Cmp(p))
+
+	var proofOff *FactorProof
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
+			// This test must remain non-parallel: replaying a test-only entropy
+			// stream makes every randomized commitment and response comparable.
+			previousReader, previousMode := rand.Reader, common.IsConstantTimeEnabled()
+			t.Cleanup(func() {
+				rand.Reader = previousReader
+				if previousMode {
+					common.EnableConstantTimeOps()
+				} else {
+					common.DisableConstantTimeOps()
+				}
+			})
+			rand.Reader = mathrand.New(mathrand.NewSource(1))
+			if enabled {
+				common.EnableConstantTimeOps()
+			} else {
+				common.DisableConstantTimeOps()
+			}
+			require.Equal(t, enabled, common.IsConstantTimeEnabled())
+			proof := key.FactorProof(N, s, tt)
+			valid, err := proof.FactorVerify(key.N, N, s, tt)
+			require.NoError(t, err)
+			require.True(t, valid)
+			if enabled {
+				require.Equal(t, proofOff, proof, "fixed randomness must produce identical factor commitments and responses")
+			} else {
+				proofOff = proof
+			}
+		})
+	}
+}
+
+func TestZeroPlaintextCTEquivalence(t *testing.T) {
+	// Small, fixed test-only key with p=7 and q=11.
+	key := &PrivateKey{PublicKey: PublicKey{N: big.NewInt(77)}, LambdaN: big.NewInt(30), PhiN: big.NewInt(60)}
+	defer common.DisableConstantTimeOps()
+	for _, enabled := range []bool{false, true} {
+		if enabled {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+		require.Equal(t, enabled, common.IsConstantTimeEnabled())
+		cipher, randomness, err := key.EncryptAndReturnRandomness(big.NewInt(0))
+		require.NoError(t, err)
+		want := new(big.Int).Exp(randomness, key.N, key.NSquare())
+		require.Zero(t, cipher.Cmp(want), "Enc(0) must equal r^N mod N^2")
+		plaintext, err := key.Decrypt(cipher)
+		require.NoError(t, err)
+		require.Zero(t, plaintext.Sign())
+
+		product, err := key.HomoMult(big.NewInt(0), cipher)
+		require.NoError(t, err)
+		require.Zero(t, product.Cmp(big.NewInt(1)), "cipher^0 must equal 1")
+		plaintext, err = key.Decrypt(product)
+		require.NoError(t, err)
+		require.Zero(t, plaintext.Sign())
+	}
+}
+
+func TestModProofConcurrentCTToggle(t *testing.T) {
+	// Fixed 128-bit safe primes keep this regression fast without making a
+	// non-unit Fiat-Shamir challenge likely, as tiny test moduli would.
+	p, ok := new(big.Int).SetString("170141183460469231731687303715884114527", 10)
+	require.True(t, ok)
+	q, ok := new(big.Int).SetString("170141183460469231731687303715884116147", 10)
+	require.True(t, ok)
+	phiN := new(big.Int).Mul(new(big.Int).Sub(p, big.NewInt(1)), new(big.Int).Sub(q, big.NewInt(1)))
+	key := &PrivateKey{PublicKey: PublicKey{N: new(big.Int).Mul(p, q)}, PhiN: phiN}
+
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	var toggles uint64
+	go func() {
+		defer close(stopped)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			common.DisableConstantTimeOps()
+			runtime.Gosched()
+			common.EnableConstantTimeOps()
+			atomic.AddUint64(&toggles, 1)
+			runtime.Gosched()
+		}
+	}()
+	t.Cleanup(func() {
+		close(stop)
+		<-stopped
+		common.DisableConstantTimeOps()
+	})
+
+	for i := 0; i < 32; i++ {
+		proof := key.ModProof()
+		valid, err := proof.ModVerify(key.N)
+		require.NoError(t, err)
+		require.True(t, valid, "proof %d must verify while the toggle changes", i)
+	}
+	require.NotZero(t, atomic.LoadUint64(&toggles), "the toggle must change during proof generation")
+}
 
 // These tests verify the invariant that the constant-time path computes the SAME
 // function as the standard path: for deterministic operations the outputs are

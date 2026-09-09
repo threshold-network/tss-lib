@@ -58,8 +58,11 @@ func (privateKey *PrivateKey) FactorProof(N, s, t *big.Int) *FactorProof {
 		// constant-time path (N is the verifier's odd ring-Pedersen modulus). The t^mu /
 		// t^v blinds use random exponents and stay on math/big.
 		ctModN := common.NewCTModInt(N)
-		P = modN.Mul(ctModN.ExpCT(s, p), modN.Exp(t, mu))
-		Q = modN.Mul(ctModN.ExpCT(s, q), modN.Exp(t, v))
+		// The factors are bounded by our public N0, independently of the
+		// verifier's modulus N. N0 also avoids revealing either factor's width.
+		exponentBits := N0.BitLen()
+		P = modN.Mul(ctModN.ExpCTWithBitLen(s, p, exponentBits), modN.Exp(t, mu))
+		Q = modN.Mul(ctModN.ExpCTWithBitLen(s, q, exponentBits), modN.Exp(t, v))
 	} else {
 		P = modN.ExpMulExp(s, p, t, mu)
 		Q = modN.ExpMulExp(s, q, t, v)

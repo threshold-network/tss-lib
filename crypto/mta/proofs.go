@@ -82,8 +82,11 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 		// time (NTilde is odd). The h2^rho / h2^sigma blinds use one-time randomness and
 		// stay on math/big (see the coverage note in common/constant_time.go).
 		ctModNTilde := common.NewCTModInt(NTilde)
-		z = modNTilde.Mul(ctModNTilde.ExpCT(h1, x), modNTilde.Exp(h2, rho))
-		t = modNTilde.Mul(ctModNTilde.ExpCT(h1, y), modNTilde.Exp(h2, sigma))
+		// Both inputs are Paillier plaintexts bounded by pk.N, which can be
+		// wider than NTilde. Do not derive the exponent width from NTilde.
+		exponentBits := pk.N.BitLen()
+		z = modNTilde.Mul(ctModNTilde.ExpCTWithBitLen(h1, x, exponentBits), modNTilde.Exp(h2, rho))
+		t = modNTilde.Mul(ctModNTilde.ExpCTWithBitLen(h1, y, exponentBits), modNTilde.Exp(h2, sigma))
 	} else {
 		z = modNTilde.Mul(modNTilde.Exp(h1, x), modNTilde.Exp(h2, rho))
 		t = modNTilde.Mul(modNTilde.Exp(h1, y), modNTilde.Exp(h2, sigma))

@@ -84,6 +84,48 @@ func TestExpCTEdgeCases(t *testing.T) {
 	}
 }
 
+// A zero exponent must enter the modular context just like a positive exponent.
+// Checking the fresh context's pool avoids a flaky wall-clock timing assertion.
+func TestExpCTZeroExponentUsesContext(t *testing.T) {
+	modulus := big.NewInt(65537)
+	for _, base := range []*big.Int{big.NewInt(0), big.NewInt(1), big.NewInt(-5), big.NewInt(65542)} {
+		t.Run(base.String(), func(t *testing.T) {
+			ctMod := NewCTModInt(modulus)
+			usedContext := false
+			ctMod.bytePool.New = func() interface{} {
+				usedContext = true
+				return make([]byte, ctMod.byteLen)
+			}
+
+			got := ctMod.ExpCT(base, big.NewInt(0))
+			want := new(big.Int).Exp(base, big.NewInt(0), modulus)
+			if got.Cmp(want) != 0 {
+				t.Errorf("ExpCT(%v, 0) = %v, want %v", base, got, want)
+			}
+			if !usedContext {
+				t.Fatal("zero exponent bypassed the modular context")
+			}
+		})
+	}
+}
+
+// An implicit exponent width must never grow with the secret value. Callers
+// needing a wider exponent must select that width from a public bound.
+func TestExpCTRejectsUnboundedExponent(t *testing.T) {
+	ctMod := NewCTModInt(big.NewInt(257)) // two-byte arithmetic modulus
+	for _, bits := range []uint{16, 24} {
+		exp := new(big.Int).Lsh(big.NewInt(1), bits)
+		t.Run(exp.String(), func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("ExpCT accepted an exponent wider than its public default width")
+				}
+			}()
+			ctMod.ExpCT(big.NewInt(2), exp)
+		})
+	}
+}
+
 // TestModInverseCTCorrectness verifies constant-time ModInverse correctness
 func TestModInverseCTCorrectness(t *testing.T) {
 	p, _ := rand.Prime(rand.Reader, 1024)
@@ -190,16 +232,24 @@ func TestModInverseCTNonCoprime(t *testing.T) {
 	}
 }
 
-// TestExpCTExponentPadding verifies that padding the exponent to a fixed width (the
-// fix that hides the secret exponent's magnitude) does not change the result: leftPad
-// zero-extends correctly, and a short exponent still produces the same value as
-// math/big.Exp. Regression for the fixed-width exponent padding.
+// TestExpCTExponentPadding verifies the serializer used by bigmod.Exp, including
+// zero and exponents wider than an unrelated arithmetic modulus.
 func TestExpCTExponentPadding(t *testing.T) {
-	if got := leftPad([]byte{0x12, 0x34}, 5); !bytes.Equal(got, []byte{0, 0, 0, 0x12, 0x34}) {
-		t.Errorf("leftPad zero-extension = %v, want [0 0 0 18 52]", got)
-	}
-	if got := leftPad([]byte{0x12, 0x34}, 1); !bytes.Equal(got, []byte{0x12, 0x34}) {
-		t.Errorf("leftPad with width <= len must return input unchanged, got %v", got)
+	for _, tc := range []struct {
+		exp    int64
+		bits   int
+		padded []byte
+	}{
+		{0, 40, []byte{0, 0, 0, 0, 0}},
+		{1, 40, []byte{0, 0, 0, 0, 1}},
+		{0x1234, 40, []byte{0, 0, 0, 0x12, 0x34}},
+		{0x010203, 40, []byte{0, 0, 1, 2, 3}},
+		{0xffffffffff, 40, []byte{0xff, 0xff, 0xff, 0xff, 0xff}},
+		{0x1ff, 9, []byte{1, 0xff}},
+	} {
+		if got := padExponent(big.NewInt(tc.exp), tc.bits); !bytes.Equal(got, tc.padded) {
+			t.Errorf("padExponent(%x, %d) = %x, want %x", tc.exp, tc.bits, got, tc.padded)
+		}
 	}
 
 	p, _ := rand.Prime(rand.Reader, 512)
@@ -210,11 +260,57 @@ func TestExpCTExponentPadding(t *testing.T) {
 
 	// A short exponent is padded to the full modulus width internally; the result must
 	// still match math/big.Exp.
-	for _, exp := range []*big.Int{big.NewInt(1), big.NewInt(0x010203), big.NewInt(255)} {
+	for _, exp := range []*big.Int{big.NewInt(0), big.NewInt(1), big.NewInt(0x010203), big.NewInt(255)} {
 		want := new(big.Int).Exp(base, exp, N)
 		if got := ctMod.ExpCT(base, exp); got.Cmp(want) != 0 {
 			t.Errorf("ExpCT(base, %v) = %v, want %v", exp, got, want)
 		}
+	}
+}
+
+func TestExpCTPublicExponentBound(t *testing.T) {
+	publicBound := big.NewInt(0xffffffffc5)
+	// Exercise arithmetic moduli on both sides of the five-byte exponent bound.
+	for _, modulus := range []*big.Int{big.NewInt(257), big.NewInt(0x100000000000001)} {
+		ctMod := NewCTModInt(modulus)
+		for _, exp := range []*big.Int{
+			big.NewInt(0), big.NewInt(1), big.NewInt(255), big.NewInt(256),
+			big.NewInt(65536), big.NewInt(16777216), new(big.Int).Sub(publicBound, big.NewInt(1)),
+		} {
+			for _, base := range []*big.Int{
+				big.NewInt(0), big.NewInt(-3), new(big.Int).Mul(modulus, big.NewInt(2)), new(big.Int).Add(modulus, big.NewInt(3)),
+			} {
+				want := new(big.Int).Exp(base, exp, modulus)
+				got := ctMod.ExpCTWithBitLen(base, exp, publicBound.BitLen())
+				if got.Cmp(want) != 0 {
+					t.Errorf("ExpCTWithBitLen(%v, %v) mod %v = %v, want %v", base, exp, modulus, got, want)
+				}
+			}
+		}
+	}
+}
+
+func TestExpCTInvalidExponentBound(t *testing.T) {
+	ctMod := NewCTModInt(big.NewInt(257))
+	for _, tc := range []struct {
+		name string
+		exp  int64
+		bits int
+	}{
+		{"negative_exponent", -1, 16},
+		{"zero_bound", 0, 0},
+		{"negative_bound", 0, -1},
+		{"byte_overflow", 65536, 16},
+		{"bit_overflow", 512, 9},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("ExpCTWithBitLen accepted an invalid exponent bound")
+				}
+			}()
+			ctMod.ExpCTWithBitLen(big.NewInt(2), big.NewInt(tc.exp), tc.bits)
+		})
 	}
 }
 
