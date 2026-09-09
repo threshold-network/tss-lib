@@ -135,9 +135,6 @@ func (ct *CTModInt) reduceToPaddedBytes(val *big.Int) []byte {
 // ExpCT performs constant-time modular exponentiation using bigmod.
 // IMPORTANT: The modulus must be odd. Negative exponents are not supported and will panic.
 func (ct *CTModInt) ExpCT(base, exp *big.Int) *big.Int {
-	if exp.Sign() == 0 {
-		return big.NewInt(1)
-	}
 	if exp.Sign() < 0 {
 		panic("ExpCT: negative exponents are not supported; use ModInverseCT explicitly")
 	}
@@ -154,7 +151,8 @@ func (ct *CTModInt) ExpCT(base, exp *big.Int) *big.Int {
 	baseNat.SetBytes(paddedBase, ct.mod)
 
 	// Pad the exponent to a fixed width so the exponentiation's running time does not
-	// leak the secret exponent's magnitude (see leftPad).
+	// leak the secret exponent's magnitude (see leftPad). Zero follows this same
+	// path with an all-zero exponent of the full width.
 	expBytes := leftPad(exp.Bytes(), ct.byteLen)
 	defer func() {
 		for i := range expBytes {

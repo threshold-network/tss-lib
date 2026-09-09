@@ -8,14 +8,87 @@ package paillier
 
 import (
 	"math/big"
+	"runtime"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
 	"github.com/bnb-chain/tss-lib/tss"
 )
+
+func TestZeroPlaintextCTEquivalence(t *testing.T) {
+	// Small, fixed test-only key with p=7 and q=11.
+	key := &PrivateKey{PublicKey: PublicKey{N: big.NewInt(77)}, LambdaN: big.NewInt(30), PhiN: big.NewInt(60)}
+	defer common.DisableConstantTimeOps()
+	for _, enabled := range []bool{false, true} {
+		if enabled {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+		require.Equal(t, enabled, common.IsConstantTimeEnabled())
+		cipher, randomness, err := key.EncryptAndReturnRandomness(big.NewInt(0))
+		require.NoError(t, err)
+		want := new(big.Int).Exp(randomness, key.N, key.NSquare())
+		require.Zero(t, cipher.Cmp(want), "Enc(0) must equal r^N mod N^2")
+		plaintext, err := key.Decrypt(cipher)
+		require.NoError(t, err)
+		require.Zero(t, plaintext.Sign())
+
+		product, err := key.HomoMult(big.NewInt(0), cipher)
+		require.NoError(t, err)
+		require.Zero(t, product.Cmp(big.NewInt(1)), "cipher^0 must equal 1")
+		plaintext, err = key.Decrypt(product)
+		require.NoError(t, err)
+		require.Zero(t, plaintext.Sign())
+	}
+}
+
+func TestModProofConcurrentCTToggle(t *testing.T) {
+	// Fixed 128-bit safe primes keep this regression fast without making a
+	// non-unit Fiat-Shamir challenge likely, as tiny test moduli would.
+	p, ok := new(big.Int).SetString("170141183460469231731687303715884114527", 10)
+	require.True(t, ok)
+	q, ok := new(big.Int).SetString("170141183460469231731687303715884116147", 10)
+	require.True(t, ok)
+	phiN := new(big.Int).Mul(new(big.Int).Sub(p, big.NewInt(1)), new(big.Int).Sub(q, big.NewInt(1)))
+	key := &PrivateKey{PublicKey: PublicKey{N: new(big.Int).Mul(p, q)}, PhiN: phiN}
+
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	var toggles uint64
+	go func() {
+		defer close(stopped)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			common.DisableConstantTimeOps()
+			runtime.Gosched()
+			common.EnableConstantTimeOps()
+			atomic.AddUint64(&toggles, 1)
+			runtime.Gosched()
+		}
+	}()
+	t.Cleanup(func() {
+		close(stop)
+		<-stopped
+		common.DisableConstantTimeOps()
+	})
+
+	for i := 0; i < 32; i++ {
+		proof := key.ModProof()
+		valid, err := proof.ModVerify(key.N)
+		require.NoError(t, err)
+		require.True(t, valid, "proof %d must verify while the toggle changes", i)
+	}
+	require.NotZero(t, atomic.LoadUint64(&toggles), "the toggle must change during proof generation")
+}
 
 // These tests verify the invariant that the constant-time path computes the SAME
 // function as the standard path: for deterministic operations the outputs are

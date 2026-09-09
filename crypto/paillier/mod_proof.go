@@ -46,8 +46,11 @@ func (privateKey *PrivateKey) ModProof() *ModProof {
 	// requires an odd modulus); it is a prover-side value, never transmitted. Only the
 	// Exp mod N (odd) below carries the secret exponent and gets the constant-time path.
 	invN := new(big.Int).ModInverse(N, phiN)
+	// Use one snapshot for context creation and every use, even if the global
+	// toggle changes while this proof is being generated.
+	useCT := common.IsConstantTimeEnabled()
 	var ctModN *common.CTModInt
-	if common.IsConstantTimeEnabled() {
+	if useCT {
 		ctModN = common.NewCTModInt(N)
 	}
 
@@ -58,7 +61,7 @@ func (privateKey *PrivateKey) ModProof() *ModProof {
 		b[i] = b_i
 
 		var z_i *big.Int
-		if common.IsConstantTimeEnabled() {
+		if useCT {
 			z_i = ctModN.ExpCT(y_i, invN)
 		} else {
 			z_i = new(big.Int).Exp(y_i, invN, N)

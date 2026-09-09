@@ -84,6 +84,31 @@ func TestExpCTEdgeCases(t *testing.T) {
 	}
 }
 
+// A zero exponent must enter the modular context just like a positive exponent.
+// Checking the fresh context's pool avoids a flaky wall-clock timing assertion.
+func TestExpCTZeroExponentUsesContext(t *testing.T) {
+	modulus := big.NewInt(65537)
+	for _, base := range []*big.Int{big.NewInt(0), big.NewInt(1), big.NewInt(-5), big.NewInt(65542)} {
+		t.Run(base.String(), func(t *testing.T) {
+			ctMod := NewCTModInt(modulus)
+			usedContext := false
+			ctMod.bytePool.New = func() interface{} {
+				usedContext = true
+				return make([]byte, ctMod.byteLen)
+			}
+
+			got := ctMod.ExpCT(base, big.NewInt(0))
+			want := new(big.Int).Exp(base, big.NewInt(0), modulus)
+			if got.Cmp(want) != 0 {
+				t.Errorf("ExpCT(%v, 0) = %v, want %v", base, got, want)
+			}
+			if !usedContext {
+				t.Fatal("zero exponent bypassed the modular context")
+			}
+		})
+	}
+}
+
 // TestModInverseCTCorrectness verifies constant-time ModInverse correctness
 func TestModInverseCTCorrectness(t *testing.T) {
 	p, _ := rand.Prime(rand.Reader, 1024)
@@ -195,6 +220,9 @@ func TestModInverseCTNonCoprime(t *testing.T) {
 // zero-extends correctly, and a short exponent still produces the same value as
 // math/big.Exp. Regression for the fixed-width exponent padding.
 func TestExpCTExponentPadding(t *testing.T) {
+	if got := leftPad(big.NewInt(0).Bytes(), 5); !bytes.Equal(got, make([]byte, 5)) {
+		t.Errorf("leftPad zero exponent = %v, want five zero bytes", got)
+	}
 	if got := leftPad([]byte{0x12, 0x34}, 5); !bytes.Equal(got, []byte{0, 0, 0, 0x12, 0x34}) {
 		t.Errorf("leftPad zero-extension = %v, want [0 0 0 18 52]", got)
 	}
@@ -210,7 +238,7 @@ func TestExpCTExponentPadding(t *testing.T) {
 
 	// A short exponent is padded to the full modulus width internally; the result must
 	// still match math/big.Exp.
-	for _, exp := range []*big.Int{big.NewInt(1), big.NewInt(0x010203), big.NewInt(255)} {
+	for _, exp := range []*big.Int{big.NewInt(0), big.NewInt(1), big.NewInt(0x010203), big.NewInt(255)} {
 		want := new(big.Int).Exp(base, exp, N)
 		if got := ctMod.ExpCT(base, exp); got.Cmp(want) != 0 {
 			t.Errorf("ExpCT(base, %v) = %v, want %v", exp, got, want)
