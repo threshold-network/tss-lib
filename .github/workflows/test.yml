@@ -29,3 +29,6 @@ jobs:
 
     - name: Run Tests
       run: make test_unit
+
+    - name: Verify bidirectional legacy transcript vectors
+      run: ./testdata/legacy_transcript/verify.sh

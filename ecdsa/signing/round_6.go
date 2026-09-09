@@ -11,7 +11,6 @@ import (
 
 	errors2 "github.com/pkg/errors"
 
-	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto/schnorr"
 	"github.com/bnb-chain/tss-lib/tss"
 )
@@ -25,12 +24,37 @@ func (round *round6) Start() *tss.Error {
 	round.resetOK()
 
 	i := round.PartyID().Index
-	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
-	piAi, err := schnorr.NewZKProofWithSession(contextI, round.temp.roi, round.temp.bigAi)
+	var piAi *schnorr.ZKProof
+	var err error
+	if round.ProtocolMode() == tss.ProtocolModeLegacy {
+		piAi, err = schnorr.NewZKProof(round.temp.roi, round.temp.bigAi)
+	} else {
+		piAi, err = schnorr.NewZKProofWithSession(
+			round.proofContext(i)[0],
+			round.temp.roi,
+			round.temp.bigAi,
+		)
+	}
 	if err != nil {
 		return round.WrapError(errors2.Wrapf(err, "NewZKProof(roi, bigAi)"))
 	}
-	piV, err := schnorr.NewZKVProofWithSession(contextI, round.temp.bigVi, round.temp.bigR, round.temp.si, round.temp.li)
+	var piV *schnorr.ZKVProof
+	if round.ProtocolMode() == tss.ProtocolModeLegacy {
+		piV, err = schnorr.NewZKVProof(
+			round.temp.bigVi,
+			round.temp.bigR,
+			round.temp.si,
+			round.temp.li,
+		)
+	} else {
+		piV, err = schnorr.NewZKVProofWithSession(
+			round.proofContext(i)[0],
+			round.temp.bigVi,
+			round.temp.bigR,
+			round.temp.si,
+			round.temp.li,
+		)
+	}
 	if err != nil {
 		return round.WrapError(errors2.Wrapf(err, "NewZKVProof(bigVi, bigR, si, li)"))
 	}

@@ -26,6 +26,80 @@ func TestSetSessionNonceCopiesInput(t *testing.T) {
 	assert.Equal(t, big.NewInt(42), params.SessionNonce())
 }
 
+func TestSessionNonceReturnsCopy(t *testing.T) {
+	pIDs := GenerateTestPartyIDs(2)
+	params := NewParameters(S256(), NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)
+	params.SetSessionNonce(big.NewInt(42))
+
+	returned := params.SessionNonce()
+	returned.SetInt64(7)
+
+	assert.Equal(t, big.NewInt(42), params.SessionNonce())
+}
+
+func TestProtocolModeMustBeExplicitAndImmutable(t *testing.T) {
+	pIDs := GenerateTestPartyIDs(2)
+	newParams := func() *Parameters {
+		return NewParameters(
+			S256(),
+			NewPeerContext(pIDs),
+			pIDs[0],
+			len(pIDs),
+			1,
+		)
+	}
+
+	assert.Panics(t, func() {
+		newParams().FreezeProtocolMode()
+	})
+	for _, invalid := range []ProtocolMode{0, 3, 255} {
+		assert.Panics(t, func() {
+			newParams().SetProtocolMode(invalid)
+		})
+	}
+
+	legacy := newParams()
+	legacy.SetProtocolMode(ProtocolModeLegacy)
+	assert.Equal(t, ProtocolModeLegacy, legacy.ProtocolMode())
+	assert.Panics(t, func() {
+		legacy.SetProtocolMode(ProtocolModeSecurityV2)
+	})
+
+	legacy.FreezeProtocolMode()
+	assert.Panics(t, func() {
+		legacy.SetProtocolMode(ProtocolModeLegacy)
+	})
+	assert.Panics(t, func() {
+		legacy.SetSessionNonce(big.NewInt(1))
+	})
+
+	securityV2 := newParams()
+	securityV2.SetProtocolMode(ProtocolModeSecurityV2)
+	securityV2.SetSessionNonce(big.NewInt(1))
+	securityV2.FreezeProtocolMode()
+	assert.Equal(t, ProtocolModeSecurityV2, securityV2.ProtocolMode())
+	assert.Panics(t, func() {
+		securityV2.SetSessionNonce(big.NewInt(2))
+	})
+}
+
+func TestLegacyProtocolModeRejectsSessionNonce(t *testing.T) {
+	pIDs := GenerateTestPartyIDs(2)
+	params := NewParameters(
+		S256(),
+		NewPeerContext(pIDs),
+		pIDs[0],
+		len(pIDs),
+		1,
+	)
+	params.SetProtocolMode(ProtocolModeLegacy)
+	params.SetSessionNonce(big.NewInt(1))
+
+	assert.Panics(t, func() {
+		params.FreezeProtocolMode()
+	})
+}
+
 func TestSetSessionNonceBytesHashesSessionID(t *testing.T) {
 	pIDs := GenerateTestPartyIDs(2)
 	params := NewParameters(S256(), NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)

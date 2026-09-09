@@ -127,6 +127,7 @@ func NewLocalPartyWithKDD(
 	fullBytesLen ...int,
 ) tss.Party {
 	validatedFullBytesLen := validateFullBytesLen("NewLocalPartyWithKDD", msg, params, fullBytesLen)
+	params.FreezeProtocolMode()
 
 	partyCount := len(params.Parties().IDs())
 	p := &LocalParty{

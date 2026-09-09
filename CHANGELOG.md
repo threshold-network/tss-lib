@@ -34,26 +34,67 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #5** — removal of EdDSA and ECDSA resharing protocols (stacked on PR #4).
 - **PR #6** — remaining BNB cryptographic hardening follow-ups (stacked on PR #5).
 - **PR #7** — signing round-9 decommitment validation and related fixes (stacked on PR #6).
+- **PR #9** — immutable per-party legacy/security-v2 transcript selection and
+  exact historical legacy compatibility (stacked on PR #7).
 
 ### ⚠️ Compatibility — read before upgrading
 
-**This release is a protocol/wire compatibility break and must be rolled out as a
-coordinated protocol upgrade.** Fiat-Shamir proof challenges now use tagged hashing,
-session context, and fixed-width message encoding. Parties running pre-upgrade code
-**cannot** interoperate with upgraded parties in the same keygen or signing ceremony,
-even though the Go API remains source-compatible.
+**Security-v2 is a protocol/wire compatibility break.** Its Fiat-Shamir proof
+challenges use tagged hashing, session context, and fixed-width message
+encoding, so a security-v2 party cannot interoperate with a historical party.
 
-Do not mix pre- and post-upgrade parties in one ceremony; all participants must run the
-upgraded build simultaneously.
+PR #9 adds an explicit incremental-rollout mode. A party in
+`ProtocolModeLegacy` reproduces the historical untagged challenges, including
+the exact Schnorr ZK/ZKV `HashToN` input ordering and modular reduction, and can
+therefore share a legacy ceremony with the pre-upgrade binary. A ceremony must
+still be homogeneous by transcript mode: mixing legacy and security-v2 in one
+run fails cryptographic verification, and there is no negotiation, downgrade,
+fallback, or retry between modes.
 
-Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2):
-1. Set a per-ceremony session nonce before `Start()`.
-2. Pass a positive `fullBytesLen` to every signing constructor.
+Three caller obligations are enforced at runtime (see Breaking Changes 1 and 2
+and the PR #9 entry below):
+1. Select exactly one protocol mode before constructing a local party.
+2. In security-v2, set a unique per-ceremony session nonce; in legacy, leave it unset.
+3. Pass a positive `fullBytesLen` to every signing constructor.
+
+#### PR #9. Explicit dual-mode transcript contract
+- **What:** ECDSA keygen/signing parameters require an explicit immutable
+  `ProtocolModeLegacy` or `ProtocolModeSecurityV2`. Legacy round code calls the
+  historical no-session proof APIs; security-v2 round code calls the tagged,
+  session-bound APIs. `schnorr.NewZKProof` / `NewZKVProof` and `Verify` reproduce
+  the exact `2e712689` `HashToN` transcript. `New*WithSession` rejects nil and
+  non-nil empty sessions, and `VerifyWithSession` returns false for either, so
+  an ambiguous empty value can never select a transcript. DLN, range,
+  Bob/BobWC, ModProof, and FactorProof keep their existing optional-session
+  shape: no argument is legacy; one non-empty argument is security-v2.
+  Legacy Bob/BobWC proof generation also restores PRIOR's exact `tau` and
+  relatively-prime Paillier `gamma` sampling ranges, and its verifier retains
+  PRIOR's honest response range: legacy samples `gamma` below `N`, whereas
+  security-v2 samples it below `q^7`; applying the latter bound to historical
+  proofs rejects valid mixed-version signing transcripts.
+- **Break type:** Runtime/source-compatible configuration obligation. A local
+  party constructed without selecting a mode fails closed. A mode cannot be
+  changed after construction, security-v2 requires a session nonce, and legacy
+  refuses one.
+- **Motivation:** Preserve byte-compatible pre-cutover ceremonies during an
+  incremental binary rollout without weakening the post-cutover session-bound
+  transcript or allowing an in-flight downgrade.
+- **Provenance:** `threshold-original`, PR #9. Historical oracle:
+  `threshold-network/tss-lib@2e712689cfbeefede15f95a0ec7112227d86f702`.
+- **Qualification:** `crypto/schnorr/testdata/legacy_transcript_vectors.json`
+  records fixed public points, legacy/security-v2 challenges, proof scalars,
+  deterministic round-4/round-6 wire messages, source identities/digests, and
+  a SHA-256 sidecar. `testdata/legacy_transcript` adds independent bidirectional
+  PRIOR/R1 oracles and raw vectors for DLN, range, Bob/BobWC, ModProof, and
+  FactorProof, including the serialized protocol messages that carry them.
+  Cross-verification uses the historical formulas or the module pinned to
+  `2e712689`; it does not infer compatibility from two parties running the new
+  implementation.
 
 ### Breaking changes
 
-#### 1. Session nonce is now mandatory and fails closed
-- **What:** ECDSA keygen and ECDSA signing now require a positive session nonce. Each
+#### 1. Session nonce is mandatory in security-v2 and forbidden in legacy
+- **What:** ECDSA keygen and ECDSA signing in security-v2 require a positive session nonce. Each
   protocol's `Start()` (round 1) returns an error if `Parameters.SetSessionNonce` /
   `SetSessionNonceBytes` was not called, e.g.
   `"keygen requires tss.Parameters.SetSessionNonce(...) before Start"`
@@ -69,10 +110,12 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
   fail-closed-with-no-fallback decision being `threshold-original`. (Note: the threshold
   base had no SSID machinery at all; the "previous zero / `SHA512_256(messageBytes)`
   fallback" described in upstream history never shipped in this fork's base.)
-- **Migration:** Before `Start()`, on the constructing goroutine, call
+- **Migration:** Select `ProtocolModeSecurityV2`, then before constructing the
+  local party call
   `params.SetSessionNonce(<unique positive *big.Int>)` or
   `params.SetSessionNonceBytes(<>=16-byte high-entropy session ID>)`. All parties in a run
-  must agree on the same value.
+  must agree on the same value. A legacy party selects `ProtocolModeLegacy` and
+  must not set a nonce.
 
 #### 2. `fullBytesLen` is required at runtime for signing
 - **What:** The ECDSA signing constructors (`NewLocalParty`, `NewLocalPartyWithKDD`) accept
@@ -93,11 +136,14 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
 - **What:** Challenge derivation for DLN (`crypto/dlnproof`), Schnorr
   (`crypto/schnorr`), MtA `ProofBob`/`ProofBobWC` (`crypto/mta/proofs.go`), and
   `RangeProofAlice` (`crypto/mta/range_proof.go`) now uses length-delimited tagged hashing
-  (`common.SHA512_256i_TAGGED`) plus optional session context. **The challenge bytes change
-  unconditionally** — even on the default/nil-session path — because the underlying hash
-  construction itself changed. Per-party proof contexts also append a fixed-width `uint64`
-  party index so party 0 no longer collapses to the bare SSID.
-- **Break type:** Wire/protocol (old and new proofs do not cross-verify).
+  (`common.SHA512_256i_TAGGED`) plus session context in security-v2. The
+  no-session legacy path retains the exact historical construction and input
+  list; the challenge bytes change only when security-v2 is selected. Per-party
+  security-v2 proof contexts also append a fixed-width `uint64` party index so
+  party 0 no longer collapses to the bare SSID.
+- **Break type:** Wire/protocol in security-v2 (legacy and security-v2 proofs do
+  not cross-verify). The explicit legacy mode is byte-compatible with the
+  historical transcript.
 - **Motivation:** Domain separation binds each proof to its session/sub-protocol context,
   defeating cross-protocol and cross-session proof replay. The MtA path additionally binds
   `NTilde, h1, h2` into the transcript so a malicious verifier cannot swap ring-Pedersen
@@ -105,8 +151,9 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
 - **Provenance:** `BNB #252` (`3d95e54`), `BNB #256` (`1a14f3a`), `BNB #257` (`ff989bf`,
   tagged hashing), `BNB b59ed36` (DLN/MtA session context); party-index append is
   `threshold-original`.
-- **Migration:** Coordinated network-wide upgrade; no mixed old/new parties. Any persisted
-  pre-upgrade proofs are not re-verifiable.
+- **Migration:** Use legacy for work anchored before the coordinated cutover and
+  security-v2 for work anchored at or after it. All parties in one ceremony use
+  the same mode. Historical proofs remain re-verifiable through the legacy API.
 
 #### 4. Tagged Fiat-Shamir for Paillier ModProof / FactorProof (active on the protocol path)
 - **What:** `ModProof`/`ModVerify` and `FactorProof`/`FactorVerify`
