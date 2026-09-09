@@ -7,7 +7,10 @@
 package paillier
 
 import (
+	"crypto/rand"
+	"fmt"
 	"math/big"
+	mathrand "math/rand"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -19,6 +22,60 @@ import (
 	"github.com/bnb-chain/tss-lib/crypto"
 	"github.com/bnb-chain/tss-lib/tss"
 )
+
+func TestFactorProofUnequalWidthsCTEquivalence(t *testing.T) {
+	// Fixed test-only safe primes. Both factors exceed the entire byte width of
+	// the independent auxiliary modulus, while their public product bounds them.
+	p, ok := new(big.Int).SetString("170141183460469231731687303715884114527", 10)
+	require.True(t, ok)
+	q, ok := new(big.Int).SetString("170141183460469231731687303715884116147", 10)
+	require.True(t, ok)
+	require.True(t, p.ProbablyPrime(32))
+	require.True(t, q.ProbablyPrime(32))
+	pMinus1, qMinus1 := new(big.Int).Sub(p, big.NewInt(1)), new(big.Int).Sub(q, big.NewInt(1))
+	phiN := new(big.Int).Mul(pMinus1, qMinus1)
+	lambdaN := new(big.Int).Div(phiN, new(big.Int).GCD(nil, nil, pMinus1, qMinus1))
+	key := &PrivateKey{PublicKey: PublicKey{N: new(big.Int).Mul(p, q)}, PhiN: phiN, LambdaN: lambdaN}
+	N, s, tt := big.NewInt(11*23), big.NewInt(4), big.NewInt(9)
+	require.True(t, p.BitLen() > 8*len(N.Bytes()))
+	require.True(t, q.BitLen() > 8*len(N.Bytes()))
+	gotP, gotQ := key.GetPQ()
+	require.Zero(t, gotP.Cmp(q))
+	require.Zero(t, gotQ.Cmp(p))
+
+	var proofOff *FactorProof
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
+			// This test must remain non-parallel: replaying a test-only entropy
+			// stream makes every randomized commitment and response comparable.
+			previousReader, previousMode := rand.Reader, common.IsConstantTimeEnabled()
+			t.Cleanup(func() {
+				rand.Reader = previousReader
+				if previousMode {
+					common.EnableConstantTimeOps()
+				} else {
+					common.DisableConstantTimeOps()
+				}
+			})
+			rand.Reader = mathrand.New(mathrand.NewSource(1))
+			if enabled {
+				common.EnableConstantTimeOps()
+			} else {
+				common.DisableConstantTimeOps()
+			}
+			require.Equal(t, enabled, common.IsConstantTimeEnabled())
+			proof := key.FactorProof(N, s, tt)
+			valid, err := proof.FactorVerify(key.N, N, s, tt)
+			require.NoError(t, err)
+			require.True(t, valid)
+			if enabled {
+				require.Equal(t, proofOff, proof, "fixed randomness must produce identical factor commitments and responses")
+			} else {
+				proofOff = proof
+			}
+		})
+	}
+}
 
 func TestZeroPlaintextCTEquivalence(t *testing.T) {
 	// Small, fixed test-only key with p=7 and q=11.

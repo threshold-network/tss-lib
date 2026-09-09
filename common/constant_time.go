@@ -70,10 +70,7 @@ type CTModInt struct {
 }
 
 // leftPad returns b left-padded with zero bytes to width; if b is already at least
-// width bytes it is returned unchanged. Padding a secret exponent to a fixed width
-// keeps bigmod.Nat.Exp's running time independent of the exponent's magnitude (its
-// work is proportional to len(e)); leading zero bytes are no-op squarings and do not
-// change the result.
+// width bytes it is returned unchanged.
 func leftPad(b []byte, width int) []byte {
 	if len(b) >= width {
 		return b
@@ -81,6 +78,26 @@ func leftPad(b []byte, width int) []byte {
 	padded := make([]byte, width)
 	copy(padded[width-len(b):], b)
 	return padded
+}
+
+// padExponent encodes a nonnegative exponent in exactly the public bit bound's
+// byte width. Reject overflow instead of increasing bigmod.Exp's work according
+// to the secret exponent's magnitude. Leading zero bytes preserve the result.
+func padExponent(exp *big.Int, bitLen int) []byte {
+	if exp.Sign() < 0 {
+		panic("ExpCT: negative exponents are not supported; use ModInverseCT explicitly")
+	}
+	if bitLen <= 0 {
+		panic("ExpCT: public exponent bit length must be positive")
+	}
+	if exp.BitLen() > bitLen {
+		panic("ExpCT: exponent exceeds public bit length; use a sufficient public bound")
+	}
+	byteLen := bitLen / 8
+	if bitLen%8 != 0 {
+		byteLen++
+	}
+	return exp.FillBytes(make([]byte, byteLen))
 }
 
 // NewCTModInt creates a constant-time modular context using bigmod.
@@ -133,11 +150,25 @@ func (ct *CTModInt) reduceToPaddedBytes(val *big.Int) []byte {
 }
 
 // ExpCT performs constant-time modular exponentiation using bigmod.
-// IMPORTANT: The modulus must be odd. Negative exponents are not supported and will panic.
+// The exponent is padded to the modulus's byte width. Negative exponents and
+// exponents exceeding that width panic. Use ExpCTWithBitLen when the exponent's
+// public bound is wider than the arithmetic modulus. The modulus must be odd.
 func (ct *CTModInt) ExpCT(base, exp *big.Int) *big.Int {
-	if exp.Sign() < 0 {
-		panic("ExpCT: negative exponents are not supported; use ModInverseCT explicitly")
-	}
+	return ct.ExpCTWithBitLen(base, exp, ct.byteLen*8)
+}
+
+// ExpCTWithBitLen performs constant-time modular exponentiation, padding every
+// exponent (including zero) to ceil(bitLen/8) bytes. bitLen must come from a
+// public bound, never exp.BitLen(). It must be positive, and exp must be
+// nonnegative and fit within bitLen bits; violations panic without truncation
+// or reduction. The arithmetic modulus must be odd.
+func (ct *CTModInt) ExpCTWithBitLen(base, exp *big.Int, bitLen int) *big.Int {
+	expBytes := padExponent(exp, bitLen)
+	defer func() {
+		for i := range expBytes {
+			expBytes[i] = 0
+		}
+	}()
 
 	paddedBase := ct.reduceToPaddedBytes(base)
 	defer func() {
@@ -150,15 +181,6 @@ func (ct *CTModInt) ExpCT(base, exp *big.Int) *big.Int {
 	baseNat := bigmod.NewNat()
 	baseNat.SetBytes(paddedBase, ct.mod)
 
-	// Pad the exponent to a fixed width so the exponentiation's running time does not
-	// leak the secret exponent's magnitude (see leftPad). Zero follows this same
-	// path with an all-zero exponent of the full width.
-	expBytes := leftPad(exp.Bytes(), ct.byteLen)
-	defer func() {
-		for i := range expBytes {
-			expBytes[i] = 0
-		}
-	}()
 	result := bigmod.NewNat()
 	result.Exp(baseNat, expBytes, ct.mod)
 
