@@ -27,7 +27,7 @@ func TestDLNProofCTVerifies(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	sgps, err := common.GetRandomSafePrimesConcurrent(ctx, 512, 2, runtime.NumCPU())
+	sgps, err := common.GetRandomSafePrimesConcurrent(ctx, 1024, 2, runtime.NumCPU())
 	assert.NoError(t, err)
 	assert.NotNil(t, sgps)
 
