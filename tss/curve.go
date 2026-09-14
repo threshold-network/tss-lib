@@ -11,7 +11,7 @@ import (
 	"errors"
 	"reflect"
 
-	s256k1 "github.com/btcsuite/btcd/btcec"
+	s256k1 "github.com/btcsuite/btcd/btcec/v2"
 )
 
 type CurveName string
@@ -78,7 +78,10 @@ func SetCurve(curve elliptic.Curve) {
 	ec = curve
 }
 
-// secp256k1
+// S256 returns the secp256k1 curve from btcec/v2. Its concrete type is an alias
+// of Decred's secp256k1/v4.KoblitzCurve, not the legacy btcec.KoblitzCurve.
+// Callers should use the elliptic.Curve interface; its registered name remains
+// "secp256k1" for ECPoint JSON serialization.
 func S256() elliptic.Curve {
 	return s256k1.S256()
 }
