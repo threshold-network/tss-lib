@@ -78,7 +78,7 @@ func GetRandomInt(limit *big.Int) *big.Int {
 }
 
 func GetRandomPrimeInt(bits int) *big.Int {
-	if bits <= 0 {
+	if bits < 2 {
 		return nil
 	}
 	try, err := rand.Prime(rand.Reader, bits)
@@ -98,7 +98,7 @@ func GetRandomPrimeInt(bits int) *big.Int {
 // Generate a random element in the group of all the elements in Z/nZ that
 // has a multiplicative inverse.
 func GetRandomPositiveRelativelyPrimeInt(n *big.Int) *big.Int {
-	if n == nil || zero.Cmp(n) != -1 {
+	if n == nil || n.Cmp(one) <= 0 {
 		return nil
 	}
 	var try *big.Int
@@ -126,6 +126,9 @@ func IsNumberInMultiplicativeGroup(n, v *big.Int) bool {
 // https://github.com/didiercrunch/paillier/blob/d03e8850a8e4c53d04e8016a2ce8762af3278b71/utils.go#L39
 func GetRandomGeneratorOfTheQuadraticResidue(n *big.Int) *big.Int {
 	f := GetRandomPositiveRelativelyPrimeInt(n)
+	if f == nil {
+		return nil
+	}
 	fSq := new(big.Int).Mul(f, f)
 	return fSq.Mod(fSq, n)
 }

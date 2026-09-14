@@ -7,6 +7,7 @@
 package common_test
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -52,8 +53,31 @@ func TestGetRandomPositiveRelativelyPrimeInt(t *testing.T) {
 	// TODO test for relative primeness
 }
 
+func TestGetRandomPositiveRelativelyPrimeIntRejectsEmptyDomain(t *testing.T) {
+	for _, n := range []*big.Int{nil, big.NewInt(-1), big.NewInt(0), big.NewInt(1)} {
+		t.Run(fmt.Sprint(n), func(t *testing.T) {
+			assert.Nil(t, common.GetRandomPositiveRelativelyPrimeInt(n))
+			assert.Nil(t, common.GetRandomGeneratorOfTheQuadraticResidue(n))
+		})
+	}
+	assert.Equal(t, big.NewInt(1), common.GetRandomPositiveRelativelyPrimeInt(big.NewInt(2)))
+	n := big.NewInt(77)
+	assert.True(t, common.IsNumberInMultiplicativeGroup(n, common.GetRandomGeneratorOfTheQuadraticResidue(n)))
+}
+
 func TestGetRandomPrimeInt(t *testing.T) {
 	prime := common.GetRandomPrimeInt(randomIntBitLen)
 	assert.NotZero(t, prime, "rand prime should not be zero")
 	assert.True(t, prime.ProbablyPrime(50), "rand prime should be prime")
+}
+
+func TestGetRandomPrimeIntRejectsEmptyDomain(t *testing.T) {
+	for _, bits := range []int{-1, 0, 1} {
+		assert.Nil(t, common.GetRandomPrimeInt(bits))
+	}
+	prime := common.GetRandomPrimeInt(2)
+	if assert.NotNil(t, prime) {
+		assert.Equal(t, 2, prime.BitLen())
+		assert.True(t, prime.ProbablyPrime(50))
+	}
 }
