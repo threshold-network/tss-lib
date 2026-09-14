@@ -65,6 +65,9 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 
 	// 4.
 	beta := common.GetRandomPositiveRelativelyPrimeInt(pk.N)
+	if beta == nil {
+		return nil, errors.New("ProveBob: could not sample randomness")
+	}
 	gamma := common.GetRandomPositiveInt(q7)
 
 	// 5.
