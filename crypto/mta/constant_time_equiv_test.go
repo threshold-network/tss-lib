@@ -8,11 +8,15 @@ package mta
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
 	"math/big"
+	mathrand "math/rand"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
@@ -20,6 +24,132 @@ import (
 	"github.com/bnb-chain/tss-lib/ecdsa/keygen"
 	"github.com/bnb-chain/tss-lib/tss"
 )
+
+// Replaying this test-only stream makes the random commitments comparable. These
+// tests must remain non-parallel because both the entropy reader and CT mode are
+// process-wide; cleanup restores their previous values after each subtest.
+func setMTAProofTestMode(t *testing.T, enabled bool) {
+	t.Helper()
+	previousReader, previousMode := rand.Reader, common.IsConstantTimeEnabled()
+	t.Cleanup(func() {
+		rand.Reader = previousReader
+		if previousMode {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+	})
+	rand.Reader = mathrand.New(mathrand.NewSource(1))
+	if enabled {
+		common.EnableConstantTimeOps()
+	} else {
+		common.DisableConstantTimeOps()
+	}
+	require.Equal(t, enabled, common.IsConstantTimeEnabled())
+}
+
+func mtaFixtureKey(t *testing.T) *paillier.PrivateKey {
+	t.Helper()
+	fixtures, _, err := keygen.LoadKeygenTestFixtures(1)
+	require.NoError(t, err)
+	require.NotNil(t, fixtures[0].PaillierSK)
+	return fixtures[0].PaillierSK
+}
+
+func TestDecryptFixtureWithoutPhiNCTEquivalence(t *testing.T) {
+	key := mtaFixtureKey(t)
+	plaintext := big.NewInt(424242)
+	ciphertext, err := key.Encrypt(plaintext)
+	require.NoError(t, err)
+	keyWithoutPhi := *key
+	keyWithoutPhi.PhiN = nil
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
+			setMTAProofTestMode(t, enabled)
+			for _, candidate := range []*paillier.PrivateKey{key, &keyWithoutPhi} {
+				got, err := candidate.Decrypt(ciphertext)
+				require.NoError(t, err)
+				require.Zero(t, got.Cmp(plaintext))
+			}
+		})
+	}
+}
+
+func TestRangeProofAliceUnequalWidthsCTEquivalence(t *testing.T) {
+	key := mtaFixtureKey(t)
+	pk := &key.PublicKey
+	// Small test-only auxiliary modulus (two safe primes) and quadratic residues.
+	// Its byte width is independent of the Paillier plaintext domain.
+	NTilde, h1, h2 := big.NewInt(11*23), big.NewInt(4), big.NewInt(9)
+	m, r := big.NewInt(1<<24+3), big.NewInt(2)
+	require.True(t, m.BitLen() > 8*len(NTilde.Bytes()))
+	require.True(t, m.Cmp(tss.EC().Params().N) < 0)
+	require.True(t, m.Cmp(pk.N) < 0)
+	modN2 := common.ModInt(pk.NSquare())
+	c := modN2.Mul(modN2.Exp(pk.Gamma(), m), modN2.Exp(r, pk.N))
+
+	var proofOff *RangeProofAlice
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
+			setMTAProofTestMode(t, enabled)
+			proof, err := ProveRangeAlice(tss.EC(), pk, c, NTilde, h1, h2, m, r)
+			require.NoError(t, err)
+			// Compare arithmetic only: this tiny auxiliary modulus is below
+			// the production verifier's minimum size.
+			if enabled {
+				require.Equal(t, proofOff.Bytes(), proof.Bytes(), "fixed randomness must produce identical Alice commitments and responses")
+			} else {
+				proofOff = proof
+			}
+		})
+	}
+}
+
+func TestBobProofUnequalWidthsCTEquivalence(t *testing.T) {
+	key := mtaFixtureKey(t)
+	pk := &key.PublicKey
+	NTilde, h1, h2 := big.NewInt(11*23), big.NewInt(4), big.NewInt(9)
+	m, x, r := big.NewInt(1<<24+3), big.NewInt(1<<32+5), big.NewInt(3)
+	require.True(t, x.BitLen() > 8*len(NTilde.Bytes()))
+	require.True(t, x.Cmp(tss.EC().Params().N) < 0)
+	require.True(t, x.Cmp(pk.N) < 0)
+	X := crypto.ScalarBaseMult(tss.EC(), x)
+	modN2 := common.ModInt(pk.NSquare())
+	c1 := modN2.Mul(modN2.Exp(pk.Gamma(), m), modN2.Exp(big.NewInt(2), pk.N))
+
+	// Fixed y values cross several byte boundaries, then reach the top of the
+	// Paillier domain. Even the largest is a valid betaPrm plaintext (y < pk.N).
+	yValues := []*big.Int{
+		big.NewInt(0), big.NewInt(255), big.NewInt(256),
+		big.NewInt(65535), big.NewInt(65536),
+		big.NewInt(1<<24 - 1), big.NewInt(1 << 24),
+		new(big.Int).Sub(pk.N, big.NewInt(1)),
+	}
+	for _, y := range yValues {
+		t.Run(fmt.Sprintf("y_bits=%d", y.BitLen()), func(t *testing.T) {
+			require.True(t, y.Cmp(pk.N) < 0)
+			cY := modN2.Mul(modN2.Exp(pk.Gamma(), y), modN2.Exp(r, pk.N))
+			c2 := modN2.Mul(modN2.Exp(c1, x), cY)
+			var proofOff *ProofBob
+			var proofWCOff *ProofBobWC
+			for _, enabled := range []bool{false, true} {
+				t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
+					setMTAProofTestMode(t, enabled)
+					proof, err := ProveBob(tss.EC(), pk, NTilde, h1, h2, c1, c2, x, y, r)
+					require.NoError(t, err)
+					proofWC, err := ProveBobWC(tss.EC(), pk, NTilde, h1, h2, c1, c2, x, y, r, X)
+					require.NoError(t, err)
+					if enabled {
+						require.Equal(t, proofOff.Bytes(), proof.Bytes(), "fixed randomness must produce identical Bob commitments and responses")
+						require.Equal(t, proofWCOff.Bytes(), proofWC.Bytes(), "fixed randomness must produce identical Bob WC commitments and responses")
+					} else {
+						proofOff, proofWCOff = proof, proofWC
+					}
+				})
+			}
+		})
+	}
+}
 
 // These tests verify that the MtA flow run with constant-time ops enabled — which
 // hardens the secret-witness exponentiations h1^x, h1^y (proofs.go) and h1^m
@@ -51,8 +181,15 @@ func TestShareProtocolWCConstantTime(t *testing.T) {
 	NTildej, h1j, h2j, err := keygen.LoadNTildeH1H2FromTestFixture(1)
 	assert.NoError(t, err)
 
+	previousMode := common.IsConstantTimeEnabled()
+	t.Cleanup(func() {
+		if previousMode {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+	})
 	common.EnableConstantTimeOps()
-	defer common.DisableConstantTimeOps()
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 
 	cA, pf, err := AliceInit(tss.EC(), pk, a, NTildej, h1j, h2j)

@@ -52,19 +52,22 @@ func (privateKey *PrivateKey) ModProof(session ...[]byte) *ModProof {
 	// requires an odd modulus); it is a prover-side value, never transmitted. Only the
 	// Exp mod N (odd) below carries the secret exponent and gets the constant-time path.
 	invN := new(big.Int).ModInverse(N, phiN)
+	// Use one snapshot for context creation and every use, even if the global
+	// toggle changes while this proof is being generated.
+	useCT := common.IsConstantTimeEnabled()
 	var ctModN *common.CTModInt
-	if common.IsConstantTimeEnabled() {
+	if useCT {
 		ctModN = common.NewCTModInt(N)
 	}
 
 	for i, y_i := range y {
-		a_i, b_i, x_i := defineXi(w, y_i, p, q, N, phiN)
+		a_i, b_i, x_i := defineXi(w, y_i, p, q, N, phiN, useCT)
 		x[i] = x_i
 		a[i] = a_i
 		b[i] = b_i
 
 		var z_i *big.Int
-		if common.IsConstantTimeEnabled() {
+		if useCT {
 			z_i = ctModN.ExpCT(y_i, invN)
 		} else {
 			z_i = new(big.Int).Exp(y_i, invN, N)
@@ -199,7 +202,7 @@ func sampleYModN(tag []byte, N *big.Int, inputs ...*big.Int) *big.Int {
 
 // Determine values a_i and b_i so that a valid x_i exists,
 // and return a_i, b_i and x_i.
-func defineXi(w, y_i, p, q, N, phiN *big.Int) (bool, bool, *big.Int) {
+func defineXi(w, y_i, p, q, N, phiN *big.Int, useCT bool) (bool, bool, *big.Int) {
 	bools := [...]bool{false, true}
 
 	for _, a := range bools {
@@ -216,8 +219,8 @@ func defineXi(w, y_i, p, q, N, phiN *big.Int) (bool, bool, *big.Int) {
 
 			yy_i.Mod(yy_i, N)
 
-			if isQuadResidueModComposite(yy_i, p, q) {
-				return a, b, quadResidueModComposite(yy_i, p, q, N, phiN)
+			if isQuadResidueModCompositeWithMode(yy_i, p, q, useCT) {
+				return a, b, quadResidueModCompositeWithMode(yy_i, p, q, N, phiN, useCT)
 			}
 		}
 	}
@@ -227,15 +230,23 @@ func defineXi(w, y_i, p, q, N, phiN *big.Int) (bool, bool, *big.Int) {
 
 // x is quadratic residue modulo pq if x is a quadratic residue modulo p and q
 func isQuadResidueModComposite(x, p, q *big.Int) bool {
-	return isQuadResidueModPrime(x, p) && isQuadResidueModPrime(x, q)
+	return isQuadResidueModCompositeWithMode(x, p, q, common.IsConstantTimeEnabled())
+}
+
+func isQuadResidueModCompositeWithMode(x, p, q *big.Int, useCT bool) bool {
+	return isQuadResidueModPrimeWithMode(x, p, useCT) && isQuadResidueModPrimeWithMode(x, q, useCT)
 }
 
 // x is a quadratic residue modulo p if x^((p-1)/2) = 1
 func isQuadResidueModPrime(x, p *big.Int) bool {
+	return isQuadResidueModPrimeWithMode(x, p, common.IsConstantTimeEnabled())
+}
+
+func isQuadResidueModPrimeWithMode(x, p *big.Int, useCT bool) bool {
 	ps := new(big.Int).Sub(p, big.NewInt(1))
 	ps = ps.Div(ps, big.NewInt(2))
 
-	if common.IsConstantTimeEnabled() {
+	if useCT {
 		// SECURITY: p is a secret prime (odd) and the exponent (p-1)/2 is secret-derived;
 		// use the constant-time path.
 		return common.Eq(common.NewCTModInt(p).ExpCT(x, ps), big.NewInt(1))
@@ -246,10 +257,14 @@ func isQuadResidueModPrime(x, p *big.Int) bool {
 // the square root of x can be calculated as x^((phiN+4)/8)
 // apply this twice to get the 4th root
 func quadResidueModComposite(x, p, q, n, phiN *big.Int) *big.Int {
+	return quadResidueModCompositeWithMode(x, p, q, n, phiN, common.IsConstantTimeEnabled())
+}
+
+func quadResidueModCompositeWithMode(x, p, q, n, phiN *big.Int, useCT bool) *big.Int {
 	e := new(big.Int).Add(phiN, big.NewInt(4))
 	e = e.Div(e, big.NewInt(8))
 
-	if common.IsConstantTimeEnabled() {
+	if useCT {
 		// SECURITY: the fourth-root exponent e derives from secret phiN; the modulus
 		// n = N is odd, so use the constant-time path for both square-root steps.
 		ctModN := common.NewCTModInt(n)

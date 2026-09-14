@@ -192,8 +192,9 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 		return nil, ErrMessageMalFormed
 	}
 
+	useCT := common.IsConstantTimeEnabled()
 	var cExpLambda, gammaExpLambda *big.Int
-	if common.IsConstantTimeEnabled() {
+	if useCT {
 		// SECURITY: constant-time exponentiation prevents leaking the secret
 		// exponent LambdaN through execution-time variation. N2 is odd.
 		ctModN2 := common.NewCTModInt(N2)
@@ -210,10 +211,11 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 	Lg := L(gammaExpLambda, privateKey.N)
 	// 3. (1) * modInv(2) mod N
 	var inv *big.Int
-	if common.IsConstantTimeEnabled() {
-		// SECURITY: Lg derives from the secret LambdaN exponentiation; N = P*Q is
-		// composite, so provide phi(N) for the Euler inverse (the bigmod modulus N is odd).
-		ctModN := common.NewCTModIntWithPhi(privateKey.N, privateKey.PhiN)
+	if useCT {
+		// LambdaN is a group exponent for the units modulo N, so raising a
+		// unit to LambdaN-1 computes its inverse. Reuse the value already
+		// needed for decryption without requiring the optional PhiN field.
+		ctModN := common.NewCTModIntWithPhi(privateKey.N, privateKey.LambdaN)
 		inv = ctModN.ModInverseCT(Lg)
 	} else {
 		inv = new(big.Int).ModInverse(Lg, privateKey.N)
