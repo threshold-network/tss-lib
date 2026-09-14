@@ -144,6 +144,15 @@ legacy and security-v2 parties cannot interoperate. The selected mode is frozen
 when the local party is constructed and cannot change while the protocol is in
 flight.
 
+Security-v2 ECDSA signing binds both the message integer and `fullBytesLen`
+into the signing SSID. All signers must agree on the message and its byte width
+before constructing their parties. Signing constructors copy the message integer
+in both modes, so later caller mutations do not alter the party's message.
+This changes the security-v2 proof transcript:
+deploy and activate this version together across every signer in a ceremony.
+Security-v2 signers from before and after this change cannot interoperate.
+Legacy transcript bytes remain unchanged.
+
 The low-level proof APIs follow the same unambiguous split. The historical
 generic APIs (for example `schnorr.NewZKProof` / `ZKProof.Verify`) reproduce the
 exact pre-hardening `HashToN` transcript. Their `WithSession` counterparts are
