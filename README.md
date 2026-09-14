@@ -34,6 +34,9 @@ In contrast to MultiSig solutions, transactions produced by TSS preserve the pri
 There is also a performance bonus in that blockchain nodes may check the validity of a signature without any extra MultiSig logic or processing.
 
 ## Usage
+
+Go 1.25.7 or newer is required. Development and CI use Go 1.26.8, as specified by the `toolchain` directive in `go.mod`.
+
 You should start by creating an instance of a `LocalParty` and giving it the arguments that it needs.
 
 The `LocalParty` that you use should be from the `keygen` or `signing` package depending on what you want to do.
