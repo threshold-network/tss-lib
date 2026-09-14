@@ -58,6 +58,9 @@ func (round *round5) Start() *tss.Error {
 	}
 
 	R = R.ScalarMult(round.temp.thetaInverse)
+	if R == nil {
+		return round.WrapError(errors.New("R.ScalarMult(thetaInverse) produced a nil point"))
+	}
 	N := round.Params().EC().Params().N
 	modN := common.ModInt(N)
 	rx := R.X()

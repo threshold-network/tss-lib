@@ -80,6 +80,7 @@ var (
 // ----- //
 
 // NewMessageWrapper constructs a MessageWrapper from routing metadata and content
+// and panics if a sender or recipient has no PartyID content.
 func NewMessageWrapper(routing MessageRouting, content MessageContent) *MessageWrapper {
 	// marshal the content to the ProtoBuf Any type
 	any, err := anypb.New(content)
@@ -96,8 +97,14 @@ func NewMessageWrapper(routing MessageRouting, content MessageContent) *MessageW
 	if routing.To != nil {
 		to = make([]*MessageWrapper_PartyID, len(routing.To))
 		for i := range routing.To {
+			if routing.To[i] == nil || routing.To[i].MessageWrapper_PartyID == nil {
+				panic(fmt.Errorf("NewMessageWrapper: routing.To[%d] has no PartyID content", i))
+			}
 			to[i] = routing.To[i].MessageWrapper_PartyID
 		}
+	}
+	if routing.From == nil || routing.From.MessageWrapper_PartyID == nil {
+		panic(fmt.Errorf("NewMessageWrapper: routing.From has no PartyID content"))
 	}
 	return &MessageWrapper{
 		IsBroadcast:             routing.IsBroadcast,

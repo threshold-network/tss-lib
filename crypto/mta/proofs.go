@@ -149,6 +149,10 @@ func ProveBob(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c2,
 }
 
 func ProofBobWCFromBytes(ec elliptic.Curve, bzs [][]byte) (*ProofBobWC, error) {
+	// The base decoder also accepts the shorter ProofBob encoding.
+	if !common.NonEmptyMultiBytes(bzs, ProofBobWCBytesParts) {
+		return nil, fmt.Errorf("expected %d byte parts to construct ProofBobWC", ProofBobWCBytesParts)
+	}
 	proofBob, err := ProofBobFromBytes(bzs)
 	if err != nil {
 		return nil, err
@@ -414,6 +418,9 @@ func (pf *ProofBobWC) ValidateBasic() bool {
 }
 
 func (pf *ProofBob) Bytes() [ProofBobBytesParts][]byte {
+	if !pf.ValidateBasic() {
+		panic(fmt.Errorf("ProofBob.Bytes: invalid receiver"))
+	}
 	return [...][]byte{
 		pf.Z.Bytes(),
 		pf.ZPrm.Bytes(),
@@ -429,6 +436,11 @@ func (pf *ProofBob) Bytes() [ProofBobBytesParts][]byte {
 }
 
 func (pf *ProofBobWC) Bytes() [ProofBobWCBytesParts][]byte {
+	// The optional mode without X uses a coordinate placeholder for U, so
+	// serialization requires the fields to be present without curve validation.
+	if pf == nil || !pf.ProofBob.ValidateBasic() || pf.U == nil {
+		panic(fmt.Errorf("ProofBobWC.Bytes: invalid receiver"))
+	}
 	var out [ProofBobWCBytesParts][]byte
 	bobBzs := pf.ProofBob.Bytes()
 	bobBzsSlice := bobBzs[:]
