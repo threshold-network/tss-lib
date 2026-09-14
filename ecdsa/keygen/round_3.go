@@ -7,6 +7,7 @@
 package keygen
 
 import (
+	"crypto/elliptic"
 	"errors"
 	"math/big"
 
@@ -72,13 +73,7 @@ func (round *round3) Start() *tss.Error {
 			KGCj := round.temp.KGCs[j]
 			r2msg2 := round.temp.kgRound2Message2s[j].Content().(*KGRound2Message2)
 			KGDj := r2msg2.UnmarshalDeCommitment()
-			cmtDeCmt := commitments.HashCommitDecommit{C: KGCj, D: KGDj}
-			ok, flatPolyGs := cmtDeCmt.DeCommit()
-			if !ok || flatPolyGs == nil {
-				ch <- vssOut{errors.New("de-commitment verify failed"), nil}
-				return
-			}
-			PjVs, err := crypto.UnFlattenECPoints(round.Params().EC(), flatPolyGs)
+			PjVs, err := unmarshalVSSCommitment(round.Params().EC(), round.Threshold(), KGCj, KGDj)
 			if err != nil {
 				ch <- vssOut{err, nil}
 				return
@@ -89,7 +84,7 @@ func (round *round3) Start() *tss.Error {
 				ID:        round.PartyID().KeyInt(),
 				Share:     r2msg1.UnmarshalShare(),
 			}
-			if ok = PjShare.Verify(round.Params().EC(), round.Threshold(), PjVs); !ok {
+			if ok := PjShare.Verify(round.Params().EC(), round.Threshold(), PjVs); !ok {
 				ch <- vssOut{errors.New("vss verify failed"), nil}
 				return
 			}
@@ -97,7 +92,7 @@ func (round *round3) Start() *tss.Error {
 			pkN := round.save.PaillierPKs[j].N
 			NTilde := round.save.LocalPreParams.NTildei
 			H1i, H2i := round.save.LocalPreParams.H1i, round.save.LocalPreParams.H2i
-			ok, err = FacProof.FactorVerify(pkN, NTilde, H1i, H2i, contextJ)
+			ok, err := FacProof.FactorVerify(pkN, NTilde, H1i, H2i, contextJ)
 			if err != nil {
 				ch <- vssOut{err, nil}
 				return
@@ -211,6 +206,21 @@ func (round *round3) Start() *tss.Error {
 	round.temp.kgRound3Messages[PIdx] = r3msg
 	round.out <- r3msg
 	return nil
+}
+
+func unmarshalVSSCommitment(ec elliptic.Curve, threshold int, commitment commitments.HashCommitment,
+	decommitment commitments.HashDeCommitment) (vss.Vs, error) {
+	// One randomness value followed by two coordinates per polynomial point.
+	// Check the count before hashing the parts or constructing curve points.
+	if len(decommitment) != (threshold+1)*2+1 {
+		return nil, errors.New("de-commitment verify failed")
+	}
+	cmtDeCmt := commitments.HashCommitDecommit{C: commitment, D: decommitment}
+	ok, flatPolyGs := cmtDeCmt.DeCommit()
+	if !ok || flatPolyGs == nil {
+		return nil, errors.New("de-commitment verify failed")
+	}
+	return crypto.UnFlattenECPoints(ec, flatPolyGs)
 }
 
 func (round *round3) CanAccept(msg tss.ParsedMessage) bool {
