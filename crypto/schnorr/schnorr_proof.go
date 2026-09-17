@@ -60,8 +60,15 @@ func NewZKProofWithSession(session []byte, x *big.Int, X *crypto.ECPoint) (*ZKPr
 
 	cHash := common.SHA512_256i_TAGGED(fsSessionZK(session), X.X(), X.Y(), g.X(), g.Y(), alpha.X(), alpha.Y())
 	c := common.ModReduceHash(q, cHash)
-	t := new(big.Int).Mul(c, x)
-	t = common.ModInt(q).Add(a, t)
+
+	modQ := common.ModInt(q)
+	var t *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: constant-time multiplication for secret x (BNB 3709c25).
+		t = modQ.Add(a, common.NewCTModInt(q).MulCT(c, x))
+	} else {
+		t = modQ.Add(a, new(big.Int).Mul(c, x))
+	}
 
 	return &ZKProof{Alpha: alpha, T: t}, nil
 }
@@ -135,8 +142,16 @@ func NewZKVProofWithSession(session []byte, V, R *crypto.ECPoint, s, l *big.Int)
 	c := common.ModReduceHash(q, cHash)
 
 	modQ := common.ModInt(q)
-	t := modQ.Add(a, new(big.Int).Mul(c, s))
-	u := modQ.Add(b, new(big.Int).Mul(c, l))
+	var t, u *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: constant-time multiplication for secret values s, l (BNB 3709c25).
+		ctModQ := common.NewCTModInt(q)
+		t = modQ.Add(a, ctModQ.MulCT(c, s))
+		u = modQ.Add(b, ctModQ.MulCT(c, l))
+	} else {
+		t = modQ.Add(a, new(big.Int).Mul(c, s))
+		u = modQ.Add(b, new(big.Int).Mul(c, l))
+	}
 
 	return &ZKVProof{Alpha: alpha, T: t, U: u}, nil
 }

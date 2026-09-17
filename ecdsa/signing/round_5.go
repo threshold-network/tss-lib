@@ -8,6 +8,7 @@ package signing
 
 import (
 	"errors"
+	"math/big"
 
 	errors2 "github.com/pkg/errors"
 
@@ -62,7 +63,14 @@ func (round *round5) Start() *tss.Error {
 	modN := common.ModInt(N)
 	rx := R.X()
 	ry := R.Y()
-	si := modN.Add(modN.Mul(round.temp.m, round.temp.k), modN.Mul(rx, round.temp.sigma))
+	var si *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: constant-time multiplication for secret values m, k, sigma (BNB 3709c25).
+		ctModN := common.NewCTModInt(N)
+		si = modN.Add(ctModN.MulCT(round.temp.m, round.temp.k), ctModN.MulCT(rx, round.temp.sigma))
+	} else {
+		si = modN.Add(modN.Mul(round.temp.m, round.temp.k), modN.Mul(rx, round.temp.sigma))
+	}
 
 	// clear temp.w and temp.k from memory, lint ignore
 	round.temp.w = zero
