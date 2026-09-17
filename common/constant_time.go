@@ -12,10 +12,11 @@
 // constant-time core used by Go's crypto/rsa).
 //
 // COVERAGE: Enabled by default, the bigmod path is applied
-// to modular exponentiations whose EXPONENT is a long-term secret, witness, trapdoor,
-// or secret plaintext/scalar: Paillier Decrypt / Encrypt (gamma^m) / HomoMult, the
-// Paillier mod- and factor-proofs, the DLN proof, the ring-Pedersen trapdoor setup in
-// keygen, and the MtA range and regular proofs.
+// to modular exponentiations/multiplications whose operand is a long-term secret,
+// witness, trapdoor, or secret plaintext/scalar: Paillier Decrypt / Encrypt (gamma^m) /
+// HomoMult, the Paillier mod- and factor-proofs, the DLN proof, the ring-Pedersen
+// trapdoor setup in keygen, the MtA range and regular proofs, the Schnorr proof
+// responses (crypto/schnorr), and ECDSA signing rounds 3-5 (thelta/sigma/thetaInverse/si).
 // This is limited coverage: conversion, reduction, and other surrounding math/big
 // operations remain variable-time. It does not make the whole protocol constant-time.
 //
@@ -28,6 +29,13 @@
 //     leaving them on math/big is a pragmatic deferral, NOT a safety guarantee.
 //   - Exponentiations modulo an even value (e.g. inverses mod phi(N)): bigmod requires
 //     an odd modulus, so these stay on math/big.
+//   - crypto/mta.AliceEnd/AliceEndWC's Paillier decrypt: upstream (BNB 3709c25) protects
+//     this with a *different* mechanism entirely -- a sleep-based response-time
+//     normalization wrapper (NewTimingProtection, ~200ms target + jitter), not a bigmod
+//     constant-time path. That primitive does not exist in this file and was
+//     deliberately not added: it would inject a fixed ~200ms delay into every MtA
+//     share round, a real latency/throughput cost nobody has signed off on. Tracked as
+//     a known, intentionally-deferred gap, not an oversight.
 //
 // Reference: https://github.com/golang/go/issues/20654
 

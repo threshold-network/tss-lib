@@ -4,8 +4,8 @@ All notable changes to this fork (`threshold-network/tss-lib`) are documented he
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This fork follows the upstream [`bnb-chain/tss-lib`](https://github.com/bnb-chain/tss-lib)
-SemVer line for provenance but has not yet published its own tagged release; all changes
-below are therefore listed under `[Unreleased]`.
+SemVer line for provenance. Changes are grouped under a version heading once released;
+anything not yet released lives under `[Unreleased]`.
 
 Provenance notation. Each entry carries two kinds of reference:
 - **Upstream source** — `BNB #NNN` / `BNB <sha>` is the upstream pull request or commit the
