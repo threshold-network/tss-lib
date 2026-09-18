@@ -178,8 +178,8 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
   `math/big`, closing the timing side-channel described in
   [golang/go#20654](https://github.com/golang/go/issues/20654). Unlike upstream, where
   `EnableConstantTimeOps` is opt-in and nothing in-tree ever calls it, this fork enables it
-  unconditionally via a package `init()` (`common/constant_time_init.go`) — every consumer
-  gets the fix with no code change required.
+  unconditionally by defaulting `constantTimeEnabled` to `1` in `common/constant_time.go` —
+  every consumer gets the fix with no code change required.
 - **Break type:** Performance only. Same mathematical result on every path (see the
   constant-time equivalence tests added alongside each hardened package); no wire, source,
   or runtime-input behavior changes. A microbenchmark
@@ -351,7 +351,8 @@ rejecting input that an honest caller would previously have produced.
 - `common.EnableConstantTimeOps`, `DisableConstantTimeOps`, `IsConstantTimeEnabled`,
   `NewCTModInt`, `NewCTModIntWithPhi`, and the `CTModInt` type with `ExpCT`/`MulCT`/
   `ModInverseCT` — constant-time modular arithmetic backed by `filippo.io/bigmod`, enabled
-  unconditionally by this fork's `common/constant_time_init.go`. _Provenance: `BNB #328`._
+  unconditionally by this fork's default (`constantTimeEnabled = 1` in
+  `common/constant_time.go`). _Provenance: `BNB #328`._
 
 ### Notes
 
