@@ -17,6 +17,28 @@ import (
 	"github.com/bnb-chain/tss-lib/tss"
 )
 
+// withCTMode saves the ambient constant-time mode, sets it to `enabled`, and
+// restores the saved mode on cleanup. CT is enabled by default in this package,
+// so tests that want a genuine non-CT baseline must disable it explicitly rather
+// than assume it is off; restoring afterwards keeps coverage independent of test
+// order and preserves default-path coverage for the other Schnorr tests.
+func withCTMode(t *testing.T, enabled bool) {
+	t.Helper()
+	prev := common.IsConstantTimeEnabled()
+	if enabled {
+		common.EnableConstantTimeOps()
+	} else {
+		common.DisableConstantTimeOps()
+	}
+	t.Cleanup(func() {
+		if prev {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+	})
+}
+
 // TestSchnorrProofCTVerifies builds a valid ZK proof instance exactly as
 // TestSchnorrProofVerify does, then checks that a proof generated with
 // constant-time ops enabled still verifies, alongside the standard (non-CT)
@@ -29,13 +51,14 @@ func TestSchnorrProofCTVerifies(t *testing.T) {
 	X := crypto.ScalarBaseMult(tss.EC(), u)
 
 	// Baseline: non-CT proof verifies.
+	withCTMode(t, false)
+	assert.False(t, common.IsConstantTimeEnabled(), "CT must be off for the baseline")
 	proofOff, err := NewZKProof(u, X)
 	assert.NoError(t, err)
 	assert.True(t, proofOff.Verify(X), "non-CT Schnorr proof must verify")
 
 	// CT proof must also verify.
-	common.EnableConstantTimeOps()
-	defer common.DisableConstantTimeOps()
+	withCTMode(t, true)
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 	proofOn, err := NewZKProof(u, X)
 	assert.NoError(t, err)
@@ -56,13 +79,14 @@ func TestSchnorrVProofCTVerifies(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Baseline: non-CT proof verifies.
+	withCTMode(t, false)
+	assert.False(t, common.IsConstantTimeEnabled(), "CT must be off for the baseline")
 	proofOff, err := NewZKVProof(V, R, s, l)
 	assert.NoError(t, err)
 	assert.True(t, proofOff.Verify(V, R), "non-CT Schnorr V proof must verify")
 
 	// CT proof must also verify.
-	common.EnableConstantTimeOps()
-	defer common.DisableConstantTimeOps()
+	withCTMode(t, true)
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 	proofOn, err := NewZKVProof(V, R, s, l)
 	assert.NoError(t, err)

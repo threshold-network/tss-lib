@@ -4,8 +4,8 @@ All notable changes to this fork (`threshold-network/tss-lib`) are documented he
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This fork follows the upstream [`bnb-chain/tss-lib`](https://github.com/bnb-chain/tss-lib)
-SemVer line for provenance. Changes are grouped under a version heading once released;
-anything not yet released lives under `[Unreleased]`.
+SemVer line for provenance but has not yet published its own tagged release; all changes
+below are therefore listed under `[Unreleased]`.
 
 Provenance notation. Each entry carries two kinds of reference:
 - **Upstream source** — `BNB #NNN` / `BNB <sha>` is the upstream pull request or commit the
@@ -16,11 +16,7 @@ Provenance notation. Each entry carries two kinds of reference:
 
 ---
 
-## [Unreleased]
-
----
-
-## [1.4.0] - 2026-09-14 — BNB hardening integration
+## [Unreleased] — BNB hardening integration
 
 Security and correctness hardening ported or manually adapted from `bnb-chain/tss-lib`,
 without replacing Threshold's existing Paillier/NTilde `ModProof`/`FactorProof` remediation.
@@ -376,5 +372,4 @@ rejecting input that an honest caller would previously have produced.
 - Applications **must** call `SetSessionNonce`/`SetSessionNonceBytes` before keygen and
   signing; those protocols fail closed without it.
 
-[1.4.0]: https://github.com/threshold-network/tss-lib/compare/2e712689...v1.4.0
-[Unreleased]: https://github.com/threshold-network/tss-lib/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/threshold-network/tss-lib/compare/2e712689...HEAD
