@@ -21,10 +21,11 @@ import (
 )
 
 // TestE2EConcurrentConstantTime runs the full threshold-signing protocol with
-// constant-time cryptographic operations enabled. This exercises the CT-wired
-// Paillier Decrypt path (used in MtA) end-to-end across all parties and asserts
-// the produced ECDSA signature verifies, confirming the CT path is functionally
-// equivalent to the standard path in the integrated protocol.
+// constant-time cryptographic operations enabled. It exercises the CT-wired
+// Paillier Decrypt path (used in MtA), the Schnorr ZK proof response path
+// (called from round 4), and the round 3/4/5 ECDSA signing multiplications
+// (thelta/sigma/thetaInverse/si) end-to-end across all parties, asserting the
+// produced ECDSA signature verifies.
 func TestE2EConcurrentConstantTime(t *testing.T) {
 	setUp("info")
 

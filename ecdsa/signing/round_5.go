@@ -65,7 +65,7 @@ func (round *round5) Start() *tss.Error {
 	ry := R.Y()
 	var si *big.Int
 	if common.IsConstantTimeEnabled() {
-		// SECURITY: constant-time multiplication for secret values m, k, sigma (BNB 3709c25).
+		// SECURITY: constant-time multiplication for the secret operands k and sigma (m is the public message hash; rx = R.X() is published as the signature r component).
 		ctModN := common.NewCTModInt(N)
 		si = modN.Add(ctModN.MulCT(round.temp.m, round.temp.k), ctModN.MulCT(rx, round.temp.sigma))
 	} else {
