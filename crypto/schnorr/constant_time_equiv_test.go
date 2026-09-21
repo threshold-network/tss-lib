@@ -7,6 +7,8 @@
 package schnorr_test
 
 import (
+	"crypto/rand"
+	mathrand "math/rand"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,7 +20,7 @@ import (
 )
 
 // withCTMode saves the ambient constant-time mode, sets it to `enabled`, and
-// restores the saved mode on cleanup. CT is enabled by default in this package,
+// restores the saved mode on cleanup. CT is enabled by default in this library,
 // so tests that want a genuine non-CT baseline must disable it explicitly rather
 // than assume it is off; restoring afterwards keeps coverage independent of test
 // order and preserves default-path coverage for the other Schnorr tests.
@@ -43,26 +45,42 @@ func withCTMode(t *testing.T, enabled bool) {
 // TestSchnorrProofVerify does, then checks that a proof generated with
 // constant-time ops enabled still verifies, alongside the standard (non-CT)
 // baseline. The proof is randomised, so this asserts correctness of the CT
-// prover; the primitive-level ExpCT==Exp / MulCT==Mul equivalence is covered
-// in common/constant_time_test.go.
+// prover; the primitive-level ExpCT==Exp / MulCT==Mul / ModInverseCT==ModInverse
+// equivalence is covered in common/constant_time_test.go.
 func TestSchnorrProofCTVerifies(t *testing.T) {
 	q := tss.EC().Params().N
 	u := common.GetRandomPositiveInt(q)
 	X := crypto.ScalarBaseMult(tss.EC(), u)
 
+	// Replaying this test-only stream makes the random commitments comparable.
+	// Both the entropy reader and CT mode are process-wide; cleanup restores
+	// their previous values after each subtest. The reader is reset to a fresh
+	// copy of the same seed immediately before each proof generation below, so
+	// both runs draw identical bytes from offset zero rather than continuing
+	// one shared stream (which would make the two draws diverge).
+	previousReader := rand.Reader
+	t.Cleanup(func() {
+		rand.Reader = previousReader
+	})
+
 	// Baseline: non-CT proof verifies.
+	rand.Reader = mathrand.New(mathrand.NewSource(1))
 	withCTMode(t, false)
 	assert.False(t, common.IsConstantTimeEnabled(), "CT must be off for the baseline")
 	proofOff, err := NewZKProof(u, X)
 	assert.NoError(t, err)
 	assert.True(t, proofOff.Verify(X), "non-CT Schnorr proof must verify")
 
-	// CT proof must also verify.
+	// CT proof must also verify and must be byte-identical under matched entropy.
+	rand.Reader = mathrand.New(mathrand.NewSource(1))
 	withCTMode(t, true)
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 	proofOn, err := NewZKProof(u, X)
 	assert.NoError(t, err)
 	assert.True(t, proofOn.Verify(X), "CT Schnorr proof must verify")
+
+	assert.True(t, proofOff.Alpha.Equals(proofOn.Alpha), "Alpha must be bit-identical between CT and non-CT paths under matched randomness")
+	assert.Zero(t, proofOff.T.Cmp(proofOn.T), "T must be bit-identical between CT and non-CT paths under matched randomness")
 }
 
 // TestSchnorrVProofCTVerifies is the ZKVProof analogue of
@@ -78,17 +96,34 @@ func TestSchnorrVProofCTVerifies(t *testing.T) {
 	V, err := Rs.Add(lG)
 	assert.NoError(t, err)
 
+	// Replaying this test-only stream makes the random commitments comparable.
+	// Both the entropy reader and CT mode are process-wide; cleanup restores
+	// their previous values after each subtest. The reader is reset to a fresh
+	// copy of the same seed immediately before each proof generation below, so
+	// both runs draw identical bytes from offset zero rather than continuing
+	// one shared stream (which would make the two draws diverge).
+	previousReader := rand.Reader
+	t.Cleanup(func() {
+		rand.Reader = previousReader
+	})
+
 	// Baseline: non-CT proof verifies.
+	rand.Reader = mathrand.New(mathrand.NewSource(1))
 	withCTMode(t, false)
 	assert.False(t, common.IsConstantTimeEnabled(), "CT must be off for the baseline")
 	proofOff, err := NewZKVProof(V, R, s, l)
 	assert.NoError(t, err)
 	assert.True(t, proofOff.Verify(V, R), "non-CT Schnorr V proof must verify")
 
-	// CT proof must also verify.
+	// CT proof must also verify and must be byte-identical under matched entropy.
+	rand.Reader = mathrand.New(mathrand.NewSource(1))
 	withCTMode(t, true)
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 	proofOn, err := NewZKVProof(V, R, s, l)
 	assert.NoError(t, err)
 	assert.True(t, proofOn.Verify(V, R), "CT Schnorr V proof must verify")
+
+	assert.True(t, proofOff.Alpha.Equals(proofOn.Alpha), "Alpha must be bit-identical between CT and non-CT paths under matched randomness")
+	assert.Zero(t, proofOff.T.Cmp(proofOn.T), "T must be bit-identical between CT and non-CT paths under matched randomness")
+	assert.Zero(t, proofOff.U.Cmp(proofOn.U), "U must be bit-identical between CT and non-CT paths under matched randomness")
 }
