@@ -3,10 +3,12 @@ on:
   push:
     branches:
     - master
+    - dev
     - release/*
+  # No branch filter: every pull request gets CI, whatever it targets. This fork
+  # stacks PRs on each other's branches, so filtering on `master` (or on any fixed
+  # list) silently leaves stacked PRs with no checks at all.
   pull_request:
-    branches:
-    - master
   workflow_dispatch:
 
 permissions:
