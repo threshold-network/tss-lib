@@ -148,7 +148,14 @@ func NewCTModInt(mod *big.Int) *CTModInt {
 // NOTE: big.Int.Mod is not constant-time, but it is applied unconditionally (no
 // secret-dependent branch) and the bases reduced here are public or already in range
 // at every call site. A caller passing a secret base near the modulus should be aware
-// the reduction's timing depends on the value.
+// the reduction's timing depends on the value. One exception: in
+// `ecdsa/signing/round_5.go`, the operand `rx = R.X()` is a field-prime (mod p)
+// coordinate that is not yet reduced mod the curve order N when fed into
+// `MulCT(rx, sigma)`. The reduction is correctness-required (both the CT and non-CT
+// paths always performed it), pre-existing (not introduced by this PR's CT branch),
+// and safe because `rx` becomes the public signature `r` component within the same
+// protocol round, so its variable-time reduction here leaks nothing that is not
+// about to be published anyway.
 func (ct *CTModInt) reduceToPaddedBytes(val *big.Int) []byte {
 	reduced := new(big.Int).Mod(val, ct.modBigInt)
 

@@ -363,6 +363,36 @@ func BenchmarkExpStandard(b *testing.B) {
 	}
 }
 
+// BenchmarkMulCT benchmarks constant-time 256-bit-class modular multiplication
+func BenchmarkMulCT(b *testing.B) {
+	p, _ := rand.Prime(rand.Reader, 256)
+	ctMod := NewCTModInt(p)
+
+	x, _ := rand.Int(rand.Reader, p)
+	y, _ := rand.Int(rand.Reader, p)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctMod.MulCT(x, y)
+	}
+}
+
+// BenchmarkModInverseCT benchmarks constant-time 256-bit-class modular inverse
+func BenchmarkModInverseCT(b *testing.B) {
+	p, _ := rand.Prime(rand.Reader, 256)
+	ctMod := NewCTModInt(p)
+
+	x, _ := rand.Int(rand.Reader, p)
+	if x.Sign() == 0 {
+		x = big.NewInt(1)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctMod.ModInverseCT(x)
+	}
+}
+
 // TestExpCTTimingConsistency checks timing consistency
 func TestExpCTTimingConsistency(t *testing.T) {
 	if testing.Short() {
