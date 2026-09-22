@@ -204,6 +204,11 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
 - **Migration:** None required — automatic. A caller who has independently benchmarked their
   own deployment and explicitly accepts the timing risk may call
   `common.DisableConstantTimeOps()`; not recommended for production custody use.
+- **Test refactor:** `crypto/schnorr/constant_time_equiv_test.go` migrated from the legacy
+  `math/rand.NewSource` API to `math/rand/v2.NewPCG` (via a small `io.Reader` adapter) to
+  comply with the project's `math/rand/v2`-on-new-code rule. Behaviour, determinism, and
+  bit-exact CT/non-CT equivalence assertions are unchanged; the seed `(1, 1)` now feeds a
+  v2 PCG instead of the legacy additive-lagged-Fibonacci generator.
 
 ### Removed
 
