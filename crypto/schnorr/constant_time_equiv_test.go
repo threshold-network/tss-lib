@@ -51,7 +51,11 @@ func (s seededReader) Read(p []byte) (int, error) {
 // restores the saved mode on cleanup. CT is enabled by default in this library,
 // so tests that want a genuine non-CT baseline must disable it explicitly rather
 // than assume it is off; restoring afterwards keeps coverage independent of test
-// order and preserves default-path coverage for the other Schnorr tests.
+// order and preserves default-path coverage for the other Schnorr tests. The
+// name mirrors setPaillierCTTestMode (crypto/paillier) and setMTAProofTestMode
+// (crypto/mta); this package's file is a _test.go external package, so a shared
+// helper across packages would add a non-test dependency and is deliberately
+// avoided.
 func withCTMode(t *testing.T, enabled bool) {
 	t.Helper()
 	prev := common.IsConstantTimeEnabled()
@@ -81,11 +85,14 @@ func TestSchnorrProofCTVerifies(t *testing.T) {
 	X := crypto.ScalarBaseMult(tss.EC(), u)
 
 	// Replaying this test-only stream makes the random commitments comparable.
-	// Both the entropy reader and CT mode are process-wide; cleanup restores
-	// their previous values after each subtest. The reader is reset to a fresh
-	// copy of the same seed immediately before each proof generation below, so
-	// both runs draw identical bytes from offset zero rather than continuing
-	// one shared stream (which would make the two draws diverge).
+	// The secret (u) is drawn once from the original crypto/rand.Reader BEFORE the
+	// seeded reader is installed, so it is held fixed across both runs; only the
+	// commitment randomness (a, drawn from the seeded reader inside NewZKProof) is
+	// matched. Both the entropy reader and CT mode are process-wide; cleanup
+	// restores their previous values. The reader is reset to a fresh copy of the
+	// same seed immediately before each proof generation below, so both runs draw
+	// identical commitment bytes from offset zero rather than continuing one shared
+	// stream (which would make the two draws diverge).
 	previousReader := rand.Reader
 	t.Cleanup(func() {
 		rand.Reader = previousReader
@@ -99,7 +106,8 @@ func TestSchnorrProofCTVerifies(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, proofOff.Verify(X), "non-CT Schnorr proof must verify")
 
-	// CT proof must also verify and must be byte-identical under matched entropy.
+	// CT proof must also verify and must be byte-identical to the baseline under
+	// the fixed secret and matched commitment randomness.
 	rand.Reader = newSeededReader(1, 1)
 	withCTMode(t, true)
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
@@ -107,8 +115,8 @@ func TestSchnorrProofCTVerifies(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, proofOn.Verify(X), "CT Schnorr proof must verify")
 
-	assert.True(t, proofOff.Alpha.Equals(proofOn.Alpha), "Alpha must be bit-identical between CT and non-CT paths under matched randomness")
-	assert.Zero(t, proofOff.T.Cmp(proofOn.T), "T must be bit-identical between CT and non-CT paths under matched randomness")
+	assert.True(t, proofOff.Alpha.Equals(proofOn.Alpha), "Alpha must be bit-identical between CT and non-CT paths under a fixed secret and matched commitment randomness")
+	assert.Zero(t, proofOff.T.Cmp(proofOn.T), "T must be bit-identical between CT and non-CT paths under a fixed secret and matched commitment randomness")
 }
 
 // TestSchnorrVProofCTVerifies is the ZKVProof analogue of
@@ -125,11 +133,14 @@ func TestSchnorrVProofCTVerifies(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Replaying this test-only stream makes the random commitments comparable.
-	// Both the entropy reader and CT mode are process-wide; cleanup restores
-	// their previous values after each subtest. The reader is reset to a fresh
-	// copy of the same seed immediately before each proof generation below, so
-	// both runs draw identical bytes from offset zero rather than continuing
-	// one shared stream (which would make the two draws diverge).
+	// The secrets (k, s, l) are drawn once from the original crypto/rand.Reader
+	// BEFORE the seeded reader is installed, so they are held fixed across both
+	// runs; only the commitment randomness (a, b, drawn from the seeded reader
+	// inside NewZKVProof) is matched. Both the entropy reader and CT mode are
+	// process-wide; cleanup restores their previous values. The reader is reset to
+	// a fresh copy of the same seed immediately before each proof generation below,
+	// so both runs draw identical commitment bytes from offset zero rather than
+	// continuing one shared stream (which would make the two draws diverge).
 	previousReader := rand.Reader
 	t.Cleanup(func() {
 		rand.Reader = previousReader
@@ -143,7 +154,8 @@ func TestSchnorrVProofCTVerifies(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, proofOff.Verify(V, R), "non-CT Schnorr V proof must verify")
 
-	// CT proof must also verify and must be byte-identical under matched entropy.
+	// CT proof must also verify and must be byte-identical to the baseline under
+	// the fixed secrets and matched commitment randomness.
 	rand.Reader = newSeededReader(1, 1)
 	withCTMode(t, true)
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
@@ -151,7 +163,7 @@ func TestSchnorrVProofCTVerifies(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, proofOn.Verify(V, R), "CT Schnorr V proof must verify")
 
-	assert.True(t, proofOff.Alpha.Equals(proofOn.Alpha), "Alpha must be bit-identical between CT and non-CT paths under matched randomness")
-	assert.Zero(t, proofOff.T.Cmp(proofOn.T), "T must be bit-identical between CT and non-CT paths under matched randomness")
-	assert.Zero(t, proofOff.U.Cmp(proofOn.U), "U must be bit-identical between CT and non-CT paths under matched randomness")
+	assert.True(t, proofOff.Alpha.Equals(proofOn.Alpha), "Alpha must be bit-identical between CT and non-CT paths under fixed secrets and matched commitment randomness")
+	assert.Zero(t, proofOff.T.Cmp(proofOn.T), "T must be bit-identical between CT and non-CT paths under fixed secrets and matched commitment randomness")
+	assert.Zero(t, proofOff.U.Cmp(proofOn.U), "U must be bit-identical between CT and non-CT paths under fixed secrets and matched commitment randomness")
 }

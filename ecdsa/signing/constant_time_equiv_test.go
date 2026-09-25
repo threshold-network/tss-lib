@@ -64,6 +64,14 @@ func TestRound4ThetaInverseCTEquivalence(t *testing.T) {
 	stdInvN := new(big.Int).ModInverse(thetaN, N)
 	assert.Nil(t, ctInvN, "ModInverseCT(N) should return nil (N and N are not coprime)")
 	assert.Nil(t, stdInvN, "ModInverse(N, N) should return nil (N and N are not coprime)")
+
+	// Reachable production case: round_4 accumulates theta mod N via modN.Add, so the
+	// value actually passed to ModInverseCT is already in [0, N); the only reachable
+	// non-coprime value is 0 (a multiple of N), not N itself.
+	ctInv0 := ctModN.ModInverseCT(new(big.Int))
+	stdInv0 := new(big.Int).ModInverse(new(big.Int), N)
+	assert.Nil(t, ctInv0, "ModInverseCT(0) should return nil (0 is not invertible)")
+	assert.Nil(t, stdInv0, "ModInverse(0) should return nil (0 is not invertible)")
 }
 
 // TestRound5SiCTEquivalence verifies that the constant-time multiplications
@@ -89,4 +97,20 @@ func TestRound5SiCTEquivalence(t *testing.T) {
 	expectedRxSigma := new(big.Int).Mod(new(big.Int).Mul(rx, sigma), N)
 	assert.True(t, ctRxSigma.Cmp(expectedRxSigma) == 0,
 		"MulCT(rx, sigma) should equal rx*sigma mod N")
+
+	// rx >= N case: production rx = R.X() is a field coordinate in [0, p-1] where
+	// p (the field prime) can exceed the curve order N, so rx may be out of range
+	// mod N. Both the CT and non-CT paths reduce rx mod N before multiplying; pin
+	// that equivalence for an out-of-range rx so a future asymmetric change to the
+	// reduction cannot silently break CT/non-CT agreement.
+	p := tss.EC().Params().P
+	// rxOver >= N; clamp to p if N+rx would reach p (still an out-of-range value).
+	rxOver := new(big.Int).Add(N, rx)
+	if rxOver.Cmp(p) >= 0 {
+		rxOver = new(big.Int).Set(p)
+	}
+	ctRxOver := ctModN.MulCT(rxOver, sigma)
+	expectedRxOver := new(big.Int).Mod(new(big.Int).Mul(rxOver, sigma), N)
+	assert.True(t, ctRxOver.Cmp(expectedRxOver) == 0,
+		"MulCT(rx, sigma) must equal rx*sigma mod N even when rx >= N")
 }
