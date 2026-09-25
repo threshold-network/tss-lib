@@ -1,0 +1,42 @@
+name: Release
+on:
+  push:
+    tags:
+    - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Extract changelog section for this version
+      id: changelog
+      # Keep a Changelog: pull the `## [<version>]` section (from the heading up to the
+      # next `## [` heading or EOF) matching the pushed tag's version. Fails the build
+      # when no such section exists so a tag is never published with an empty body.
+      run: |
+        version="${GITHUB_REF_NAME#v}"
+        awk -v ver="$version" '
+          $0 ~ "^## \\[" ver "\\]" { in_section = 1 }
+          in_section && $0 ~ "^## \\[" && $0 !~ "^## \\[" ver "\\]" { exit }
+          in_section { print }
+        ' CHANGELOG.md > changelog_section.md
+        if [ ! -s changelog_section.md ]; then
+          echo "::error::CHANGELOG.md has no section for version $version (expected a heading like \"## [$version]\"); rename the [Unreleased] section to the versioned heading before tagging."
+          exit 1
+        fi
+
+    - name: Create release
+      uses: softprops/action-gh-release@v2
+      with:
+        body_path: changelog_section.md
+        generate_release_notes: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
