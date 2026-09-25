@@ -181,16 +181,36 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
   every consumer gets the fix with no code change required. Coverage also broadened from
   secret-exponent-only to secret-operand operations: `MulCT` sites (k·gamma, k·w, m·k,
   rx·sigma, c·x, c·s, c·l) protect both multiplicands, not just the exponent.
+- **Sites extended by this PR (PR #23), for audit traceability against BNB #328:**
+  | File | Function | CT op | Secret operand |
+  |------|----------|-------|----------------|
+  | `crypto/schnorr/schnorr_proof.go` | `NewZKProofWithSession` | `MulCT(c, x)` → `t = a + c·x` | `x` (discrete log) |
+  | `crypto/schnorr/schnorr_proof.go` | `NewZKVProofWithSession` | `MulCT(c, s)`, `MulCT(c, l)` → `t = a + c·s`, `u = b + c·l` | `s`, `l` |
+  | `ecdsa/signing/round_3.go` | `round3.Start` | `MulCT(k, gamma)`, `MulCT(k, w)` → `thelta`, `sigma` | `k`, `gamma`, `w` |
+  | `ecdsa/signing/round_4.go` | `round4.Start` | `ModInverseCT(theta)` → `thetaInverse` | `theta` |
+  | `ecdsa/signing/round_5.go` | `round5.Start` | `MulCT(m, k)`, `MulCT(rx, sigma)` → `si` | `k`, `sigma` (`m` public msg hash; `rx` public sig `r`) |
+- **Known residual gap (read before relying on "constant-time enabled"):** the
+  `crypto/mta.AliceEnd`/`AliceEndWC` Paillier-decrypt path — which runs in signing rounds
+  2-3 of this same protocol — remains variable-time `math/big`. Upstream protects it with a
+  ~200ms sleep-based normalizer that this fork deliberately did not port (latency cost); the
+  gap is pre-existing, tracked separately, and disclosed in the COVERAGE comment in
+  `common/constant_time.go`. Enabling CT by default does NOT close that path.
 - **Break type:** Performance only. Same mathematical result on every path (see the
   constant-time equivalence tests added alongside each hardened package); no wire, source,
   or runtime-input behavior changes. A microbenchmark
   (`go test ./common/... -bench 'BenchmarkExp(CT|Standard)' -benchtime=2s`) measured constant-time
   modexp at parity with the standard path on this fork's test hardware (~2.7ms vs ~2.8ms per op,
   n≈900 CT samples, n≈800 standard samples). The 256-bit-class `MulCT` and `ModInverseCT`
-  operations this PR's Schnorr/signing-rounds extension actually uses (`BenchmarkMulCT`,
-  `BenchmarkModInverseCT`) are far cheaper than the 2048-bit modexp figure cited above — the
-  CPU-cost concern that motivated the original deferral (see Not ported / deferred, below) did
-  not materialize for these primitives either.
+  operations this PR's Schnorr/signing-rounds extension actually uses are measured by the
+  paired `BenchmarkMulCT`/`BenchmarkMulStandard` and
+  `BenchmarkModInverseCT`/`BenchmarkModInverseStandard` benchmarks (256-bit prime modulus):
+  `MulCT` runs at roughly 2x the standard `math/big` multiply (≈2.3µs vs ≈1.1µs per op on
+  this fork's test hardware) and `ModInverseCT` runs at roughly 15-20x the standard
+  `math/big` modular inverse (≈79µs vs ≈4.5µs per op) because the constant-time inverse is a
+  full 256-bit Fermat modexp where the standard path uses the extended-Euclidean algorithm.
+  Both are CPU-only regressions on the signing hot path, bounded and documented; the CPU-cost
+  concern that motivated the original deferral did not materialize for `MulCT`, and the
+  `ModInverseCT` cost is the explicit price of the constant-time guarantee.
 - **Motivation:** `math/big` is explicitly not constant-time; a secret-dependent modexp or
   modinverse can leak key material through timing. Shipping this opt-in-only (as upstream
   does) means the fix does nothing until every downstream caller remembers to enable it —
