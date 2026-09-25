@@ -65,8 +65,8 @@ func (round *round5) Start() *tss.Error {
 	ry := R.Y()
 	var si *big.Int
 	if common.IsConstantTimeEnabled() {
-		// SECURITY: constant-time multiplication for the secret operands k and sigma (m is the public message hash; rx = R.X() is published as the signature r component).
-		ctModN := common.NewCTModInt(N)
+		// SECURITY: constant-time multiplication for the secret operands k and sigma (m is the public message hash; rx = R.X() is the raw x-coordinate published as the signature r component in round 10, finalize.go — see the recovery-ID convention there).
+		ctModN := common.GetCTModInt(N)
 		si = modN.Add(ctModN.MulCT(round.temp.m, round.temp.k), ctModN.MulCT(rx, round.temp.sigma))
 	} else {
 		si = modN.Add(modN.Mul(round.temp.m, round.temp.k), modN.Mul(rx, round.temp.sigma))
