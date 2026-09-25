@@ -34,6 +34,7 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #5** — removal of EdDSA and ECDSA resharing protocols (stacked on PR #4).
 - **PR #6** — remaining BNB cryptographic hardening follow-ups (stacked on PR #5).
 - **PR #7** — signing round-9 decommitment validation and related fixes (stacked on PR #6).
+- **PR #17** (+ stack #8/#10/#11, extended by #23) — constant-time cryptographic hardening (BNB #328).
 
 ### ⚠️ Compatibility — read before upgrading
 
@@ -164,6 +165,70 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
 > `fullBytesLen` parameter was added as a trailing variadic argument, so all remaining call
 > sites compile unchanged; those breaks are runtime/wire. Verified by diffing exported
 > signatures between base and HEAD.
+
+#### 8. Constant-time cryptographic operations enabled by default
+- **What:** Secret-exponent modular exponentiation and modular inverse (Paillier
+  Decrypt/Encrypt/HomoMult, the Paillier mod- and factor-proofs, the DLN proof, the
+  ring-Pedersen trapdoor setup in keygen, the MtA range and regular proofs, the Schnorr
+  proof responses, and ECDSA signing rounds 3-5) now run through a `filippo.io/bigmod`-backed
+  constant-time path (`common.NewCTModInt`, `.ExpCT`/`.MulCT`/`.ModInverseCT`) instead of
+  `math/big`, closing the timing side-channel described in
+  [golang/go#20654](https://github.com/golang/go/issues/20654) for the operations listed above.
+  (A known, separately-tracked gap remains in `crypto/mta`'s Paillier-decrypt path — see the
+  COVERAGE comment in `common/constant_time.go`.) Unlike upstream, where
+  `EnableConstantTimeOps` is opt-in and nothing in-tree ever calls it, this fork enables it
+  unconditionally by defaulting `constantTimeEnabled` to `1` in `common/constant_time.go` —
+  every consumer gets the fix with no code change required. Coverage also broadened from
+  secret-exponent-only to secret-operand operations: `MulCT` sites (k·gamma, k·w, m·k,
+  rx·sigma, c·x, c·s, c·l) protect both multiplicands, not just the exponent.
+- **Sites extended by this PR (PR #23), for audit traceability against BNB #328:**
+  | File | Function | CT op | Secret operand |
+  |------|----------|-------|----------------|
+  | `crypto/schnorr/schnorr_proof.go` | `NewZKProofWithSession` | `MulCT(c, x)` → `t = a + c·x` | `x` (discrete log) |
+  | `crypto/schnorr/schnorr_proof.go` | `NewZKVProofWithSession` | `MulCT(c, s)`, `MulCT(c, l)` → `t = a + c·s`, `u = b + c·l` | `s`, `l` |
+  | `ecdsa/signing/round_3.go` | `round3.Start` | `MulCT(k, gamma)`, `MulCT(k, w)` → `thelta`, `sigma` | `k`, `gamma`, `w` |
+  | `ecdsa/signing/round_4.go` | `round4.Start` | `ModInverseCT(theta)` → `thetaInverse` | `theta` |
+  | `ecdsa/signing/round_5.go` | `round5.Start` | `MulCT(m, k)`, `MulCT(rx, sigma)` → `si` | `k`, `sigma` (`m` public msg hash; `rx` public sig `r`) |
+- **Known residual gap (read before relying on "constant-time enabled"):** the
+  `crypto/mta.AliceEnd`/`AliceEndWC` Paillier-decrypt path — which runs in signing rounds
+  2-3 of this same protocol — remains variable-time `math/big`. Upstream protects it with a
+  ~200ms sleep-based normalizer that this fork deliberately did not port (latency cost); the
+  gap is pre-existing, tracked separately, and disclosed in the COVERAGE comment in
+  `common/constant_time.go`. Enabling CT by default does NOT close that path.
+- **Break type:** Performance only. Same mathematical result on every path (see the
+  constant-time equivalence tests added alongside each hardened package); no wire, source,
+  or runtime-input behavior changes. A microbenchmark
+  (`go test ./common/... -bench 'BenchmarkExp(CT|Standard)' -benchtime=2s`) measured constant-time
+  modexp at parity with the standard path on this fork's test hardware (~2.7ms vs ~2.8ms per op,
+  n≈900 CT samples, n≈800 standard samples). The 256-bit-class `MulCT` and `ModInverseCT`
+  operations this PR's Schnorr/signing-rounds extension actually uses are measured by the
+  paired `BenchmarkMulCT`/`BenchmarkMulStandard` and
+  `BenchmarkModInverseCT`/`BenchmarkModInverseStandard` benchmarks (256-bit prime modulus):
+  `MulCT` runs at roughly 2x the standard `math/big` multiply (≈2.3µs vs ≈1.1µs per op on
+  this fork's test hardware) and `ModInverseCT` runs at roughly 15-20x the standard
+  `math/big` modular inverse (≈79µs vs ≈4.5µs per op) because the constant-time inverse is a
+  full 256-bit Fermat modexp where the standard path uses the extended-Euclidean algorithm.
+  Both are CPU-only regressions on the signing hot path, bounded and documented; the CPU-cost
+  concern that motivated the original deferral did not materialize for `MulCT`, and the
+  `ModInverseCT` cost is the explicit price of the constant-time guarantee.
+- **Motivation:** `math/big` is explicitly not constant-time; a secret-dependent modexp or
+  modinverse can leak key material through timing. Shipping this opt-in-only (as upstream
+  does) means the fix does nothing until every downstream caller remembers to enable it —
+  the exact failure mode this fork avoids by enabling it by default.
+- **Provenance:** `BNB #328` (`3709c25`, `7a10240`, `0735081`, merged at `3f677ff`). Upstream's
+  series additionally touches `crypto/schnorr/schnorr_proof.go` and
+  `ecdsa/signing/round_3.go`/`round_4.go`/`round_5.go`, which this fork's initial backport
+  did not — extended here to match, with a new `crypto/schnorr/constant_time_equiv_test.go`.
+  The unconditional-enable decision is `threshold-original`. Landed via PR #17, extended here
+  by PR #23.
+- **Migration:** None required — automatic. A caller who has independently benchmarked their
+  own deployment and explicitly accepts the timing risk may call
+  `common.DisableConstantTimeOps()`; not recommended for production custody use.
+- **Test refactor:** `crypto/schnorr/constant_time_equiv_test.go` migrated from the legacy
+  `math/rand.NewSource` API to `math/rand/v2.NewPCG` via a small `io.Reader` adapter.
+  Behaviour, determinism, and bit-exact CT/non-CT equivalence assertions are unchanged;
+  the seed `(1, 1)` now feeds a v2 PCG instead of the legacy additive-lagged-Fibonacci
+  generator.
 
 ### Removed
 
@@ -313,6 +378,11 @@ rejecting input that an honest caller would previously have produced.
 - `mta.ErrRangeProofVerify` (PR #4) — sentinel error letting ECDSA signing round 2 attribute
   a peer's MtA range-proof rejection to the offending party (`crypto/mta/share_protocol.go`,
   `ecdsa/signing/round_2.go`). _Provenance: `BNB #332`, PR #4._
+- `common.EnableConstantTimeOps`, `DisableConstantTimeOps`, `IsConstantTimeEnabled`,
+  `NewCTModInt`, `NewCTModIntWithPhi`, and the `CTModInt` type with `ExpCT`/`MulCT`/
+  `ModInverseCT` — constant-time modular arithmetic backed by `filippo.io/bigmod`, enabled
+  unconditionally by this fork's default (`constantTimeEnabled = 1` in
+  `common/constant_time.go`). _Provenance: `BNB #328`, PR #17, PR #23_.
 
 ### Notes
 
@@ -328,16 +398,18 @@ rejecting input that an honest caller would previously have produced.
   Threshold compatibility; the module path remains `github.com/bnb-chain/tss-lib`.
 - `SignatureData` channel-to-pointer change (`BNB fbb0ef7`) — public API churn not needed
   for hardening.
-- Optional constant-time framework (`BNB #328`) — adds a dependency and broad
-  Paillier/MtA rewrites, default-disabled upstream; deferred to a separate follow-up with
-  benchmarking and side-channel review.
 - Dependency / random-source API churn and repository/CI/metadata housekeeping
   (`BNB b8d526d`, `8abf1d5`, `6c233c6`, `87f7e12`, `7113b68`, `d0325a1`, `dca2ac4`).
+- `crypto/mta.AliceEnd`/`AliceEndWC` Paillier-decrypt path: carries the same class of
+  timing leak as golang/go#20654. Upstream protects this with a sleep-based normalizer
+  (`NewTimingProtection`, ~200ms target + jitter) that was deliberately not added here —
+  it would inject a fixed ~200ms delay into every MtA share round. Tracked as a known,
+  intentionally-deferred gap, not an oversight (see COVERAGE comment in
+  `common/constant_time.go`).
 
 ### Residual risks
 
 - Applications **must** call `SetSessionNonce`/`SetSessionNonceBytes` before keygen and
   signing; those protocols fail closed without it.
-- The optional constant-time work is not integrated.
 
 [Unreleased]: https://github.com/threshold-network/tss-lib/compare/2e712689...HEAD
