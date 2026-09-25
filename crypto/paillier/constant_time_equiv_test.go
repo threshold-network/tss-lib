@@ -7,15 +7,187 @@
 package paillier
 
 import (
+	"crypto/rand"
+	"fmt"
 	"math/big"
+	mathrand "math/rand"
+	"runtime"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
 	"github.com/bnb-chain/tss-lib/tss"
 )
+
+// These tests are non-parallel because the mode is process-wide.
+func setPaillierCTTestMode(t testing.TB, enabled bool) {
+	t.Helper()
+	previousMode := common.IsConstantTimeEnabled()
+	t.Cleanup(func() {
+		if previousMode {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+	})
+	if enabled {
+		common.EnableConstantTimeOps()
+	} else {
+		common.DisableConstantTimeOps()
+	}
+	require.Equal(t, enabled, common.IsConstantTimeEnabled())
+}
+
+func TestFactorProofUnequalWidthsCTEquivalence(t *testing.T) {
+	// Fixed test-only safe primes. Both factors exceed the entire byte width of
+	// the independent auxiliary modulus, while their public product bounds them.
+	p, ok := new(big.Int).SetString("170141183460469231731687303715884114527", 10)
+	require.True(t, ok)
+	q, ok := new(big.Int).SetString("170141183460469231731687303715884116147", 10)
+	require.True(t, ok)
+	require.True(t, p.ProbablyPrime(32))
+	require.True(t, q.ProbablyPrime(32))
+	pMinus1, qMinus1 := new(big.Int).Sub(p, big.NewInt(1)), new(big.Int).Sub(q, big.NewInt(1))
+	phiN := new(big.Int).Mul(pMinus1, qMinus1)
+	lambdaN := new(big.Int).Div(phiN, new(big.Int).GCD(nil, nil, pMinus1, qMinus1))
+	key := &PrivateKey{PublicKey: PublicKey{N: new(big.Int).Mul(p, q)}, PhiN: phiN, LambdaN: lambdaN}
+	N, s, tt := big.NewInt(11*23), big.NewInt(4), big.NewInt(9)
+	require.True(t, p.BitLen() > 8*len(N.Bytes()))
+	require.True(t, q.BitLen() > 8*len(N.Bytes()))
+	gotP, gotQ := key.GetPQ()
+	require.Zero(t, gotP.Cmp(q))
+	require.Zero(t, gotQ.Cmp(p))
+
+	var proofOff *FactorProof
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
+			// This test must remain non-parallel: replaying a test-only entropy
+			// stream makes every randomized commitment and response comparable.
+			previousReader, previousMode := rand.Reader, common.IsConstantTimeEnabled()
+			t.Cleanup(func() {
+				rand.Reader = previousReader
+				if previousMode {
+					common.EnableConstantTimeOps()
+				} else {
+					common.DisableConstantTimeOps()
+				}
+			})
+			rand.Reader = mathrand.New(mathrand.NewSource(1))
+			if enabled {
+				common.EnableConstantTimeOps()
+			} else {
+				common.DisableConstantTimeOps()
+			}
+			require.Equal(t, enabled, common.IsConstantTimeEnabled())
+			proof := key.FactorProof(N, s, tt)
+			// This deliberately small auxiliary modulus tests the arithmetic
+			// bound only; production verification requires a larger modulus.
+			if enabled {
+				require.Equal(t, proofOff, proof, "fixed randomness must produce identical factor commitments and responses")
+			} else {
+				proofOff = proof
+			}
+		})
+	}
+}
+
+func TestZeroPlaintextCTEquivalence(t *testing.T) {
+	// Small, fixed test-only key with p=7 and q=11.
+	key := &PrivateKey{PublicKey: PublicKey{N: big.NewInt(77)}, LambdaN: big.NewInt(30), PhiN: big.NewInt(60)}
+	for _, enabled := range []bool{false, true} {
+		setPaillierCTTestMode(t, enabled)
+		require.Equal(t, enabled, common.IsConstantTimeEnabled())
+		cipher, randomness, err := key.EncryptAndReturnRandomness(big.NewInt(0))
+		require.NoError(t, err)
+		want := new(big.Int).Exp(randomness, key.N, key.NSquare())
+		require.Zero(t, cipher.Cmp(want), "Enc(0) must equal r^N mod N^2")
+		plaintext, err := key.Decrypt(cipher)
+		require.NoError(t, err)
+		require.Zero(t, plaintext.Sign())
+
+		product, err := key.HomoMult(big.NewInt(0), cipher)
+		require.NoError(t, err)
+		require.Zero(t, product.Cmp(big.NewInt(1)), "cipher^0 must equal 1")
+		plaintext, err = key.Decrypt(product)
+		require.NoError(t, err)
+		require.Zero(t, plaintext.Sign())
+	}
+}
+
+func TestDecryptWithoutPhiNCTEquivalence(t *testing.T) {
+	// A valid key can supply only the modulus and Carmichael exponent.
+	key := &PrivateKey{PublicKey: PublicKey{N: big.NewInt(77)}, LambdaN: big.NewInt(30)}
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
+			setPaillierCTTestMode(t, enabled)
+			plaintext, err := key.Decrypt(big.NewInt(78)) // Enc(1) with randomness 1.
+			require.NoError(t, err)
+			require.Zero(t, plaintext.Cmp(big.NewInt(1)))
+		})
+	}
+}
+
+func TestModProofConcurrentCTToggle(t *testing.T) {
+	previousMode := common.IsConstantTimeEnabled()
+	// Fixed 128-bit safe primes keep this regression fast without making a
+	// non-unit Fiat-Shamir challenge likely, as tiny test moduli would.
+	p, ok := new(big.Int).SetString("170141183460469231731687303715884114527", 10)
+	require.True(t, ok)
+	q, ok := new(big.Int).SetString("170141183460469231731687303715884116147", 10)
+	require.True(t, ok)
+	phiN := new(big.Int).Mul(new(big.Int).Sub(p, big.NewInt(1)), new(big.Int).Sub(q, big.NewInt(1)))
+	key := &PrivateKey{PublicKey: PublicKey{N: new(big.Int).Mul(p, q)}, PhiN: phiN}
+
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	var toggles uint64
+	go func() {
+		defer close(stopped)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			common.DisableConstantTimeOps()
+			runtime.Gosched()
+			common.EnableConstantTimeOps()
+			atomic.AddUint64(&toggles, 1)
+			runtime.Gosched()
+		}
+	}()
+	t.Cleanup(func() {
+		close(stop)
+		<-stopped
+		if previousMode {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+	})
+
+	for i := 0; i < 32; i++ {
+		proof := key.ModProof()
+		// Check the proof equations directly: this small arithmetic fixture
+		// is below the production verifier's minimum modulus size.
+		for j, challenge := range ModChallenge(key.N, proof.W) {
+			require.Zero(t, new(big.Int).Exp(proof.Z[j], key.N, key.N).Cmp(challenge))
+			wantRootPower := new(big.Int).Set(challenge)
+			if proof.B[j] {
+				wantRootPower.Mul(wantRootPower, proof.W)
+			}
+			if proof.A[j] {
+				wantRootPower.Neg(wantRootPower)
+			}
+			wantRootPower.Mod(wantRootPower, key.N)
+			require.Zero(t, new(big.Int).Exp(proof.X[j], big.NewInt(4), key.N).Cmp(wantRootPower))
+		}
+	}
+	require.NotZero(t, atomic.LoadUint64(&toggles), "the toggle must change during proof generation")
+}
 
 // These tests verify the invariant that the constant-time path computes the SAME
 // function as the standard path: for deterministic operations the outputs are
@@ -26,6 +198,7 @@ import (
 // TestDecryptCTEquivalence: Decrypt is deterministic; CT and non-CT must agree
 // byte-for-byte and both must recover the plaintext.
 func TestDecryptCTEquivalence(t *testing.T) {
+	setPaillierCTTestMode(t, false)
 	facSetUp(t)
 
 	pt := big.NewInt(424242)
@@ -35,8 +208,7 @@ func TestDecryptCTEquivalence(t *testing.T) {
 	mOff, err := privateKey.Decrypt(cipher)
 	assert.NoError(t, err)
 
-	common.EnableConstantTimeOps()
-	defer common.DisableConstantTimeOps()
+	setPaillierCTTestMode(t, true)
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 	mOn, err := privateKey.Decrypt(cipher)
 	assert.NoError(t, err)
@@ -49,6 +221,7 @@ func TestDecryptCTEquivalence(t *testing.T) {
 // non-CT must agree byte-for-byte, and the homomorphic multiplication property must
 // hold under CT. m is the secret scalar exponent hardened by the CT path.
 func TestHomoMultCTEquivalence(t *testing.T) {
+	setPaillierCTTestMode(t, false)
 	facSetUp(t)
 
 	a := big.NewInt(111111)
@@ -59,8 +232,7 @@ func TestHomoMultCTEquivalence(t *testing.T) {
 	cbOff, err := publicKey.HomoMult(b, cA)
 	assert.NoError(t, err)
 
-	common.EnableConstantTimeOps()
-	defer common.DisableConstantTimeOps()
+	setPaillierCTTestMode(t, true)
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 	cbOn, err := publicKey.HomoMult(b, cA)
 	assert.NoError(t, err)
@@ -82,8 +254,7 @@ func TestEncryptCTRoundTrip(t *testing.T) {
 
 	pt := big.NewInt(987654321)
 
-	common.EnableConstantTimeOps()
-	defer common.DisableConstantTimeOps()
+	setPaillierCTTestMode(t, true)
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 	cipher, err := publicKey.Encrypt(pt)
 	assert.NoError(t, err)
@@ -95,6 +266,7 @@ func TestEncryptCTRoundTrip(t *testing.T) {
 // TestPaillierProofCTEquivalence: the Paillier square-free Proof is deterministic
 // given (k, key, ecdsaPub); CT and non-CT must agree byte-for-byte and both verify.
 func TestPaillierProofCTEquivalence(t *testing.T) {
+	setPaillierCTTestMode(t, false)
 	facSetUp(t)
 
 	ki := common.MustGetRandomInt(256)
@@ -104,8 +276,7 @@ func TestPaillierProofCTEquivalence(t *testing.T) {
 
 	proofOff := privateKey.Proof(ki, pub)
 
-	common.EnableConstantTimeOps()
-	defer common.DisableConstantTimeOps()
+	setPaillierCTTestMode(t, true)
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 	proofOn := privateKey.Proof(ki, pub)
 
@@ -125,8 +296,7 @@ func TestPaillierProofCTEquivalence(t *testing.T) {
 func TestFactorProofCTVerifies(t *testing.T) {
 	facSetUp(t)
 
-	common.EnableConstantTimeOps()
-	defer common.DisableConstantTimeOps()
+	setPaillierCTTestMode(t, true)
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 	proof := privateKey.FactorProof(auxPrime.N, s, tt)
 	res, err := proof.FactorVerify(publicKey.N, auxPrime.N, s, tt)
@@ -138,8 +308,7 @@ func TestFactorProofCTVerifies(t *testing.T) {
 func TestModProofCTVerifies(t *testing.T) {
 	facSetUp(t)
 
-	common.EnableConstantTimeOps()
-	defer common.DisableConstantTimeOps()
+	setPaillierCTTestMode(t, true)
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 	proof := privateKey.ModProof()
 	res, err := proof.ModVerify(publicKey.N)
@@ -150,6 +319,7 @@ func TestModProofCTVerifies(t *testing.T) {
 // TestModProofHelpersCTEquivalence: the QR helpers are deterministic; CT and non-CT
 // must agree (boolean predicates and the byte-identical fourth root) on real-key inputs.
 func TestModProofHelpersCTEquivalence(t *testing.T) {
+	setPaillierCTTestMode(t, false)
 	facSetUp(t)
 
 	p, q := privateKey.GetPQ()
@@ -172,8 +342,7 @@ func TestModProofHelpersCTEquivalence(t *testing.T) {
 	qrCompOff := isQuadResidueModComposite(x, p, q)
 	rootOff := quadResidueModComposite(x, p, q, N, phiN)
 
-	common.EnableConstantTimeOps()
-	defer common.DisableConstantTimeOps()
+	setPaillierCTTestMode(t, true)
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 	qrPOn := isQuadResidueModPrime(x, p)
 	nrPOn := isQuadResidueModPrime(nr, p)

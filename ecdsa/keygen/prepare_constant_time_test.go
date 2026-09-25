@@ -29,8 +29,15 @@ func TestPrepareTrapdoorCTEquivalence(t *testing.T) {
 	modNTildeI := common.ModInt(pp.NTildei)
 	want := modNTildeI.Exp(pp.H1i, pp.Alpha)
 
+	previousMode := common.IsConstantTimeEnabled()
+	t.Cleanup(func() {
+		if previousMode {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+	})
 	common.EnableConstantTimeOps()
-	defer common.DisableConstantTimeOps()
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 	got := common.NewCTModInt(pp.NTildei).ExpCT(pp.H1i, pp.Alpha)
 
