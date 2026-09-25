@@ -65,7 +65,7 @@ func NewZKProofWithSession(session []byte, x *big.Int, X *crypto.ECPoint) (*ZKPr
 	var t *big.Int
 	if common.IsConstantTimeEnabled() {
 		// SECURITY: constant-time multiplication for secret x (BNB 3709c25).
-		t = modQ.Add(a, common.NewCTModInt(q).MulCT(c, x))
+		t = modQ.Add(a, common.GetCTModInt(q).MulCT(c, x))
 	} else {
 		t = modQ.Add(a, new(big.Int).Mul(c, x))
 	}
@@ -145,7 +145,7 @@ func NewZKVProofWithSession(session []byte, V, R *crypto.ECPoint, s, l *big.Int)
 	var t, u *big.Int
 	if common.IsConstantTimeEnabled() {
 		// SECURITY: constant-time multiplication for secret values s, l (BNB 3709c25).
-		ctModQ := common.NewCTModInt(q)
+		ctModQ := common.GetCTModInt(q)
 		t = modQ.Add(a, ctModQ.MulCT(c, s))
 		u = modQ.Add(b, ctModQ.MulCT(c, l))
 	} else {

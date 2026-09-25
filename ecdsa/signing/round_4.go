@@ -42,7 +42,7 @@ func (round *round4) Start() *tss.Error {
 	// compute the multiplicative inverse thelta mod q
 	if common.IsConstantTimeEnabled() {
 		// SECURITY: constant-time modular inverse for secret theta (BNB 3709c25).
-		thetaInverse = common.NewCTModInt(round.Params().EC().Params().N).ModInverseCT(thetaInverse)
+		thetaInverse = common.GetCTModInt(round.Params().EC().Params().N).ModInverseCT(thetaInverse)
 	} else {
 		thetaInverse = modN.ModInverse(thetaInverse)
 	}

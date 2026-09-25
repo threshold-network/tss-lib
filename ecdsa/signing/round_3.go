@@ -107,7 +107,7 @@ func (round *round3) Start() *tss.Error {
 	var thelta, sigma *big.Int
 	if common.IsConstantTimeEnabled() {
 		// SECURITY: constant-time multiplication for secret values k, gamma, w (BNB 3709c25).
-		ctModN := common.NewCTModInt(round.Params().EC().Params().N)
+		ctModN := common.GetCTModInt(round.Params().EC().Params().N)
 		thelta = ctModN.MulCT(round.temp.k, round.temp.gamma)
 		sigma = ctModN.MulCT(round.temp.k, round.temp.w)
 	} else {
