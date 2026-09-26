@@ -65,6 +65,11 @@ func NewLocalParty(
 	end chan<- LocalPartySaveData,
 	optionalPreParams ...LocalPreParams,
 ) tss.Party {
+	if params == nil {
+		panic("keygen.NewLocalParty requires parameters")
+	}
+	params.FreezeProtocolMode()
+
 	partyCount := params.PartyCount()
 	data := NewLocalPartySaveData(partyCount)
 	// when `optionalPreParams` is provided we'll use the pre-computed primes instead of generating them from scratch

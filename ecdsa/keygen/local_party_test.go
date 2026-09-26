@@ -49,6 +49,7 @@ func TestSSIDIncludesSessionNonce(t *testing.T) {
 
 func testKeygenSSID(pIDs tss.SortedPartyIDs, sessionID []byte) []byte {
 	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)
+	params.SetProtocolMode(tss.ProtocolModeSecurityV2)
 	params.SetSessionNonceBytes(sessionID)
 
 	round := &base{
@@ -62,6 +63,7 @@ func testKeygenSSID(pIDs tss.SortedPartyIDs, sessionID []byte) []byte {
 func TestStoreMessageRejectsContentDifferentReplay(t *testing.T) {
 	pIDs := tss.GenerateTestPartyIDs(2)
 	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)
+	params.SetProtocolMode(tss.ProtocolModeLegacy)
 	lp := NewLocalParty(params, nil, nil).(*LocalParty)
 
 	msg1 := NewKGRound2Message2(pIDs[1], []*big.Int{big.NewInt(1), big.NewInt(2), big.NewInt(3)})
@@ -86,6 +88,7 @@ func TestStoreMessageRejectsContentDifferentReplay(t *testing.T) {
 func TestStoreMessageAllowsSelfReplacement(t *testing.T) {
 	pIDs := tss.GenerateTestPartyIDs(2)
 	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)
+	params.SetProtocolMode(tss.ProtocolModeLegacy)
 	lp := NewLocalParty(params, nil, nil).(*LocalParty)
 
 	msg1 := NewKGRound2Message2(pIDs[0], []*big.Int{big.NewInt(1), big.NewInt(2), big.NewInt(3)})
@@ -116,6 +119,7 @@ func TestKeygen_Start_RequiresSessionNonce(t *testing.T) {
 	pIDs := tss.GenerateTestPartyIDs(2)
 	p2pCtx := tss.NewPeerContext(pIDs)
 	params := tss.NewParameters(tss.S256(), p2pCtx, pIDs[0], len(pIDs), 1)
+	params.SetProtocolMode(tss.ProtocolModeSecurityV2)
 	// Deliberately do NOT call params.SetSessionNonce — Start must fail closed.
 
 	out := make(chan tss.Message, 1)
@@ -142,6 +146,7 @@ func TestStartRound1Paillier(t *testing.T) {
 	p2pCtx := tss.NewPeerContext(pIDs)
 	threshold := 1
 	params := tss.NewParameters(tss.EC(), p2pCtx, pIDs[0], len(pIDs), threshold)
+	params.SetProtocolMode(tss.ProtocolModeSecurityV2)
 	params.SetSessionNonce(big.NewInt(1))
 
 	fixtures, pIDs, err := LoadKeygenTestFixtures(testParticipants)
@@ -183,6 +188,7 @@ func TestFinishAndSaveH1H2(t *testing.T) {
 	p2pCtx := tss.NewPeerContext(pIDs)
 	threshold := 1
 	params := tss.NewParameters(tss.EC(), p2pCtx, pIDs[0], len(pIDs), threshold)
+	params.SetProtocolMode(tss.ProtocolModeSecurityV2)
 	params.SetSessionNonce(big.NewInt(2))
 
 	fixtures, pIDs, err := LoadKeygenTestFixtures(testParticipants)
@@ -231,6 +237,7 @@ func TestBadMessageCulprits(t *testing.T) {
 	pIDs := tss.GenerateTestPartyIDs(2)
 	p2pCtx := tss.NewPeerContext(pIDs)
 	params := tss.NewParameters(tss.S256(), p2pCtx, pIDs[0], len(pIDs), 1)
+	params.SetProtocolMode(tss.ProtocolModeSecurityV2)
 	params.SetSessionNonce(big.NewInt(3))
 
 	fixtures, pIDs, err := LoadKeygenTestFixtures(testParticipants)
@@ -267,6 +274,20 @@ func TestBadMessageCulprits(t *testing.T) {
 }
 
 func TestE2EConcurrentAndSaveFixtures(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		mode tss.ProtocolMode
+	}{
+		{"legacy", tss.ProtocolModeLegacy},
+		{"security-v2", tss.ProtocolModeSecurityV2},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			testE2EConcurrentAndSaveFixtures(t, testCase.mode)
+		})
+	}
+}
+
+func testE2EConcurrentAndSaveFixtures(t *testing.T, mode tss.ProtocolMode) {
 	setUp("info")
 
 	// tss.SetCurve(elliptic.P256())
@@ -294,7 +315,10 @@ func TestE2EConcurrentAndSaveFixtures(t *testing.T) {
 	for i := 0; i < len(pIDs); i++ {
 		var P *LocalParty
 		params := tss.NewParameters(tss.S256(), p2pCtx, pIDs[i], len(pIDs), threshold)
-		params.SetSessionNonce(ceremonyNonce)
+		params.SetProtocolMode(mode)
+		if mode == tss.ProtocolModeSecurityV2 {
+			params.SetSessionNonce(ceremonyNonce)
+		}
 		if i < len(fixtures) {
 			P = NewLocalParty(params, outCh, endCh, fixtures[i].LocalPreParams).(*LocalParty)
 		} else {

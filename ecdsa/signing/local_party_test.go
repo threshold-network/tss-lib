@@ -79,6 +79,7 @@ func newStoreMessageTestParty(t *testing.T) (*LocalParty, tss.SortedPartyIDs) {
 
 	pIDs := tss.GenerateTestPartyIDs(2)
 	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)
+	params.SetProtocolMode(tss.ProtocolModeLegacy)
 	keys := keygen.NewLocalPartySaveData(len(pIDs))
 	for i, id := range pIDs {
 		keys.Ks[i] = id.KeyInt()
@@ -88,6 +89,20 @@ func newStoreMessageTestParty(t *testing.T) (*LocalParty, tss.SortedPartyIDs) {
 }
 
 func TestE2EConcurrent(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		mode tss.ProtocolMode
+	}{
+		{"legacy", tss.ProtocolModeLegacy},
+		{"security-v2", tss.ProtocolModeSecurityV2},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			testE2EConcurrent(t, testCase.mode)
+		})
+	}
+}
+
+func testE2EConcurrent(t *testing.T, mode tss.ProtocolMode) {
 	setUp("info")
 	threshold := testThreshold
 
@@ -116,7 +131,10 @@ func TestE2EConcurrent(t *testing.T) {
 	ceremonyNonce := big.NewInt(1)
 	for i := 0; i < len(signPIDs); i++ {
 		params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[i], len(signPIDs), threshold)
-		params.SetSessionNonce(ceremonyNonce)
+		params.SetProtocolMode(mode)
+		if mode == tss.ProtocolModeSecurityV2 {
+			params.SetSessionNonce(ceremonyNonce)
+		}
 
 		P := NewLocalParty(msgInt, params, keys[i], outCh, endCh, len(msgData)).(*LocalParty)
 		parties = append(parties, P)
@@ -228,6 +246,7 @@ func TestE2EWithHDKeyDerivation(t *testing.T) {
 	ceremonyNonce := big.NewInt(2)
 	for i := 0; i < len(signPIDs); i++ {
 		params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[i], len(signPIDs), threshold)
+		params.SetProtocolMode(tss.ProtocolModeSecurityV2)
 		params.SetSessionNonce(ceremonyNonce)
 
 		P := NewLocalPartyWithKDD(big.NewInt(42), params, keys[i], keyDerivationDelta, outCh, endCh, 32).(*LocalParty)
@@ -316,6 +335,7 @@ func TestSigning_Start_RequiresSessionNonce(t *testing.T) {
 	endCh := make(chan common.SignatureData, len(signPIDs))
 
 	params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[0], len(signPIDs), testThreshold)
+	params.SetProtocolMode(tss.ProtocolModeSecurityV2)
 	// Deliberately do NOT call params.SetSessionNonce — Start must fail closed.
 
 	P := NewLocalParty(big.NewInt(42), params, keys[0], outCh, endCh, 32).(*LocalParty)

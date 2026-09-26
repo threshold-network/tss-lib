@@ -17,6 +17,11 @@ import (
 )
 
 type (
+	// ProtocolMode selects the wire-compatible GG20 proof transcript used by
+	// an ECDSA local party. It is configured per Parameters value before the
+	// party is constructed and frozen for that party's lifetime.
+	ProtocolMode uint8
+
 	Parameters struct {
 		ec                  elliptic.Curve
 		partyID             *PartyID
@@ -25,15 +30,28 @@ type (
 		threshold           int
 		concurrency         int
 		safePrimeGenTimeout time.Duration
-		// sessionNonce provides per-session SSID uniqueness for GG20 proof
-		// binding. Keygen and signing require callers to coordinate a shared
-		// positive nonce before Start.
+		// sessionNonce provides per-session SSID uniqueness for security-v2
+		// GG20 proof binding. Security-v2 keygen and signing require callers
+		// to coordinate a shared positive nonce before Start; legacy mode must
+		// leave it unset.
 		sessionNonce *big.Int
+		// protocolMode is the explicit per-party proof-transcript mode. It has
+		// no default: callers must select legacy or security-v2 before
+		// constructing an ECDSA local party.
+		protocolMode       ProtocolMode
+		protocolModeFrozen bool
 	}
 )
 
 const (
 	defaultSafePrimeGenTimeout = 5 * time.Minute
+
+	// ProtocolModeLegacy reproduces the untagged GG20 proof transcript used
+	// before session binding was introduced.
+	ProtocolModeLegacy ProtocolMode = 1
+	// ProtocolModeSecurityV2 requires and uses the session-bound, domain-tagged
+	// GG20 proof transcript.
+	ProtocolModeSecurityV2 ProtocolMode = 2
 )
 
 // Exported, used in `tss` client
@@ -118,13 +136,61 @@ func (params *Parameters) SetSafePrimeGenTimeout(timeout time.Duration) {
 	params.safePrimeGenTimeout = timeout
 }
 
-// SessionNonce returns the optional per-session nonce used in proof challenges.
-func (params *Parameters) SessionNonce() *big.Int {
-	return params.sessionNonce
+// ProtocolMode returns the explicit per-party proof-transcript mode.
+func (params *Parameters) ProtocolMode() ProtocolMode {
+	return params.protocolMode
 }
 
-// SetSessionNonce sets a per-session nonce that all parties in a protocol run
-// must agree on. It must be called before Start.
+// SetProtocolMode selects the proof transcript for the ECDSA local party that
+// will be constructed from params. There is no implicit/default mode.
+//
+// A local party freezes this setting during construction. Changing it
+// afterwards panics so an in-flight party can never switch transcripts.
+func (params *Parameters) SetProtocolMode(mode ProtocolMode) {
+	if params.protocolModeFrozen {
+		panic("tss: protocol mode is immutable after local party construction")
+	}
+	switch mode {
+	case ProtocolModeLegacy, ProtocolModeSecurityV2:
+	default:
+		panic(fmt.Sprintf("tss: invalid protocol mode %d", mode))
+	}
+	if params.protocolMode != 0 && params.protocolMode != mode {
+		panic("tss: protocol mode cannot be changed after selection")
+	}
+	params.protocolMode = mode
+}
+
+// FreezeProtocolMode validates and freezes the transcript configuration.
+// ECDSA local-party constructors call it before retaining params.
+func (params *Parameters) FreezeProtocolMode() {
+	if params.protocolModeFrozen {
+		return
+	}
+	switch params.protocolMode {
+	case ProtocolModeLegacy:
+		if params.sessionNonce != nil {
+			panic("tss: legacy protocol mode must not set a session nonce")
+		}
+	case ProtocolModeSecurityV2:
+	default:
+		panic("tss: protocol mode must be selected before local party construction")
+	}
+	params.protocolModeFrozen = true
+}
+
+// SessionNonce returns a defensive copy of the optional per-session nonce used
+// in proof challenges.
+func (params *Parameters) SessionNonce() *big.Int {
+	if params.sessionNonce == nil {
+		return nil
+	}
+	return new(big.Int).Set(params.sessionNonce)
+}
+
+// SetSessionNonce sets a per-session nonce that all security-v2 parties in a
+// protocol run must agree on. It must be called before constructing the local
+// party. Legacy parties must not set a nonce.
 //
 // Keygen and signing fail closed if no nonce is set. The previous zero
 // (keygen) and SHA512_256(messageBytes) (signing) fallbacks caused two
@@ -132,9 +198,12 @@ func (params *Parameters) SessionNonce() *big.Int {
 // the session-binding property that the proofs rely on. The caller must supply
 // a per-ceremony unique nonce; reusing the same nonce across distinct
 // ceremonies on the same inputs reintroduces transcript-splicing risk. Set the
-// nonce before Start on the same goroutine that constructs the party; do not
-// mutate Parameters concurrently with a running protocol.
+// nonce before constructing the party on the same goroutine; do not mutate
+// Parameters concurrently with a running protocol.
 func (params *Parameters) SetSessionNonce(nonce *big.Int) {
+	if params.protocolModeFrozen {
+		panic("tss: session nonce is immutable after local party construction")
+	}
 	if nonce == nil || nonce.Sign() <= 0 {
 		panic("tss: session nonce must be positive")
 	}
