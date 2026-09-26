@@ -66,7 +66,7 @@ func assertDistinctIDsModQ(ec elliptic.Curve, ctx *PeerContext) {
 	q := ec.Params().N
 	seen := make(map[string]*PartyID, len(ctx.IDs()))
 	for _, partyID := range ctx.IDs() {
-		if partyID == nil || partyID.Key == nil {
+		if partyID == nil || partyID.MessageWrapper_PartyID == nil || partyID.Key == nil {
 			continue
 		}
 		residue := new(big.Int).Mod(partyID.KeyInt(), q)

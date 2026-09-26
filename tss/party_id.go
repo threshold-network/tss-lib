@@ -28,7 +28,7 @@ type (
 )
 
 func (pid *PartyID) ValidateBasic() bool {
-	return pid != nil && pid.Key != nil && 0 <= pid.Index
+	return pid != nil && pid.MessageWrapper_PartyID != nil && pid.Key != nil && 0 <= pid.Index
 }
 
 // --- ProtoBuf Extensions
@@ -53,6 +53,9 @@ func NewPartyID(id, moniker string, key *big.Int) *PartyID {
 }
 
 func (pid PartyID) String() string {
+	if pid.MessageWrapper_PartyID == nil {
+		return fmt.Sprintf("{%d,<no PartyID content>}", pid.Index)
+	}
 	return fmt.Sprintf("{%d,P[%s]}", pid.Index, pid.Moniker)
 }
 
@@ -63,6 +66,9 @@ func (pid PartyID) String() string {
 func SortPartyIDs(ids UnSortedPartyIDs, startAt ...int) SortedPartyIDs {
 	sorted := make(SortedPartyIDs, 0, len(ids))
 	for _, id := range ids {
+		if id == nil || id.MessageWrapper_PartyID == nil {
+			panic(fmt.Errorf("SortPartyIDs: nil PartyID or nil embedded PartyID"))
+		}
 		sorted = append(sorted, id)
 	}
 	sort.Sort(sorted)
@@ -109,6 +115,9 @@ func GenerateTestPartyIDs(count int, startAt ...int) SortedPartyIDs {
 func (spids SortedPartyIDs) Keys() []*big.Int {
 	ids := make([]*big.Int, spids.Len())
 	for i, pid := range spids {
+		if pid == nil || pid.MessageWrapper_PartyID == nil {
+			panic(fmt.Errorf("SortedPartyIDs.Keys: entry %d is a nil PartyID or has a nil embedded PartyID", i))
+		}
 		ids[i] = pid.KeyInt()
 	}
 	return ids

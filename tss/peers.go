@@ -17,6 +17,9 @@ func NewPeerContext(parties SortedPartyIDs) *PeerContext {
 }
 
 func (p2pCtx *PeerContext) IDs() SortedPartyIDs {
+	if p2pCtx == nil {
+		return nil
+	}
 	return p2pCtx.partyIDs
 }
 
