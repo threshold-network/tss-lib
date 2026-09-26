@@ -59,6 +59,17 @@ func NewLocalPartySaveData(partyCount int) (saveData LocalPartySaveData) {
 	return
 }
 
+// copyLocalSecrets copies the mutable integers while preserving nil fields.
+func copyLocalSecrets(source LocalSecrets) (out LocalSecrets) {
+	if source.Xi != nil {
+		out.Xi = new(big.Int).Set(source.Xi)
+	}
+	if source.ShareID != nil {
+		out.ShareID = new(big.Int).Set(source.ShareID)
+	}
+	return
+}
+
 func (preParams LocalPreParams) Validate() bool {
 	return preParams.PaillierSK != nil &&
 		preParams.NTildei != nil &&
@@ -75,16 +86,25 @@ func (preParams LocalPreParams) ValidateWithProof() bool {
 }
 
 // BuildLocalSaveDataSubset re-creates the LocalPartySaveData to contain data for only the list of signing parties.
+// The returned data owns copies of Xi and ShareID. LocalPreParams and ECDSAPub
+// retain their original pointers, and the newly allocated per-party slices
+// retain the selected element pointers.
 func BuildLocalSaveDataSubset(sourceData LocalPartySaveData, sortedIDs tss.SortedPartyIDs) LocalPartySaveData {
 	keysToIndices := make(map[string]int, len(sourceData.Ks))
 	for j, kj := range sourceData.Ks {
+		if kj == nil {
+			panic(errors.New("BuildLocalSaveDataSubset: a saved party key is nil"))
+		}
 		keysToIndices[hex.EncodeToString(kj.Bytes())] = j
 	}
 	newData := NewLocalPartySaveData(sortedIDs.Len())
 	newData.LocalPreParams = sourceData.LocalPreParams
-	newData.LocalSecrets = sourceData.LocalSecrets
+	newData.LocalSecrets = copyLocalSecrets(sourceData.LocalSecrets)
 	newData.ECDSAPub = sourceData.ECDSAPub
 	for j, id := range sortedIDs {
+		if id == nil || id.MessageWrapper_PartyID == nil {
+			panic(errors.New("BuildLocalSaveDataSubset: a party in the given roster has no PartyID content"))
+		}
 		savedIdx, ok := keysToIndices[hex.EncodeToString(id.Key)]
 		if !ok {
 			panic(errors.New("BuildLocalSaveDataSubset: unable to find a signer party in the local save data"))
