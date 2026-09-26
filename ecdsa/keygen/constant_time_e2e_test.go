@@ -50,6 +50,7 @@ func TestE2EConcurrentConstantTime(t *testing.T) {
 
 	for i := 0; i < len(pIDs); i++ {
 		params := tss.NewParameters(tss.S256(), p2pCtx, pIDs[i], len(pIDs), threshold)
+		params.SetProtocolMode(tss.ProtocolModeSecurityV2)
 		params.SetSessionNonce(big.NewInt(1))
 		P := NewLocalParty(params, outCh, endCh, fixtures[i].LocalPreParams).(*LocalParty)
 		parties = append(parties, P)
