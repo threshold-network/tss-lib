@@ -44,8 +44,8 @@ func round3Fixture(t *testing.T, historicalBobCompat bool) (*round3, *tss.PartyI
 
 	// This party's MtA inputs and ciphertexts.
 	const aliceMsg = 5
-	bobBlind := big.NewInt(7) // Bob's b (the Bob-proof x-witness)
-	wcBlind := big.NewInt(3)   // Bob's w (the BobWC-proof x-witness)
+	bobBlind := big.NewInt(7)                            // Bob's b (the Bob-proof x-witness)
+	wcBlind := big.NewInt(3)                             // Bob's w (the BobWC-proof x-witness)
 	historicalY := new(big.Int).Sub(pk.N, big.NewInt(1)) // y = N - 1
 
 	cA, err := pk.Encrypt(big.NewInt(aliceMsg))
@@ -125,6 +125,7 @@ func round3Fixture(t *testing.T, historicalBobCompat bool) (*round3, *tss.PartyI
 	}}}
 	return rnd, pIDs[1]
 }
+
 // TestSigningRound3_LegacyHistoricalBobCompatibilityPlumbing proves that the
 // tss.Parameters opt-in flag reaches both round-3 checks: the same
 // historical-witness (y = N - 1) round-2 message is rejected by the default
