@@ -276,7 +276,8 @@ func rangeProofChallenge(
 }
 
 func (pf *RangeProofAlice) ValidateBasic() bool {
-	return pf.Z != nil &&
+	return pf != nil &&
+		pf.Z != nil &&
 		pf.U != nil &&
 		pf.W != nil &&
 		pf.S != nil &&
@@ -285,6 +286,9 @@ func (pf *RangeProofAlice) ValidateBasic() bool {
 }
 
 func (pf *RangeProofAlice) Bytes() [RangeProofAliceBytesParts][]byte {
+	if !pf.ValidateBasic() {
+		panic(fmt.Errorf("RangeProofAlice.Bytes: invalid receiver"))
+	}
 	return [...][]byte{
 		pf.Z.Bytes(),
 		pf.U.Bytes(),

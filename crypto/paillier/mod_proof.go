@@ -85,6 +85,15 @@ func (privateKey *PrivateKey) ModProof(session ...[]byte) *ModProof {
 	}
 }
 
+// exceedsModulusBitLenCeiling reports whether N is wider than
+// verifyMaxModulusBitLen; see that constant for why the bound exists. It is
+// a standalone predicate (rather than inlined in ModVerify) so the boundary
+// can be pinned directly in tests without depending on ModVerify's error
+// wording or measuring allocation.
+func exceedsModulusBitLenCeiling(N *big.Int) bool {
+	return N != nil && N.BitLen() > verifyMaxModulusBitLen
+}
+
 // Verification: Accept iff all of the following hold:
 // – N is an odd composite number.
 // – z_i^N = y_i for every i ∈ [m]
@@ -92,6 +101,10 @@ func (privateKey *PrivateKey) ModProof(session ...[]byte) *ModProof {
 func (pf ModProof) ModVerify(N *big.Int, session ...[]byte) (bool, error) {
 	if common.AnyIsNil(pf.W) || common.AnyIsNil(pf.X[:]...) || common.AnyIsNil(pf.Z[:]...) {
 		return false, fmt.Errorf("mod proof verify: nil inputs in proof")
+	}
+
+	if exceedsModulusBitLenCeiling(N) {
+		return false, fmt.Errorf("mod proof verify: modulus bit length %d exceeds maximum %d", N.BitLen(), verifyMaxModulusBitLen)
 	}
 
 	if !common.IsUsableUnknownOrderModulus(N, verifyMinModulusBitLen) {

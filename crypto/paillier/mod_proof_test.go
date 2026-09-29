@@ -290,3 +290,55 @@ func TestModSqrt(t *testing.T) {
 
 	assert.Equal(b(37), quadResidueModComposite(b(58), b(7), b(11), b(77), b(60)))
 }
+
+// TestModulusBitLenCeilingPredicate pins the exceedsModulusBitLenCeiling
+// boundary directly: a modulus at exactly verifyMaxModulusBitLen bits must
+// not exceed the ceiling, and a modulus one bit wider must. This is checked
+// against the predicate itself, not against ModVerify's error wording or
+// allocation behavior, so it cannot drift from what ModVerify actually
+// consults.
+func TestModulusBitLenCeilingPredicate(t *testing.T) {
+	atCeiling := new(big.Int).Lsh(one, uint(verifyMaxModulusBitLen-1))
+	if atCeiling.BitLen() != verifyMaxModulusBitLen {
+		t.Fatalf("test modulus is %d bits, wanted %d", atCeiling.BitLen(), verifyMaxModulusBitLen)
+	}
+	if exceedsModulusBitLenCeiling(atCeiling) {
+		t.Fatal("a modulus at exactly verifyMaxModulusBitLen must not exceed the ceiling")
+	}
+
+	pastCeiling := new(big.Int).Lsh(one, uint(verifyMaxModulusBitLen))
+	if pastCeiling.BitLen() != verifyMaxModulusBitLen+1 {
+		t.Fatalf("test modulus is %d bits, wanted %d", pastCeiling.BitLen(), verifyMaxModulusBitLen+1)
+	}
+	if !exceedsModulusBitLenCeiling(pastCeiling) {
+		t.Fatal("a modulus one bit past verifyMaxModulusBitLen must exceed the ceiling")
+	}
+}
+
+// TestModProofVerifyModulusBitLenCeilingBehavior preserves the end-to-end
+// ModVerify behavior at the boundary: a modulus at the ceiling is not
+// rejected by the ceiling (pinned directly by TestModulusBitLenCeilingPredicate
+// above), and a modulus one bit past it is rejected by ModVerify.
+func TestModProofVerifyModulusBitLenCeilingBehavior(t *testing.T) {
+	proof := minimalModProof()
+
+	atCeiling := new(big.Int).Lsh(one, uint(verifyMaxModulusBitLen-1))
+	if ok, err := proof.ModVerify(atCeiling); ok || err == nil {
+		t.Fatal("expected ModVerify to still reject the (even) boundary modulus on a later check")
+	}
+
+	pastCeiling := new(big.Int).Lsh(one, uint(verifyMaxModulusBitLen))
+	if ok, err := proof.ModVerify(pastCeiling); ok || err == nil {
+		t.Fatal("expected ModVerify to reject a modulus past the ceiling")
+	}
+}
+
+// minimalModProof builds a ModProof that clears every per-member check, so
+// control reaches the ceiling comparison and later checks.
+func minimalModProof() *ModProof {
+	proof := &ModProof{W: big.NewInt(2)}
+	for i := range proof.X {
+		proof.X[i], proof.Z[i] = big.NewInt(7), big.NewInt(5)
+	}
+	return proof
+}

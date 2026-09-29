@@ -87,7 +87,11 @@ func (round *round3) Start() *tss.Error {
 				ch <- vssOut{errors.New("vss verify failed"), nil}
 				return
 			}
-			FacProof := r2msg1.UnmarshalFactorProof()
+			FacProof, err := r2msg1.UnmarshalFactorProof()
+			if err != nil {
+				ch <- vssOut{err, nil}
+				return
+			}
 			pkN := round.save.PaillierPKs[j].N
 			NTilde := round.save.LocalPreParams.NTildei
 			H1i, H2i := round.save.LocalPreParams.H1i, round.save.LocalPreParams.H2i
@@ -106,7 +110,11 @@ func (round *round3) Start() *tss.Error {
 				ch <- vssOut{errors.New("factor proof verify failed"), nil}
 				return
 			}
-			FacProofTilde := r2msg1.UnmarshalFactorProofTilde()
+			FacProofTilde, err := r2msg1.UnmarshalFactorProofTilde()
+			if err != nil {
+				ch <- vssOut{err, nil}
+				return
+			}
 			NTildej := round.save.NTildej[j]
 			ok, err = FacProofTilde.FactorVerify(
 				NTildej,
