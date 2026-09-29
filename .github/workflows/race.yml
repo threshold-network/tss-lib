@@ -1,8 +1,8 @@
 name: Go Race
 on:
-  # D11: weekly off-PR -race full-suite run. NOTE: schedule events only fire
-  # from the default branch (master), so this activates after the dev -> master
-  # merge; until then use workflow_dispatch to run it.
+  # D11: weekly off-PR -race full-suite run against master and dev. Schedule
+  # and workflow_dispatch become available after this file reaches the default
+  # branch (master).
   schedule:
     - cron: '0 0 * * 0'
   workflow_dispatch:
@@ -12,7 +12,11 @@ permissions:
 
 jobs:
   race:
-    name: Go race test
+    name: Go race test (${{ matrix.ref }})
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [master, dev]
     runs-on: ubuntu-latest
     # -race slows the keygen ceremony ~2-3x (estimate), so give the full
     # suite a generous budget.
@@ -21,6 +25,8 @@ jobs:
 
     - name: Check out code
       uses: actions/checkout@v4
+      with:
+        ref: ${{ matrix.ref }}
 
     - name: Set up Go
       uses: actions/setup-go@v5
