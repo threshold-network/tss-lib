@@ -10,8 +10,40 @@ import (
 	"testing"
 
 	. "github.com/bnb-chain/tss-lib/crypto/ckd"
-	"github.com/btcsuite/btcd/btcec"
+	"github.com/bnb-chain/tss-lib/tss"
+	"github.com/btcsuite/btcd/btcec/v2"
 )
+
+func TestLegacyPublicDerivationHierarchy(t *testing.T) {
+	// Captured with btcec at c26ffa870fd8. Pin both the serialized xpub and
+	// the accumulated scalar used to adjust existing signing shares.
+	const master = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8"
+	const wantChild = "xpub6CYmVEgeUykCausT5DuGF88T5ygofv63uKA287sVoASqgavVhNXxVWCrGQQReXBjyMGkURetqftCVhMrAzLoCUcbP46o4sibtt3LisHMKkC"
+	const wantDelta = "5cf748ee8bf3158bd5f642c0cab22fbf9e3148181497b3e85386ebe4d4819620"
+	curve := tss.S256()
+	root, err := NewExtendedKeyFromString(master, curve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root.PublicKey.Curve != curve || !curve.IsOnCurve(root.X, root.Y) {
+		t.Fatal("parsed key did not preserve the ECDSA public key contract")
+	}
+	curveCopy := *btcec.S256()
+	withCurveCopy, err := NewExtendedKeyFromString(master, &curveCopy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withCurveCopy.Curve != &curveCopy || withCurveCopy.String() != master {
+		t.Fatal("parsed key did not retain the supplied curve instance")
+	}
+	delta, child, err := DeriveChildKeyFromHierarchy([]uint32{12, 209, 3}, root, curve.Params().N, curve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.String() != wantChild || delta.Text(16) != wantDelta {
+		t.Fatalf("hierarchy differs from legacy output: child %s, delta %x", child, delta)
+	}
+}
 
 func TestPublicDerivation(t *testing.T) {
 	// port from https://github.com/btcsuite/btcutil/blob/master/hdkeychain/extendedkey_test.go
