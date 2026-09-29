@@ -58,7 +58,15 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 	// 2.
 	rho := common.GetRandomPositiveInt(qNTilde)
 	sigma := common.GetRandomPositiveInt(qNTilde)
-	tau := common.GetRandomPositiveInt(q3NTilde)
+	var tau *big.Int
+	if Session == nil {
+		// The legacy transcript samples tau below q*N-tilde. Keep that exact
+		// distribution for byte-compatible proof generation; security-v2 uses
+		// the wider q^3*N-tilde range.
+		tau = common.GetRandomPositiveInt(qNTilde)
+	} else {
+		tau = common.GetRandomPositiveInt(q3NTilde)
+	}
 
 	// 3.
 	rhoPrm := common.GetRandomPositiveInt(q3NTilde)
@@ -68,7 +76,15 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 	if beta == nil {
 		return nil, errors.New("ProveBob: could not sample randomness")
 	}
-	gamma := common.GetRandomPositiveInt(q7)
+	var gamma *big.Int
+	if Session == nil {
+		// Historical Bob proofs sample gamma as a unit modulo the Paillier
+		// modulus. Besides reproducing PRIOR proof bytes, this is why the legacy
+		// verifier must accept T1 above q^7.
+		gamma = common.GetRandomPositiveRelativelyPrimeInt(pk.N)
+	} else {
+		gamma = common.GetRandomPositiveInt(q7)
+	}
 
 	// 5.
 	u := crypto.NewECPointNoCurveCheck(ec, zero, zero) // initialization suppresses an IDE warning
@@ -109,17 +125,23 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 	w = modNTilde.Mul(w, modNTilde.Exp(h2, tau))
 
 	// 11-12. e'
-	var e *big.Int
-	{ // derive the Fiat-Shamir challenge by reducing the hash mod q
-		var eHash *big.Int
-		// X is nil if called by ProveBob (Bob's proof "without check")
-		if X == nil {
-			eHash = common.SHA512_256i_TAGGED(fsSessionBob(Session), append(pk.AsInts(), NTilde, h1, h2, c1, c2, z, zPrm, t, v, w)...)
-		} else {
-			eHash = common.SHA512_256i_TAGGED(fsSessionBobWC(Session), append(pk.AsInts(), NTilde, h1, h2, X.X(), X.Y(), c1, c2, u.X(), u.Y(), z, zPrm, t, v, w)...)
-		}
-		e = common.ModReduceHash(q, eHash)
-	}
+	e := bobProofChallenge(
+		Session,
+		q,
+		pk,
+		NTilde,
+		h1,
+		h2,
+		c1,
+		c2,
+		X,
+		u,
+		z,
+		zPrm,
+		t,
+		v,
+		w,
+	)
 
 	// 13.
 	modN := common.ModInt(pk.N)
@@ -205,7 +227,57 @@ func ProofBobFromBytes(bzs [][]byte) (*ProofBob, error) {
 // ProveBobWC.Verify implements verification of Bob's proof with check "VerifyMtawc_Bob" used in the MtA protocol from GG18Spec (9) Fig. 10.
 // an absent `X` verifies a proof generated without the X consistency check X = g^x
 func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c2 *big.Int, X *crypto.ECPoint, session ...[]byte) bool {
-	Session := optionalProofSession(session)
+	return pf.verify(ec, pk, NTilde, h1, h2, c1, c2, X, optionalProofSession(session), nil)
+}
+
+// legacyT1Max returns the exclusive T1 upper bound for the session-less
+// legacy Bob/BobWC verifier.
+//
+// The tight bound N + q^6 admits this implementation's own legacy prover:
+// T1 = e*y + gamma with e < q, y < q^5 and gamma < N, so an honest legacy
+// response is below q^6 + N.
+//
+// The widened bound (q+1)*N admits the historical (2e712689) BobMid/BobMidWC
+// witness range, which samples y below the Paillier modulus: T1 = e*y + gamma
+// with e < q, y < N, gamma < N, hence T1 < (q-1)*N + N < (q+1)*N.
+func legacyT1Max(ec elliptic.Curve, pk *paillier.PublicKey, historicalBobCompat bool) *big.Int {
+	if historicalBobCompat {
+		return new(big.Int).Mul(new(big.Int).Add(ec.Params().N, one), pk.N)
+	}
+	q := ec.Params().N
+	q3 := new(big.Int).Mul(q, q)
+	q3 = new(big.Int).Mul(q, q3)
+	q6 := new(big.Int).Mul(q3, q3)
+	return new(big.Int).Add(pk.N, q6)
+}
+
+// VerifyLegacy verifies a session-less legacy Bob/BobWC proof (the exact
+// 2e712689 untagged challenge). It is the explicit compatibility-aware entry
+// point used by signing round 3 for legacy parties: the default bound is the
+// tight N + q^6 cap, and historicalBobCompat widens it to the historical
+// witness-range bound (q+1)*N described on legacyT1Max.
+func (pf *ProofBobWC) VerifyLegacy(
+	ec elliptic.Curve,
+	pk *paillier.PublicKey,
+	NTilde, h1, h2, c1, c2 *big.Int,
+	X *crypto.ECPoint,
+	historicalBobCompat bool,
+) bool {
+	return pf.verify(ec, pk, NTilde, h1, h2, c1, c2, X, nil, legacyT1Max(ec, pk, historicalBobCompat))
+}
+
+// verify is the shared Bob/BobWC verification core. maxT1Override, when
+// non-nil, is the exclusive T1 upper bound to enforce; nil means "derive the
+// bound from the session state", which reproduces the exact historical
+// behavior of Verify.
+func (pf *ProofBobWC) verify(
+	ec elliptic.Curve,
+	pk *paillier.PublicKey,
+	NTilde, h1, h2, c1, c2 *big.Int,
+	X *crypto.ECPoint,
+	Session []byte,
+	maxT1Override *big.Int,
+) bool {
 	if pf == nil || pf.ProofBob == nil ||
 		ec == nil || pk == nil || pk.N == nil ||
 		NTilde == nil || h1 == nil || h2 == nil || c1 == nil || c2 == nil {
@@ -239,6 +311,28 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	q3NTilde := new(big.Int).Mul(q3, NTilde)
 	maxS2 := new(big.Int).Lsh(q3NTilde, 1)
 	maxT2 := new(big.Int).Set(maxS2)
+	var maxT1 *big.Int
+	switch {
+	case maxT1Override != nil:
+		// Explicit legacy bound chosen by the caller (VerifyLegacy).
+		maxT1 = maxT1Override
+	case Session != nil:
+		// The session-bound verifier historically accepted T1 == q^7; express
+		// the exclusive upper bound as q^7 + 1 so the shared >= check below
+		// preserves that behavior exactly.
+		maxT1 = new(big.Int).Add(q7, big.NewInt(1))
+	default:
+		// The historical prover sampled gamma in [1, pk.N), while the
+		// security-v2 prover samples it below q^7. Since T1 = e*y + gamma
+		// with e < q and the MtA blinding value y < q^5, an honest legacy
+		// response is below pk.N + q^6.
+		// Applying the security-v2 q^7 cap to a PRIOR proof rejects almost
+		// every legitimate 2048-bit gamma and breaks mixed-binary legacy
+		// signing. Keep a finite legacy-specific cap so adversarial exponents
+		// remain bounded without rewriting the historical acceptance range.
+		q6 := new(big.Int).Mul(q3, q3)
+		maxT1 = new(big.Int).Add(pk.N, q6)
+	}
 
 	if !common.IsInIntervalPositive(pf.Z, NTilde) {
 		return false
@@ -300,7 +394,7 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	if pf.S2.Cmp(maxS2) >= 0 {
 		return false
 	}
-	if pf.T1.Cmp(q7) > 0 {
+	if pf.T1.Cmp(maxT1) >= 0 {
 		return false
 	}
 	if pf.T2.Cmp(maxT2) >= 0 {
@@ -308,23 +402,31 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	}
 
 	// 1-2. e'
-	var e *big.Int
-	{ // derive the Fiat-Shamir challenge by reducing the hash mod q
-		var eHash *big.Int
-		// X is nil if called on a ProveBob (Bob's proof "without check")
-		if X == nil {
-			eHash = common.SHA512_256i_TAGGED(fsSessionBob(Session), append(pk.AsInts(), NTilde, h1, h2, c1, c2, pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)
-		} else {
-			if !X.ValidateBasic() || !crypto.SameCurve(ec, X.Curve()) {
-				return false
-			}
-			if !pf.U.ValidateBasic() || !crypto.SameCurve(ec, pf.U.Curve()) {
-				return false
-			}
-			eHash = common.SHA512_256i_TAGGED(fsSessionBobWC(Session), append(pk.AsInts(), NTilde, h1, h2, X.X(), X.Y(), c1, c2, pf.U.X(), pf.U.Y(), pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)
+	if X != nil {
+		if !X.ValidateBasic() || !crypto.SameCurve(ec, X.Curve()) {
+			return false
 		}
-		e = common.ModReduceHash(q, eHash)
+		if !pf.U.ValidateBasic() || !crypto.SameCurve(ec, pf.U.Curve()) {
+			return false
+		}
 	}
+	e := bobProofChallenge(
+		Session,
+		q,
+		pk,
+		NTilde,
+		h1,
+		h2,
+		c1,
+		c2,
+		X,
+		pf.U,
+		pf.Z,
+		pf.ZPrm,
+		pf.T,
+		pf.V,
+		pf.W,
+	)
 	if e.Sign() == 0 {
 		return false
 	}
@@ -388,6 +490,83 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	return true
 }
 
+func bobProofChallenge(
+	session []byte,
+	q *big.Int,
+	pk *paillier.PublicKey,
+	nTilde, h1, h2, c1, c2 *big.Int,
+	x, u *crypto.ECPoint,
+	z, zPrime, t, v, w *big.Int,
+) *big.Int {
+	if session == nil {
+		if x == nil {
+			return common.HashToN(
+				q,
+				append(pk.AsInts(), c1, c2, z, zPrime, t, v, w)...,
+			)
+		}
+		return common.HashToN(
+			q,
+			append(
+				pk.AsInts(),
+				x.X(),
+				x.Y(),
+				c1,
+				c2,
+				u.X(),
+				u.Y(),
+				z,
+				zPrime,
+				t,
+				v,
+				w,
+			)...,
+		)
+	}
+
+	if x == nil {
+		challengeHash := common.SHA512_256i_TAGGED(
+			fsSessionBob(session),
+			append(
+				pk.AsInts(),
+				nTilde,
+				h1,
+				h2,
+				c1,
+				c2,
+				z,
+				zPrime,
+				t,
+				v,
+				w,
+			)...,
+		)
+		return common.ModReduceHash(q, challengeHash)
+	}
+
+	challengeHash := common.SHA512_256i_TAGGED(
+		fsSessionBobWC(session),
+		append(
+			pk.AsInts(),
+			nTilde,
+			h1,
+			h2,
+			x.X(),
+			x.Y(),
+			c1,
+			c2,
+			u.X(),
+			u.Y(),
+			z,
+			zPrime,
+			t,
+			v,
+			w,
+		)...,
+	)
+	return common.ModReduceHash(q, challengeHash)
+}
+
 // ProveBob.Verify implements verification of Bob's proof without check "VerifyMta_Bob" used in the MtA protocol from GG18Spec (9) Fig. 11.
 func (pf *ProofBob) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c2 *big.Int, session ...[]byte) bool {
 	if pf == nil {
@@ -395,6 +574,23 @@ func (pf *ProofBob) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1
 	}
 	pfWC := &ProofBobWC{ProofBob: pf, U: nil}
 	return pfWC.Verify(ec, pk, NTilde, h1, h2, c1, c2, nil, session...)
+}
+
+// ProveBob.VerifyLegacy is the explicit compatibility-aware session-less
+// counterpart of ProveBob.Verify: historicalBobCompat widens the T1 bound to
+// the historical witness range per legacyT1Max; the prover and every other
+// check are unchanged.
+func (pf *ProofBob) VerifyLegacy(
+	ec elliptic.Curve,
+	pk *paillier.PublicKey,
+	NTilde, h1, h2, c1, c2 *big.Int,
+	historicalBobCompat bool,
+) bool {
+	if pf == nil {
+		return false
+	}
+	pfWC := &ProofBobWC{ProofBob: pf, U: nil}
+	return pfWC.VerifyLegacy(ec, pk, NTilde, h1, h2, c1, c2, nil, historicalBobCompat)
 }
 
 func optionalProofSession(session [][]byte) []byte {

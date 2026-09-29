@@ -15,6 +15,7 @@ import (
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
+	"github.com/bnb-chain/tss-lib/crypto/paillier"
 	"github.com/bnb-chain/tss-lib/tss"
 )
 
@@ -27,6 +28,31 @@ func TestProofSessionRejectsEmptyTag(t *testing.T) {
 	assert.Panics(t, func() {
 		_, _ = ProveRangeAlice(nil, nil, nil, nil, nil, nil, nil, nil, []byte{})
 	})
+}
+
+func TestLegacyRangeChallengeMatchesHistoricalTranscript(t *testing.T) {
+	q := tss.EC().Params().N
+	pk := &paillier.PublicKey{N: big.NewInt(17)}
+	c := big.NewInt(19)
+	z := big.NewInt(23)
+	u := big.NewInt(29)
+	w := big.NewInt(31)
+
+	expected := common.HashToN(q, append(pk.AsInts(), c, z, u, w)...)
+	actual := rangeProofChallenge(
+		nil,
+		q,
+		pk,
+		big.NewInt(37),
+		big.NewInt(41),
+		big.NewInt(43),
+		c,
+		z,
+		u,
+		w,
+	)
+
+	assert.Equal(t, 0, expected.Cmp(actual))
 }
 
 func TestProveRangeAlice(t *testing.T) {

@@ -54,6 +54,9 @@ func TestRounds3to5CTWiring(t *testing.T) {
 
 	for i := 0; i < len(signPIDs); i++ {
 		params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[i], len(signPIDs), testThreshold)
+		// Security-v2 + nonce: the CT wiring under test is transcript-mode
+		// independent, but local-party construction requires an explicit mode.
+		params.SetProtocolMode(tss.ProtocolModeSecurityV2)
 		params.SetSessionNonce(big.NewInt(1))
 
 		P := NewLocalParty(big.NewInt(42), params, keys[i], outCh, endCh, 32).(*LocalParty)

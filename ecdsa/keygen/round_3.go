@@ -66,7 +66,6 @@ func (round *round3) Start() *tss.Error {
 		if j == PIdx {
 			continue
 		}
-		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		// 6-8.
 		go func(j int, ch chan<- vssOut) {
 			// 4-9.
@@ -96,7 +95,13 @@ func (round *round3) Start() *tss.Error {
 			pkN := round.save.PaillierPKs[j].N
 			NTilde := round.save.LocalPreParams.NTildei
 			H1i, H2i := round.save.LocalPreParams.H1i, round.save.LocalPreParams.H2i
-			ok, err := FacProof.FactorVerify(pkN, NTilde, H1i, H2i, contextJ)
+			ok, err := FacProof.FactorVerify(
+				pkN,
+				NTilde,
+				H1i,
+				H2i,
+				round.proofContext(j)...,
+			)
 			if err != nil {
 				ch <- vssOut{err, nil}
 				return
@@ -111,7 +116,13 @@ func (round *round3) Start() *tss.Error {
 				return
 			}
 			NTildej := round.save.NTildej[j]
-			ok, err = FacProofTilde.FactorVerify(NTildej, NTilde, H1i, H2i, contextJ)
+			ok, err = FacProofTilde.FactorVerify(
+				NTildej,
+				NTilde,
+				H1i,
+				H2i,
+				round.proofContext(j)...,
+			)
 			if err != nil {
 				ch <- vssOut{err, nil}
 				return

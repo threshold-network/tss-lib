@@ -125,6 +125,22 @@ func (round *base) resetOK() {
 	}
 }
 
+// proofContext returns the immutable transcript selection in variadic-call
+// form. Legacy parties pass no session and therefore reproduce the historical
+// untagged challenges. Security-v2 parties bind every proof to the ceremony
+// SSID and the producing party.
+func (round *base) proofContext(index int) [][]byte {
+	if round.ProtocolMode() == tss.ProtocolModeSecurityV2 {
+		return [][]byte{
+			common.AppendUint64ToBytesSlice(
+				round.temp.ssid,
+				uint64(index),
+			),
+		}
+	}
+	return nil
+}
+
 // getSSID derives the session-binding identifier for signing.
 //
 // Callers must invoke this exactly once, in round 1, and store the result in

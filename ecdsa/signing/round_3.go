@@ -38,7 +38,6 @@ func (round *round3) Start() *tss.Error {
 		if j == i {
 			continue
 		}
-		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
 		// Alice_end
 		go func(j int, Pj *tss.PartyID) {
 			defer wg.Done()
@@ -48,17 +47,39 @@ func (round *round3) Start() *tss.Error {
 				errChs <- round.WrapError(errorspkg.Wrapf(err, "UnmarshalProofBob failed"), Pj)
 				return
 			}
-			alphaIj, err := mta.AliceEnd(
-				round.Params().EC(),
-				round.key.PaillierPKs[i],
-				proofBob,
-				round.key.H1j[i],
-				round.key.H2j[i],
-				round.temp.cis[j],
-				new(big.Int).SetBytes(r2msg.GetC1()),
-				round.key.NTildej[i],
-				round.key.PaillierSK,
-				contextJ)
+			var alphaIj *big.Int
+			if round.ProtocolMode() == tss.ProtocolModeLegacy {
+				// Legacy parties verify the untagged historical challenge.
+				// The opt-in compatibility flag (default off) widens the
+				// T1 bound to the historical BobMid/BobMidWC witness
+				// range so pre-upgrade peer proofs verify during the
+				// mixed-version rollout window.
+				compat := round.LegacyHistoricalBobCompatibility()
+				alphaIj, err = mta.AliceEndLegacy(
+					round.Params().EC(),
+					round.key.PaillierPKs[i],
+					proofBob,
+					round.key.H1j[i],
+					round.key.H2j[i],
+					round.temp.cis[j],
+					new(big.Int).SetBytes(r2msg.GetC1()),
+					round.key.NTildej[i],
+					round.key.PaillierSK,
+					compat,
+				)
+			} else {
+				alphaIj, err = mta.AliceEnd(
+					round.Params().EC(),
+					round.key.PaillierPKs[i],
+					proofBob,
+					round.key.H1j[i],
+					round.key.H2j[i],
+					round.temp.cis[j],
+					new(big.Int).SetBytes(r2msg.GetC1()),
+					round.key.NTildej[i],
+					round.key.PaillierSK,
+					round.proofContext(j)...)
+			}
 			alphas[j] = alphaIj
 			if err != nil {
 				errChs <- round.WrapError(err, Pj)
@@ -73,18 +94,36 @@ func (round *round3) Start() *tss.Error {
 				errChs <- round.WrapError(errorspkg.Wrapf(err, "UnmarshalProofBobWC failed"), Pj)
 				return
 			}
-			uIj, err := mta.AliceEndWC(
-				round.Params().EC(),
-				round.key.PaillierPKs[i],
-				proofBobWC,
-				round.temp.bigWs[j],
-				round.temp.cis[j],
-				new(big.Int).SetBytes(r2msg.GetC2()),
-				round.key.NTildej[i],
-				round.key.H1j[i],
-				round.key.H2j[i],
-				round.key.PaillierSK,
-				contextJ)
+			var uIj *big.Int
+			if round.ProtocolMode() == tss.ProtocolModeLegacy {
+				compat := round.LegacyHistoricalBobCompatibility()
+				uIj, err = mta.AliceEndWCLegacy(
+					round.Params().EC(),
+					round.key.PaillierPKs[i],
+					proofBobWC,
+					round.temp.bigWs[j],
+					round.temp.cis[j],
+					new(big.Int).SetBytes(r2msg.GetC2()),
+					round.key.NTildej[i],
+					round.key.H1j[i],
+					round.key.H2j[i],
+					round.key.PaillierSK,
+					compat,
+				)
+			} else {
+				uIj, err = mta.AliceEndWC(
+					round.Params().EC(),
+					round.key.PaillierPKs[i],
+					proofBobWC,
+					round.temp.bigWs[j],
+					round.temp.cis[j],
+					new(big.Int).SetBytes(r2msg.GetC2()),
+					round.key.NTildej[i],
+					round.key.H1j[i],
+					round.key.H2j[i],
+					round.key.PaillierSK,
+					round.proofContext(j)...)
+			}
 			us[j] = uIj
 			if err != nil {
 				errChs <- round.WrapError(err, Pj)
