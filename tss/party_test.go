@@ -3,6 +3,8 @@ package tss
 import (
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -40,8 +42,8 @@ func TestBasePartyLatchesLifecycleFailures(t *testing.T) {
 			if p.round() != failedRound || len(got.Culprits()) != 1 {
 				t.Fatal("original failure lost its round or culprit")
 			}
-			stores := p.stores
-			firstCalls, nextCalls := first.calls, next.calls
+			stores := p.stores.Load()
+			firstCalls, nextCalls := first.calls.updates.Load(), next.calls.updates.Load()
 			for i := 0; i < 2; i++ {
 				ok, err := p.Update(lifecycleTestMessage{})
 				if ok || err == nil || !strings.Contains(err.Error(), "cannot process further messages") {
@@ -51,7 +53,7 @@ func TestBasePartyLatchesLifecycleFailures(t *testing.T) {
 					t.Fatal("later delivery repeated culprit attribution")
 				}
 			}
-			if p.stores != stores || first.calls != firstCalls || next.calls != nextCalls {
+			if p.stores.Load() != stores || first.calls.updates.Load() != firstCalls || next.calls.updates.Load() != nextCalls {
 				t.Fatal("update after failure stored a message or called a round")
 			}
 			if p.abortedWith() != failure || p.round() != failedRound {
@@ -85,14 +87,14 @@ func TestBasePartyMessageRejectionsAreRecoverable(t *testing.T) {
 			if ok, err := p.Update(lifecycleTestMessage{}); ok || err != wantErr {
 				t.Fatalf("unexpected rejection: ok=%v err=%v", ok, err)
 			}
-			if p.abortedWith() != nil || first.calls.updates != 0 {
+			if p.abortedWith() != nil || first.calls.updates.Load() != 0 {
 				t.Fatal("message rejection aborted or updated the round")
 			}
 			p.validationErr, p.storageErr, p.storeOK = nil, nil, true
 			if ok, err := p.Update(lifecycleTestMessage{}); !ok || err != nil {
 				t.Fatalf("valid update did not recover: ok=%v err=%v", ok, err)
 			}
-			if first.calls.updates != 1 {
+			if first.calls.updates.Load() != 1 {
 				t.Fatal("valid update did not reach the round")
 			}
 		})
@@ -104,7 +106,7 @@ func TestBasePartyNormalProgression(t *testing.T) {
 	if ok, err := p.Update(lifecycleTestMessage{}); !ok || err != nil {
 		t.Fatalf("message before start was not stored: ok=%v err=%v", ok, err)
 	}
-	if p.Running() || p.stores != 1 || first.calls.updates != 0 {
+	if p.Running() || p.stores.Load() != 1 || first.calls.updates.Load() != 0 {
 		t.Fatal("message before start changed the lifecycle")
 	}
 	if err := p.Start(); err != nil {
@@ -114,7 +116,7 @@ func TestBasePartyNormalProgression(t *testing.T) {
 	if ok, err := p.Update(lifecycleTestMessage{}); !ok || err != nil {
 		t.Fatalf("round did not advance: ok=%v err=%v", ok, err)
 	}
-	if p.round() != next || first.calls.updates != 1 || next.calls.starts != 1 || next.calls.updates != 1 {
+	if p.round() != next || first.calls.updates.Load() != 1 || next.calls.starts.Load() != 1 || next.calls.updates.Load() != 1 {
 		t.Fatal("round progression did not start and update the next round")
 	}
 	next.proceed = true
@@ -126,6 +128,120 @@ func TestBasePartyNormalProgression(t *testing.T) {
 	}
 }
 
+// TestBasePartyConcurrentUpdatesRetainExactlyOneFatalError proves that under
+// concurrent BaseUpdate deliveries, exactly one caller observes the fatal
+// round error while every other caller receives the uniform, culprit-free
+// refusal, and that the retained latch keeps the first fatal error.
+func TestBasePartyConcurrentUpdatesRetainExactlyOneFatalError(t *testing.T) {
+	p, first, next := newLifecycleTestParty()
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	failure := first.WrapError(errors.New("round failed"), first.params.Parties().IDs()[1])
+	first.updateErr = failure
+
+	const callers = 50
+	results := make(chan *Error, callers)
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-release
+			_, err := p.Update(lifecycleTestMessage{})
+			results <- err
+		}()
+	}
+	close(release)
+	wg.Wait()
+	close(results)
+
+	var fatal, refused, other int
+	for err := range results {
+		if err == failure {
+			fatal++
+			continue
+		}
+		if err != nil && strings.Contains(err.Error(), "cannot process further messages") && len(err.Culprits()) == 0 {
+			refused++
+			continue
+		}
+		other++
+	}
+	if fatal != 1 || refused != callers-1 || other != 0 {
+		t.Fatalf("expected one fatal error and %d refusals, got %d fatal / %d refused / %d other", callers-1, fatal, refused, other)
+	}
+	if got := first.calls.updates.Load(); got != 1 {
+		t.Fatalf("round.Update ran %d times; exactly one caller may reach it", got)
+	}
+	if next.calls.updates.Load() != 0 {
+		t.Fatal("the next round processed a concurrent update")
+	}
+	if p.abortedWith() != failure {
+		t.Fatalf("the first fatal error was not retained: %v", p.abortedWith())
+	}
+}
+
+// TestBasePartyConcurrentStartRunsExactlyOnce proves that round.Start runs
+// exactly once when BaseStart calls race each other alongside BaseUpdate
+// deliveries: one caller starts the round and the rest are refused with the
+// unexpected-state error.
+func TestBasePartyConcurrentStartRunsExactlyOnce(t *testing.T) {
+	p, first, _ := newLifecycleTestParty()
+
+	const workers = 20
+	starts := make(chan *Error, workers)
+	updates := make(chan *Error, workers)
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-release
+			starts <- p.Start()
+		}()
+		go func() {
+			defer wg.Done()
+			<-release
+			_, err := p.Update(lifecycleTestMessage{})
+			updates <- err
+		}()
+	}
+	close(release)
+	wg.Wait()
+	close(starts)
+	close(updates)
+
+	var succeeded, unexpected, other int
+	for err := range starts {
+		if err == nil {
+			succeeded++
+			continue
+		}
+		if strings.Contains(err.Error(), "unexpected state") {
+			unexpected++
+			continue
+		}
+		other++
+	}
+	for err := range updates {
+		if err != nil {
+			t.Fatalf("concurrent update failed: %v", err)
+		}
+	}
+	if succeeded != 1 || unexpected != workers-1 || other != 0 {
+		t.Fatalf("expected one successful start and %d refusals, got %d / %d / %d other", workers-1, succeeded, unexpected, other)
+	}
+	if got := first.calls.starts.Load(); got != 1 {
+		t.Fatalf("round.Start ran %d times; exactly one caller may start it", got)
+	}
+	if p.abortedWith() != nil {
+		t.Fatalf("concurrent starts latched an error: %v", p.abortedWith())
+	}
+}
+
 type lifecycleTestParty struct {
 	*BaseParty
 	first         Round
@@ -133,7 +249,7 @@ type lifecycleTestParty struct {
 	validationErr *Error
 	storageErr    *Error
 	storeOK       bool
-	stores        int
+	stores        atomic.Int32
 }
 
 func newLifecycleTestParty() (*lifecycleTestParty, *lifecycleTestRound, *lifecycleTestRound) {
@@ -158,7 +274,7 @@ func (p *lifecycleTestParty) ValidateMessage(ParsedMessage) (bool, *Error) {
 	return p.validationErr == nil, p.validationErr
 }
 func (p *lifecycleTestParty) StoreMessage(ParsedMessage) (bool, *Error) {
-	p.stores++
+	p.stores.Add(1)
 	return p.storeOK && p.storageErr == nil, p.storageErr
 }
 
@@ -168,7 +284,9 @@ type lifecycleTestRound struct {
 	next                Round
 	startErr, updateErr *Error
 	proceed             bool
-	calls               struct{ starts, updates, advances int }
+	calls               struct {
+		starts, updates, advances atomic.Int64
+	}
 }
 
 func (r *lifecycleTestRound) Params() *Parameters          { return r.params }
@@ -180,15 +298,15 @@ func (r *lifecycleTestRound) WrapError(err error, culprits ...*PartyID) *Error {
 	return NewError(err, "test", r.number, r.params.PartyID(), culprits...)
 }
 func (r *lifecycleTestRound) Start() *Error {
-	r.calls.starts++
+	r.calls.starts.Add(1)
 	return r.startErr
 }
 func (r *lifecycleTestRound) Update() (bool, *Error) {
-	r.calls.updates++
+	r.calls.updates.Add(1)
 	return r.updateErr == nil, r.updateErr
 }
 func (r *lifecycleTestRound) NextRound() Round {
-	r.calls.advances++
+	r.calls.advances.Add(1)
 	return r.next
 }
 
