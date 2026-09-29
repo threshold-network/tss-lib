@@ -24,11 +24,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # R4: cheap early gate - folds the standalone gofmt.yml check in and fails a
-  # broken PR in ~1 min instead of ~10. go vet is the repo's only vet entry point
-  # (Makefile has no vet target), so run it here.
+  # R4: cheap early gate - fails a broken PR in ~1 min instead of ~10. go vet is
+  # the repo's only vet entry point (Makefile has no vet target), so run it
+  # here. The gofmt gate lives in the dedicated gofmt workflow ("Go fmt
+  # project"); it is not re-run here.
   lint-fast:
-    name: Vet and Go fmt
+    name: Vet
     runs-on: ubuntu-latest
     steps:
 
@@ -38,14 +39,11 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.24.x'
+        go-version: '1.26.8'
         cache: true
 
     - name: Vet
       run: go vet ./...
-
-    - name: Check gofmt
-      run: test -z "$(gofmt -l .)"
 
   # R4: unit-level keygen slice (~30 s, no ceremony). Runs in parallel with the
   # full suite so a broken keygen change fails early. The full-suite job below
@@ -61,7 +59,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.24.x'
+        go-version: '1.26.8'
         cache: true
 
     - name: Run Keygen Units
