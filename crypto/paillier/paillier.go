@@ -35,6 +35,30 @@ const (
 	verifyPrimesUntil      = 1000 // Verify uses primes <1000
 	pQBitLenDifference     = 3    // >1020-bit P-Q
 	verifyMinModulusBitLen = 2048
+	// verifyMaxModulusBitLen is a resource ceiling on the modulus width the
+	// exported ModVerify will accept.
+	//
+	// This is ported from upstream e65fb36, but the upstream rationale does
+	// not transfer exactly: upstream's sampler tags each 256-bit expansion
+	// block with a single byte, so the tag itself wraps (and the sampler's
+	// output stops being the challenge the proof claims) once blocks > 256,
+	// i.e. bitLen > 65536 -- there, the bound is a correctness requirement.
+	// This fork's sampleYModN (mod_proof.go) instead tags each block with a
+	// 4-byte uint32 index, which does not wrap until 2^32 blocks (~2^40
+	// bits); the sampler here stays correct far past this ceiling.
+	//
+	// The bound is kept anyway as an allocation/operational cap, matching
+	// the width upstream chose for the same class of problem: N arrives
+	// through the exported ModVerify, and everything derived from it --
+	// common.IsUsableUnknownOrderModulus's ProbablyPrime call, the sampler's
+	// mask, expansion buffer, and every one of the PARAM_M candidates -- is
+	// O(bitLen), so without a ceiling an exported call allocates and hashes
+	// proportional to a caller-controlled, unbounded width. The wire path
+	// already pins a peer's modulus to exactly paillierBitsLen (2048) bits
+	// before any proof is verified, verifyMinModulusBitLen is that same
+	// 2048, and this ceiling is 32x it -- it excludes nothing this library's
+	// wire path can produce.
+	verifyMaxModulusBitLen = 65536
 )
 
 type (
@@ -67,6 +91,11 @@ func init() {
 
 // len is the length of the modulus (each prime = len / 2)
 func GenerateKeyPair(ctx context.Context, modulusBitLen int, optionalConcurrency ...int) (privateKey *PrivateKey, publicKey *PublicKey, err error) {
+	// Smaller sizes cannot supply two safe primes with the required separation
+	// using the safe-prime generator's candidate range.
+	if modulusBitLen < 18 {
+		return nil, nil, errors.New("paillier modulus size must be at least 18 bits")
+	}
 	var concurrency int
 	if 0 < len(optionalConcurrency) {
 		if 1 < len(optionalConcurrency) {
@@ -115,10 +144,20 @@ func (publicKey *PublicKey) EncryptAndReturnRandomness(m *big.Int) (c *big.Int, 
 		return nil, nil, ErrMessageTooLong
 	}
 	x = common.GetRandomPositiveRelativelyPrimeInt(publicKey.N)
+	if x == nil {
+		return nil, nil, errors.New("EncryptAndReturnRandomness: could not sample randomness")
+	}
 	N2 := publicKey.NSquare()
 	// 1. gamma^m mod N2
-	Gm := new(big.Int).Exp(publicKey.Gamma(), m, N2)
-	// 2. x^N mod N2
+	var Gm *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: m is the (often secret) plaintext used as the exponent; exponentiate
+		// in constant time (N2 is odd).
+		Gm = common.NewCTModInt(N2).ExpCT(publicKey.Gamma(), m)
+	} else {
+		Gm = new(big.Int).Exp(publicKey.Gamma(), m, N2)
+	}
+	// 2. x^N mod N2 (exponent N is public; the secret base x stays on math/big)
 	xN := new(big.Int).Exp(x, publicKey.N, N2)
 	// 3. (1) * (2) mod N2
 	c = common.ModInt(N2).Mul(Gm, xN)
@@ -139,6 +178,11 @@ func (publicKey *PublicKey) HomoMult(m, c1 *big.Int) (*big.Int, error) {
 		return nil, ErrMessageTooLong
 	}
 	// cipher^m mod N2
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: m is the secret scalar multiplier used as the exponent; exponentiate
+		// in constant time (N2 is odd).
+		return common.NewCTModInt(N2).ExpCT(c1, m), nil
+	}
 	return common.ModInt(N2).Exp(c1, m), nil
 }
 
@@ -179,12 +223,35 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 	if cg.Cmp(one) == 1 {
 		return nil, ErrMessageMalFormed
 	}
+
+	useCT := common.IsConstantTimeEnabled()
+	var cExpLambda, gammaExpLambda *big.Int
+	if useCT {
+		// SECURITY: constant-time exponentiation prevents leaking the secret
+		// exponent LambdaN through execution-time variation. N2 is odd.
+		ctModN2 := common.NewCTModInt(N2)
+		cExpLambda = ctModN2.ExpCT(c, privateKey.LambdaN)
+		gammaExpLambda = ctModN2.ExpCT(privateKey.Gamma(), privateKey.LambdaN)
+	} else {
+		cExpLambda = new(big.Int).Exp(c, privateKey.LambdaN, N2)
+		gammaExpLambda = new(big.Int).Exp(privateKey.Gamma(), privateKey.LambdaN, N2)
+	}
+
 	// 1. L(u) = (c^LambdaN-1 mod N2) / N
-	Lc := L(new(big.Int).Exp(c, privateKey.LambdaN, N2), privateKey.N)
+	Lc := L(cExpLambda, privateKey.N)
 	// 2. L(u) = (Gamma^LambdaN-1 mod N2) / N
-	Lg := L(new(big.Int).Exp(privateKey.Gamma(), privateKey.LambdaN, N2), privateKey.N)
+	Lg := L(gammaExpLambda, privateKey.N)
 	// 3. (1) * modInv(2) mod N
-	inv := new(big.Int).ModInverse(Lg, privateKey.N)
+	var inv *big.Int
+	if useCT {
+		// LambdaN is a group exponent for the units modulo N, so raising a
+		// unit to LambdaN-1 computes its inverse. Reuse the value already
+		// needed for decryption without requiring the optional PhiN field.
+		ctModN := common.NewCTModIntWithPhi(privateKey.N, privateKey.LambdaN)
+		inv = ctModN.ModInverseCT(Lg)
+	} else {
+		inv = new(big.Int).ModInverse(Lg, privateKey.N)
+	}
 	m = common.ModInt(privateKey.N).Mul(Lc, inv)
 	return
 }
@@ -196,13 +263,27 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 // In: In Proc. of the 5th ACM Conference on Computer and Communications Security (CCS-98. Citeseer (1998)
 //
 // This only implements the stage 1 proof that N is square-free from 3.1
+// It panics if the private key modulus cannot supply challenges.
 func (privateKey *PrivateKey) Proof(k *big.Int, ecdsaPub *crypto2.ECPoint) Proof {
 	var pi Proof
 	iters := ProofIters
 	xs := GenerateXs(iters, k, privateKey.N, ecdsaPub)
-	for i := 0; i < iters; i++ {
-		M := new(big.Int).ModInverse(privateKey.N, privateKey.PhiN)
-		pi[i] = new(big.Int).Exp(xs[i], M, privateKey.N)
+	if len(xs) != iters {
+		panic(errors.New("paillier proof: invalid modulus for challenges"))
+	}
+	// M = N^(-1) mod PhiN. PhiN is even, so this inverse stays on math/big (bigmod
+	// requires an odd modulus); only the subsequent Exp mod N (odd) carries the secret
+	// exponent M and gets the constant-time path when enabled.
+	M := new(big.Int).ModInverse(privateKey.N, privateKey.PhiN)
+	if common.IsConstantTimeEnabled() {
+		ctModN := common.NewCTModInt(privateKey.N)
+		for i := 0; i < iters; i++ {
+			pi[i] = ctModN.ExpCT(xs[i], M)
+		}
+	} else {
+		for i := 0; i < iters; i++ {
+			pi[i] = new(big.Int).Exp(xs[i], M, privateKey.N)
+		}
 	}
 	return pi
 }
@@ -271,12 +352,18 @@ func L(u, N *big.Int) *big.Int {
 }
 
 // GenerateXs generates the challenges used in Paillier key Proof
+// and returns nil if N is nil or N <= 1.
 func GenerateXs(m int, k, N *big.Int, ecdsaPub *crypto2.ECPoint) []*big.Int {
+	if N == nil || N.Cmp(one) <= 0 {
+		return nil
+	}
 	var i, n int
 	ret := make([]*big.Int, m)
 	sX, sY := ecdsaPub.X(), ecdsaPub.Y()
 	kb, sXb, sYb, Nb := k.Bytes(), sX.Bytes(), sY.Bytes(), N.Bytes()
 	bits := N.BitLen()
+	mask := new(big.Int).Lsh(one, uint(bits))
+	mask.Sub(mask, one)
 	blocks := int(gmath.Ceil(float64(bits) / 256))
 	chs := make([]chan []byte, blocks)
 	for k := range chs {
@@ -301,6 +388,9 @@ func GenerateXs(m int, k, N *big.Int, ecdsaPub *crypto2.ECPoint) []*big.Int {
 			xi = append(xi, rx...) // xi1||···||xib
 		}
 		ret[i] = new(big.Int).SetBytes(xi)
+		// Discard expansion bits above the modulus width before rejection.
+		// This leaves challenges unchanged when bits is a multiple of 256.
+		ret[i].And(ret[i], mask)
 		if common.IsNumberInMultiplicativeGroup(N, ret[i]) {
 			i++
 		} else {

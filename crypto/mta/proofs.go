@@ -73,6 +73,9 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 
 	// 4.
 	beta := common.GetRandomPositiveRelativelyPrimeInt(pk.N)
+	if beta == nil {
+		return nil, errors.New("ProveBob: could not sample randomness")
+	}
 	var gamma *big.Int
 	if Session == nil {
 		// Historical Bob proofs sample gamma as a unit modulo the Paillier
@@ -89,18 +92,27 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 		u = crypto.ScalarBaseMult(ec, alpha)
 	}
 
-	// 6.
+	// 6, 7, 8: z and t carry the secret MtA witnesses x and y as exponents; zPrm and the
+	// h2^* terms use one-time random blinds. Harden only the secret-exponent terms.
 	modNTilde := common.ModInt(NTilde)
-	z := modNTilde.Exp(h1, x)
-	z = modNTilde.Mul(z, modNTilde.Exp(h2, rho))
-
-	// 7.
 	zPrm := modNTilde.Exp(h1, alpha)
 	zPrm = modNTilde.Mul(zPrm, modNTilde.Exp(h2, rhoPrm))
 
-	// 8.
-	t := modNTilde.Exp(h1, y)
-	t = modNTilde.Mul(t, modNTilde.Exp(h2, sigma))
+	var z, t *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: x and y are Bob's secret MtA inputs; exponentiate them in constant
+		// time (NTilde is odd). The h2^rho / h2^sigma blinds use one-time randomness and
+		// stay on math/big (see the coverage note in common/constant_time.go).
+		ctModNTilde := common.NewCTModInt(NTilde)
+		// Both inputs are Paillier plaintexts bounded by pk.N, which can be
+		// wider than NTilde. Do not derive the exponent width from NTilde.
+		exponentBits := pk.N.BitLen()
+		z = modNTilde.Mul(ctModNTilde.ExpCTWithBitLen(h1, x, exponentBits), modNTilde.Exp(h2, rho))
+		t = modNTilde.Mul(ctModNTilde.ExpCTWithBitLen(h1, y, exponentBits), modNTilde.Exp(h2, sigma))
+	} else {
+		z = modNTilde.Mul(modNTilde.Exp(h1, x), modNTilde.Exp(h2, rho))
+		t = modNTilde.Mul(modNTilde.Exp(h1, y), modNTilde.Exp(h2, sigma))
+	}
 
 	// 9.
 	modNSquared := common.ModInt(NSquared)
@@ -171,6 +183,10 @@ func ProveBob(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c2,
 }
 
 func ProofBobWCFromBytes(ec elliptic.Curve, bzs [][]byte) (*ProofBobWC, error) {
+	// The base decoder also accepts the shorter ProofBob encoding.
+	if !common.NonEmptyMultiBytes(bzs, ProofBobWCBytesParts) {
+		return nil, fmt.Errorf("expected %d byte parts to construct ProofBobWC", ProofBobWCBytesParts)
+	}
 	proofBob, err := ProofBobFromBytes(bzs)
 	if err != nil {
 		return nil, err
@@ -211,7 +227,57 @@ func ProofBobFromBytes(bzs [][]byte) (*ProofBob, error) {
 // ProveBobWC.Verify implements verification of Bob's proof with check "VerifyMtawc_Bob" used in the MtA protocol from GG18Spec (9) Fig. 10.
 // an absent `X` verifies a proof generated without the X consistency check X = g^x
 func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c2 *big.Int, X *crypto.ECPoint, session ...[]byte) bool {
-	Session := optionalProofSession(session)
+	return pf.verify(ec, pk, NTilde, h1, h2, c1, c2, X, optionalProofSession(session), nil)
+}
+
+// legacyT1Max returns the exclusive T1 upper bound for the session-less
+// legacy Bob/BobWC verifier.
+//
+// The tight bound N + q^6 admits this implementation's own legacy prover:
+// T1 = e*y + gamma with e < q, y < q^5 and gamma < N, so an honest legacy
+// response is below q^6 + N.
+//
+// The widened bound (q+1)*N admits the historical (2e712689) BobMid/BobMidWC
+// witness range, which samples y below the Paillier modulus: T1 = e*y + gamma
+// with e < q, y < N, gamma < N, hence T1 < (q-1)*N + N < (q+1)*N.
+func legacyT1Max(ec elliptic.Curve, pk *paillier.PublicKey, historicalBobCompat bool) *big.Int {
+	if historicalBobCompat {
+		return new(big.Int).Mul(new(big.Int).Add(ec.Params().N, one), pk.N)
+	}
+	q := ec.Params().N
+	q3 := new(big.Int).Mul(q, q)
+	q3 = new(big.Int).Mul(q, q3)
+	q6 := new(big.Int).Mul(q3, q3)
+	return new(big.Int).Add(pk.N, q6)
+}
+
+// VerifyLegacy verifies a session-less legacy Bob/BobWC proof (the exact
+// 2e712689 untagged challenge). It is the explicit compatibility-aware entry
+// point used by signing round 3 for legacy parties: the default bound is the
+// tight N + q^6 cap, and historicalBobCompat widens it to the historical
+// witness-range bound (q+1)*N described on legacyT1Max.
+func (pf *ProofBobWC) VerifyLegacy(
+	ec elliptic.Curve,
+	pk *paillier.PublicKey,
+	NTilde, h1, h2, c1, c2 *big.Int,
+	X *crypto.ECPoint,
+	historicalBobCompat bool,
+) bool {
+	return pf.verify(ec, pk, NTilde, h1, h2, c1, c2, X, nil, legacyT1Max(ec, pk, historicalBobCompat))
+}
+
+// verify is the shared Bob/BobWC verification core. maxT1Override, when
+// non-nil, is the exclusive T1 upper bound to enforce; nil means "derive the
+// bound from the session state", which reproduces the exact historical
+// behavior of Verify.
+func (pf *ProofBobWC) verify(
+	ec elliptic.Curve,
+	pk *paillier.PublicKey,
+	NTilde, h1, h2, c1, c2 *big.Int,
+	X *crypto.ECPoint,
+	Session []byte,
+	maxT1Override *big.Int,
+) bool {
 	if pf == nil || pf.ProofBob == nil ||
 		ec == nil || pk == nil || pk.N == nil ||
 		NTilde == nil || h1 == nil || h2 == nil || c1 == nil || c2 == nil {
@@ -245,11 +311,17 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	q3NTilde := new(big.Int).Mul(q3, NTilde)
 	maxS2 := new(big.Int).Lsh(q3NTilde, 1)
 	maxT2 := new(big.Int).Set(maxS2)
-	// The session-bound verifier historically accepted T1 == q^7; express the
-	// exclusive upper bound as q^7 + 1 so the shared >= check below preserves
-	// that behavior exactly.
-	maxT1 := new(big.Int).Add(q7, big.NewInt(1))
-	if Session == nil {
+	var maxT1 *big.Int
+	switch {
+	case maxT1Override != nil:
+		// Explicit legacy bound chosen by the caller (VerifyLegacy).
+		maxT1 = maxT1Override
+	case Session != nil:
+		// The session-bound verifier historically accepted T1 == q^7; express
+		// the exclusive upper bound as q^7 + 1 so the shared >= check below
+		// preserves that behavior exactly.
+		maxT1 = new(big.Int).Add(q7, big.NewInt(1))
+	default:
 		// The historical prover sampled gamma in [1, pk.N), while the
 		// security-v2 prover samples it below q^7. Since T1 = e*y + gamma
 		// with e < q and the MtA blinding value y < q^5, an honest legacy
@@ -504,6 +576,23 @@ func (pf *ProofBob) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1
 	return pfWC.Verify(ec, pk, NTilde, h1, h2, c1, c2, nil, session...)
 }
 
+// ProveBob.VerifyLegacy is the explicit compatibility-aware session-less
+// counterpart of ProveBob.Verify: historicalBobCompat widens the T1 bound to
+// the historical witness range per legacyT1Max; the prover and every other
+// check are unchanged.
+func (pf *ProofBob) VerifyLegacy(
+	ec elliptic.Curve,
+	pk *paillier.PublicKey,
+	NTilde, h1, h2, c1, c2 *big.Int,
+	historicalBobCompat bool,
+) bool {
+	if pf == nil {
+		return false
+	}
+	pfWC := &ProofBobWC{ProofBob: pf, U: nil}
+	return pfWC.VerifyLegacy(ec, pk, NTilde, h1, h2, c1, c2, nil, historicalBobCompat)
+}
+
 func optionalProofSession(session [][]byte) []byte {
 	if len(session) == 0 {
 		return nil
@@ -537,6 +626,9 @@ func (pf *ProofBobWC) ValidateBasic() bool {
 }
 
 func (pf *ProofBob) Bytes() [ProofBobBytesParts][]byte {
+	if !pf.ValidateBasic() {
+		panic(fmt.Errorf("ProofBob.Bytes: invalid receiver"))
+	}
 	return [...][]byte{
 		pf.Z.Bytes(),
 		pf.ZPrm.Bytes(),
@@ -552,6 +644,11 @@ func (pf *ProofBob) Bytes() [ProofBobBytesParts][]byte {
 }
 
 func (pf *ProofBobWC) Bytes() [ProofBobWCBytesParts][]byte {
+	// The optional mode without X uses a coordinate placeholder for U, so
+	// serialization requires the fields to be present without curve validation.
+	if pf == nil || !pf.ProofBob.ValidateBasic() || pf.U == nil {
+		panic(fmt.Errorf("ProofBobWC.Bytes: invalid receiver"))
+	}
 	var out [ProofBobWCBytesParts][]byte
 	bobBzs := pf.ProofBob.Bytes()
 	bobBzsSlice := bobBzs[:]

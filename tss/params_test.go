@@ -100,6 +100,41 @@ func TestLegacyProtocolModeRejectsSessionNonce(t *testing.T) {
 	})
 }
 
+func TestLegacyHistoricalBobCompatibilityGuards(t *testing.T) {
+	pIDs := GenerateTestPartyIDs(2)
+	newParams := func() *Parameters {
+		return NewParameters(S256(), NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)
+	}
+
+	// Default is off, and the setter is only legal with ProtocolModeLegacy
+	// selected.
+	assert.False(t, newParams().LegacyHistoricalBobCompatibility())
+	assert.Panics(t, func() {
+		newParams().SetLegacyHistoricalBobCompatibility(true)
+	})
+
+	legacy := newParams()
+	legacy.SetProtocolMode(ProtocolModeLegacy)
+	assert.False(t, legacy.LegacyHistoricalBobCompatibility())
+	legacy.SetLegacyHistoricalBobCompatibility(true)
+	assert.True(t, legacy.LegacyHistoricalBobCompatibility())
+	legacy.FreezeProtocolMode()
+	assert.Panics(t, func() {
+		legacy.SetLegacyHistoricalBobCompatibility(false)
+	})
+
+	securityV2 := newParams()
+	securityV2.SetProtocolMode(ProtocolModeSecurityV2)
+	assert.Panics(t, func() {
+		securityV2.SetLegacyHistoricalBobCompatibility(true)
+	})
+	securityV2.SetSessionNonce(big.NewInt(1))
+	securityV2.FreezeProtocolMode()
+	assert.Panics(t, func() {
+		securityV2.SetLegacyHistoricalBobCompatibility(false)
+	})
+}
+
 func TestSetSessionNonceBytesHashesSessionID(t *testing.T) {
 	pIDs := GenerateTestPartyIDs(2)
 	params := NewParameters(S256(), NewPeerContext(pIDs), pIDs[0], len(pIDs), 1)

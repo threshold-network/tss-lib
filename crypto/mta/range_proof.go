@@ -64,6 +64,9 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 	alpha := common.GetRandomPositiveInt(q3)
 	// 2.
 	beta := common.GetRandomPositiveRelativelyPrimeInt(pk.N)
+	if beta == nil {
+		return nil, errors.New("ProveRangeAlice: could not sample randomness")
+	}
 
 	// 3.
 	gamma := common.GetRandomPositiveInt(q3NTilde)
@@ -73,8 +76,17 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 
 	// 5.
 	modNTilde := common.ModInt(NTilde)
-	z := modNTilde.Exp(h1, m)
-	z = modNTilde.Mul(z, modNTilde.Exp(h2, rho))
+	var z *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: m is Alice's secret value used as the exponent; exponentiate in
+		// constant time (NTilde is odd). The h2^rho blind and the u/w terms use one-time
+		// randomness and stay on math/big (see common/constant_time.go).
+		// The plaintext is bounded by pk.N, independently of NTilde's width.
+		z = modNTilde.Mul(common.NewCTModInt(NTilde).ExpCTWithBitLen(h1, m, pk.N.BitLen()), modNTilde.Exp(h2, rho))
+	} else {
+		z = modNTilde.Exp(h1, m)
+		z = modNTilde.Mul(z, modNTilde.Exp(h2, rho))
+	}
 
 	// 6.
 	modNSquared := common.ModInt(pk.NSquare())
@@ -264,7 +276,8 @@ func rangeProofChallenge(
 }
 
 func (pf *RangeProofAlice) ValidateBasic() bool {
-	return pf.Z != nil &&
+	return pf != nil &&
+		pf.Z != nil &&
 		pf.U != nil &&
 		pf.W != nil &&
 		pf.S != nil &&
@@ -273,6 +286,9 @@ func (pf *RangeProofAlice) ValidateBasic() bool {
 }
 
 func (pf *RangeProofAlice) Bytes() [RangeProofAliceBytesParts][]byte {
+	if !pf.ValidateBasic() {
+		panic(fmt.Errorf("RangeProofAlice.Bytes: invalid receiver"))
+	}
 	return [...][]byte{
 		pf.Z.Bytes(),
 		pf.U.Bytes(),

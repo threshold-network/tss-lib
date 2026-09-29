@@ -35,6 +35,10 @@ type (
 		// to coordinate a shared positive nonce before Start; legacy mode must
 		// leave it unset.
 		sessionNonce *big.Int
+		// legacyHistoricalBobCompat widens only the legacy-mode Bob/BobWC T1
+		// verifier bound so pre-upgrade peer proofs (y < N witness range)
+		// verify during the mixed-version rollout window. Default false.
+		legacyHistoricalBobCompat bool
 		// protocolMode is the explicit per-party proof-transcript mode. It has
 		// no default: callers must select legacy or security-v2 before
 		// constructing an ECDSA local party.
@@ -84,7 +88,7 @@ func assertDistinctIDsModQ(ec elliptic.Curve, ctx *PeerContext) {
 	q := ec.Params().N
 	seen := make(map[string]*PartyID, len(ctx.IDs()))
 	for _, partyID := range ctx.IDs() {
-		if partyID == nil || partyID.Key == nil {
+		if partyID == nil || partyID.MessageWrapper_PartyID == nil || partyID.Key == nil {
 			continue
 		}
 		residue := new(big.Int).Mod(partyID.KeyInt(), q)
@@ -139,6 +143,34 @@ func (params *Parameters) SetSafePrimeGenTimeout(timeout time.Duration) {
 // ProtocolMode returns the explicit per-party proof-transcript mode.
 func (params *Parameters) ProtocolMode() ProtocolMode {
 	return params.protocolMode
+}
+
+// SetLegacyHistoricalBobCompatibility explicitly opts a legacy-mode party into
+// accepting pre-upgrade (2e712689) Bob/BobWC proofs from not-yet-upgraded
+// peers during a mixed-version rollout window. It is false by default and is
+// only legal once ProtocolModeLegacy has been selected; it is immutable after
+// FreezeProtocolMode or local-party construction.
+//
+// When enabled, only the legacy signing round-3 Bob/BobWC T1 verifier bound
+// is widened from N + q^6 to the exclusive historical bound (q+1)*N, derived
+// from the historical BobMid/BobMidWC witness range: T1 = e*y + gamma with
+// e < q, y < N, gamma < N. The legacy prover's own y < q^5 sampling, the
+// security-v2 transcript, and the standalone Verify/AliceEnd defaults are
+// unchanged.
+func (params *Parameters) SetLegacyHistoricalBobCompatibility(enabled bool) {
+	if params.protocolModeFrozen {
+		panic("tss: legacy historical Bob compatibility is immutable after local party construction")
+	}
+	if params.protocolMode != ProtocolModeLegacy {
+		panic("tss: legacy historical Bob compatibility is only valid in ProtocolModeLegacy")
+	}
+	params.legacyHistoricalBobCompat = enabled
+}
+
+// LegacyHistoricalBobCompatibility reports the opt-in historical witness-range
+// verifier bound described on SetLegacyHistoricalBobCompatibility.
+func (params *Parameters) LegacyHistoricalBobCompatibility() bool {
+	return params.legacyHistoricalBobCompat
 }
 
 // SetProtocolMode selects the proof transcript for the ECDSA local party that
