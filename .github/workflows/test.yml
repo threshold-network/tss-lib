@@ -2,9 +2,9 @@ name: Go Test
 on:
   push:
     branches:
-      # Post-merge signal only: dev and master (D9). Feature-branch push runs
-      # were dropped: merges into dev are already covered by the PR check that
-      # allowed the merge; release/* push runs are also dropped per D9.
+      # Post-merge signal only: dev and master (D9). release/* push runs are
+      # dropped; merges into dev are covered by the PR check that allowed the
+      # merge, and master push keeps the post-merge signal.
       - dev
       - master
   # No branch filter: every pull request gets CI, whatever it targets. This fork
