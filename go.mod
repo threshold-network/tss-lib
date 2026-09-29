@@ -5,6 +5,7 @@ go 1.25.7
 toolchain go1.26.8
 
 require (
+	filippo.io/bigmod v0.1.0
 	github.com/btcsuite/btcd v0.0.0-20190629003639-c26ffa870fd8
 	github.com/btcsuite/btcutil v0.0.0-20190425235716-9e5f4b9a998d
 	github.com/hashicorp/go-multierror v1.0.0
