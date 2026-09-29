@@ -140,3 +140,48 @@ func AliceEndWC(
 	q := ec.Params().N
 	return new(big.Int).Mod(alphaPrm, q), nil
 }
+
+// AliceEndLegacy verifies a session-less legacy Bob proof using the legacy
+// T1 bound, then decrypts cB. historicalBobCompat widens the T1 bound to the
+// historical (2e712689) witness range per legacyT1Max; the default (false)
+// keeps the tight N + q^6 bound. This is the signing round-3 entry point for
+// legacy parties; AliceEnd is unchanged for standalone callers.
+func AliceEndLegacy(
+	ec elliptic.Curve,
+	pkA *paillier.PublicKey,
+	pf *ProofBob,
+	h1A, h2A, cA, cB, NTildeA *big.Int,
+	sk *paillier.PrivateKey,
+	historicalBobCompat bool,
+) (*big.Int, error) {
+	if !pf.VerifyLegacy(ec, pkA, NTildeA, h1A, h2A, cA, cB, historicalBobCompat) {
+		return nil, errors.New("ProofBob.VerifyLegacy() returned false")
+	}
+	alphaPrm, err := sk.Decrypt(cB)
+	if err != nil {
+		return nil, err
+	}
+	q := ec.Params().N
+	return new(big.Int).Mod(alphaPrm, q), nil
+}
+
+// AliceEndWCLegacy is the with-check counterpart of AliceEndLegacy.
+func AliceEndWCLegacy(
+	ec elliptic.Curve,
+	pkA *paillier.PublicKey,
+	pf *ProofBobWC,
+	B *crypto.ECPoint,
+	cA, cB, NTildeA, h1A, h2A *big.Int,
+	sk *paillier.PrivateKey,
+	historicalBobCompat bool,
+) (*big.Int, error) {
+	if !pf.VerifyLegacy(ec, pkA, NTildeA, h1A, h2A, cA, cB, B, historicalBobCompat) {
+		return nil, errors.New("ProofBobWC.VerifyLegacy() returned false")
+	}
+	alphaPrm, err := sk.Decrypt(cB)
+	if err != nil {
+		return nil, err
+	}
+	q := ec.Params().N
+	return new(big.Int).Mod(alphaPrm, q), nil
+}

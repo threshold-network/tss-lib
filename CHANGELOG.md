@@ -92,6 +92,35 @@ and the PR #9 entry below):
   `2e712689`; it does not infer compatibility from two parties running the new
   implementation.
 
+#### PR #9. Legacy historical Bob compatibility toggle (rollout-only, default off)
+- **What:** `tss.Parameters.SetLegacyHistoricalBobCompatibility(bool)`
+  (getter `LegacyHistoricalBobCompatibility`) is an explicit, per-party opt-in
+  that widens only the legacy-mode Bob/BobWC `T1` verifier bound in signing
+  round 3, from the default tight `N + q^6` to the exclusive historical
+  witness-range bound `(q+1)*N` (derived from the historical `2e712689`
+  `BobMid`/`BobMidWC` sampling `T1 = e*y + gamma` with `e < q`, `y < N`,
+  `gamma < N`). It is `false` by default, is only legal with
+  `ProtocolModeLegacy`, and is frozen for the party's lifetime by
+  `FreezeProtocolMode`; it panics if selected while the mode is unset or
+  security-v2. With the toggle off, the default legacy verifier remains
+  tight and the standalone `ProofBob.Verify`/`ProofBobWC.Verify`/
+  `AliceEnd`/`AliceEndWC` public APIs are unchanged.
+- **Risk:** Enabling it accepts pre-upgrade `2e712689` Bob/BobWC proofs
+  during the mixed-version rollout window and re-exposes the historical
+  legacy-mode residual risk of the unbounded-witness design: an adversarial
+  peer can bind the wider `y < N` witness range into its response (the
+  `y = N - T` wrap family), so only the `T1` magnitude is bounded — the
+  cryptographic checks are unchanged. The toggle exists to let a rolling
+  upgrade verify not-yet-upgraded peers, not to harden anything: the
+  default remains the hardened tight bound, and security-v2 is unaffected.
+- **Break type:** None (additive, opt-in). Callers that never set it keep
+  the tightened legacy behavior.
+- **Provenance:** `threshold-original`, PR #9 (P1 `9-F1` of the pre-merge
+  review, `agent-docs/pr-integration/9.md`): the default legacy bound was
+  derived from this branch's own `y < q^5` prover, rejecting honest
+  historical `y < N` proofs and aborting mixed-version legacy signing at
+  `AliceEnd`/`AliceEndWC`.
+
 ### Breaking changes
 
 #### 1. Session nonce is mandatory in security-v2 and forbidden in legacy

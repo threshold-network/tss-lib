@@ -217,7 +217,57 @@ func ProofBobFromBytes(bzs [][]byte) (*ProofBob, error) {
 // ProveBobWC.Verify implements verification of Bob's proof with check "VerifyMtawc_Bob" used in the MtA protocol from GG18Spec (9) Fig. 10.
 // an absent `X` verifies a proof generated without the X consistency check X = g^x
 func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c2 *big.Int, X *crypto.ECPoint, session ...[]byte) bool {
-	Session := optionalProofSession(session)
+	return pf.verify(ec, pk, NTilde, h1, h2, c1, c2, X, optionalProofSession(session), nil)
+}
+
+// legacyT1Max returns the exclusive T1 upper bound for the session-less
+// legacy Bob/BobWC verifier.
+//
+// The tight bound N + q^6 admits this implementation's own legacy prover:
+// T1 = e*y + gamma with e < q, y < q^5 and gamma < N, so an honest legacy
+// response is below q^6 + N.
+//
+// The widened bound (q+1)*N admits the historical (2e712689) BobMid/BobMidWC
+// witness range, which samples y below the Paillier modulus: T1 = e*y + gamma
+// with e < q, y < N, gamma < N, hence T1 < (q-1)*N + N < (q+1)*N.
+func legacyT1Max(ec elliptic.Curve, pk *paillier.PublicKey, historicalBobCompat bool) *big.Int {
+	if historicalBobCompat {
+		return new(big.Int).Mul(new(big.Int).Add(ec.Params().N, one), pk.N)
+	}
+	q := ec.Params().N
+	q3 := new(big.Int).Mul(q, q)
+	q3 = new(big.Int).Mul(q, q3)
+	q6 := new(big.Int).Mul(q3, q3)
+	return new(big.Int).Add(pk.N, q6)
+}
+
+// VerifyLegacy verifies a session-less legacy Bob/BobWC proof (the exact
+// 2e712689 untagged challenge). It is the explicit compatibility-aware entry
+// point used by signing round 3 for legacy parties: the default bound is the
+// tight N + q^6 cap, and historicalBobCompat widens it to the historical
+// witness-range bound (q+1)*N described on legacyT1Max.
+func (pf *ProofBobWC) VerifyLegacy(
+	ec elliptic.Curve,
+	pk *paillier.PublicKey,
+	NTilde, h1, h2, c1, c2 *big.Int,
+	X *crypto.ECPoint,
+	historicalBobCompat bool,
+) bool {
+	return pf.verify(ec, pk, NTilde, h1, h2, c1, c2, X, nil, legacyT1Max(ec, pk, historicalBobCompat))
+}
+
+// verify is the shared Bob/BobWC verification core. maxT1Override, when
+// non-nil, is the exclusive T1 upper bound to enforce; nil means "derive the
+// bound from the session state", which reproduces the exact historical
+// behavior of Verify.
+func (pf *ProofBobWC) verify(
+	ec elliptic.Curve,
+	pk *paillier.PublicKey,
+	NTilde, h1, h2, c1, c2 *big.Int,
+	X *crypto.ECPoint,
+	Session []byte,
+	maxT1Override *big.Int,
+) bool {
 	if pf == nil || pf.ProofBob == nil ||
 		ec == nil || pk == nil || pk.N == nil ||
 		NTilde == nil || h1 == nil || h2 == nil || c1 == nil || c2 == nil {
@@ -251,11 +301,17 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	q3NTilde := new(big.Int).Mul(q3, NTilde)
 	maxS2 := new(big.Int).Lsh(q3NTilde, 1)
 	maxT2 := new(big.Int).Set(maxS2)
-	// The session-bound verifier historically accepted T1 == q^7; express the
-	// exclusive upper bound as q^7 + 1 so the shared >= check below preserves
-	// that behavior exactly.
-	maxT1 := new(big.Int).Add(q7, big.NewInt(1))
-	if Session == nil {
+	var maxT1 *big.Int
+	switch {
+	case maxT1Override != nil:
+		// Explicit legacy bound chosen by the caller (VerifyLegacy).
+		maxT1 = maxT1Override
+	case Session != nil:
+		// The session-bound verifier historically accepted T1 == q^7; express
+		// the exclusive upper bound as q^7 + 1 so the shared >= check below
+		// preserves that behavior exactly.
+		maxT1 = new(big.Int).Add(q7, big.NewInt(1))
+	default:
 		// The historical prover sampled gamma in [1, pk.N), while the
 		// security-v2 prover samples it below q^7. Since T1 = e*y + gamma
 		// with e < q and the MtA blinding value y < q^5, an honest legacy
@@ -508,6 +564,23 @@ func (pf *ProofBob) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1
 	}
 	pfWC := &ProofBobWC{ProofBob: pf, U: nil}
 	return pfWC.Verify(ec, pk, NTilde, h1, h2, c1, c2, nil, session...)
+}
+
+// ProveBob.VerifyLegacy is the explicit compatibility-aware session-less
+// counterpart of ProveBob.Verify: historicalBobCompat widens the T1 bound to
+// the historical witness range per legacyT1Max; the prover and every other
+// check are unchanged.
+func (pf *ProofBob) VerifyLegacy(
+	ec elliptic.Curve,
+	pk *paillier.PublicKey,
+	NTilde, h1, h2, c1, c2 *big.Int,
+	historicalBobCompat bool,
+) bool {
+	if pf == nil {
+		return false
+	}
+	pfWC := &ProofBobWC{ProofBob: pf, U: nil}
+	return pfWC.VerifyLegacy(ec, pk, NTilde, h1, h2, c1, c2, nil, historicalBobCompat)
 }
 
 func optionalProofSession(session [][]byte) []byte {
