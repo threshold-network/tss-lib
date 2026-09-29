@@ -1,14 +1,15 @@
 name: Go Test
 on:
   push:
-    # Post-merge signal only: dev and master (D9). Feature-branch push runs
-    # were dropped: merges into dev are already covered by the PR check that
-    # allowed the merge; release/* push runs are also dropped per D9.
-    - dev
-    - master
-    # No branch filter: every pull request gets CI, whatever it targets. This fork
-    # stacks PRs on each other's branches, so filtering on `master` (or on any fixed
-    # list) silently leaves stacked PRs with no checks at all.
+    branches:
+      # Post-merge signal only: dev and master (D9). Feature-branch push runs
+      # were dropped: merges into dev are already covered by the PR check that
+      # allowed the merge; release/* push runs are also dropped per D9.
+      - dev
+      - master
+  # No branch filter: every pull request gets CI, whatever it targets. This fork
+  # stacks PRs on each other's branches, so filtering on `master` (or on any fixed
+  # list) silently leaves stacked PRs with no checks at all.
   pull_request:
   workflow_dispatch:
 
