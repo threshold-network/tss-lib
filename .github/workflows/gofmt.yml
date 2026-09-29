@@ -2,9 +2,11 @@ name: Go-fmt
 on:
   push:
     branches:
-    - master
-    - dev
-    - release/*
+      # Post-merge signal only: dev and master (D9). release/* push runs are
+      # dropped; merges into dev are covered by the PR check that allowed the
+      # merge, and master push keeps the post-merge signal.
+      - dev
+      - master
   # No branch filter: every pull request gets CI, whatever it targets. This fork
   # stacks PRs on each other's branches, so filtering on `master` (or on any fixed
   # list) silently leaves stacked PRs with no checks at all.
@@ -13,6 +15,13 @@ on:
 
 permissions:
   contents: read
+
+# R2: cancel superseded PR runs. Only pull_request events cancel in-progress;
+# push/dispatch runs use their own run-scoped group, so a push can never cancel
+# another push (orchestrator concurrency guidance).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gofmt:

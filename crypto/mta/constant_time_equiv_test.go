@@ -7,13 +7,11 @@
 package mta
 
 import (
-	"context"
 	"crypto/rand"
 	"fmt"
 	"math/big"
 	mathrand "math/rand"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -247,10 +245,7 @@ func TestShareProtocolUnequalWidthsCTEquivalence(t *testing.T) {
 func TestShareProtocolWCConstantTime(t *testing.T) {
 	q := tss.EC().Params().N
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	sk, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	sk, pk, err := loadPaillierKeyFixture(12)
 	assert.NoError(t, err)
 
 	a := common.GetRandomPositiveInt(q)
