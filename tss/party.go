@@ -36,6 +36,8 @@ type Party interface {
 	setRound(Round) *Error
 	round() Round
 	advance()
+	abort(*Error) *Error
+	abortedWith() *Error
 	lock()
 	unlock()
 }
@@ -44,6 +46,8 @@ type BaseParty struct {
 	mtx        sync.Mutex
 	rnd        Round
 	FirstRound Round
+	// aborted retains the first fatal lifecycle error. Guarded by mtx.
+	aborted *Error
 }
 
 func (p *BaseParty) Running() bool {
@@ -106,6 +110,18 @@ func (p *BaseParty) advance() {
 	p.rnd = p.rnd.NextRound()
 }
 
+// Callers of abort and abortedWith must hold the party lock.
+func (p *BaseParty) abort(err *Error) *Error {
+	if err != nil && p.aborted == nil {
+		p.aborted = err
+	}
+	return err
+}
+
+func (p *BaseParty) abortedWith() *Error {
+	return p.aborted
+}
+
 func (p *BaseParty) lock() {
 	p.mtx.Lock()
 }
@@ -134,14 +150,14 @@ func BaseStart(p Party, task string, prepare ...func(Round) *Error) *Error {
 	}
 	if len(prepare) == 1 {
 		if err := prepare[0](round); err != nil {
-			return err
+			return p.abort(err)
 		}
 	}
 	common.Logger.Infof("party %s: %s round %d starting", p.round().Params().PartyID(), task, 1)
 	defer func() {
 		common.Logger.Debugf("party %s: %s round %d finished", p.round().Params().PartyID(), task, 1)
 	}()
-	return p.round().Start()
+	return p.abort(p.round().Start())
 }
 
 // an implementation of Update that is shared across the different types of parties (keygen, signing, dynamic groups)
@@ -156,6 +172,13 @@ func BaseUpdate(p Party, msg ParsedMessage, task string) (ok bool, err *Error) {
 		return ok, err
 	}
 	p.lock() // data is written to P state below
+	// A failed round cannot resume safely. Refuse further storage without
+	// attributing later message deliveries to the original error's culprits.
+	if aborted := p.abortedWith(); aborted != nil {
+		return r(false, p.WrapError(fmt.Errorf(
+			"this party aborted in round %d and cannot process further messages: %s",
+			aborted.Round(), aborted.Cause())))
+	}
 	common.Logger.Debugf("party %s received message: %s", p.PartyID(), msg.String())
 	if p.round() != nil {
 		common.Logger.Debugf("party %s round %d update: %s", p.PartyID(), p.round().RoundNumber(), msg.String())
@@ -165,13 +188,15 @@ func BaseUpdate(p Party, msg ParsedMessage, task string) (ok bool, err *Error) {
 	}
 	if p.round() != nil {
 		common.Logger.Debugf("party %s: %s round %d update", p.round().Params().PartyID(), task, p.round().RoundNumber())
+		// Round failures may leave partial state. Message validation and
+		// storage rejections above remain recoverable.
 		if _, err := p.round().Update(); err != nil {
-			return r(false, err)
+			return r(false, p.abort(err))
 		}
 		if p.round().CanProceed() {
 			if p.advance(); p.round() != nil {
 				if err := p.round().Start(); err != nil {
-					return r(false, err)
+					return r(false, p.abort(err))
 				}
 				rndNum := p.round().RoundNumber()
 				common.Logger.Infof("party %s: %s round %d started", p.round().Params().PartyID(), task, rndNum)
