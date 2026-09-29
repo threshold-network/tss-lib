@@ -34,6 +34,7 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #5** — removal of EdDSA and ECDSA resharing protocols (stacked on PR #4).
 - **PR #6** — remaining BNB cryptographic hardening follow-ups (stacked on PR #5).
 - **PR #7** — signing round-9 decommitment validation and related fixes (stacked on PR #6).
+- **PR #19** — protobuf runtime and dependency housekeeping (stacked on PR #7).
 - **PR #17** (+ stack #8/#10/#11, extended by #23) — constant-time cryptographic hardening (BNB #328).
 
 ### ⚠️ Compatibility — read before upgrading
@@ -188,7 +189,7 @@ Two new caller obligations are enforced at runtime (see Breaking Changes 1 and 2
   | `crypto/schnorr/schnorr_proof.go` | `NewZKVProofWithSession` | `MulCT(c, s)`, `MulCT(c, l)` → `t = a + c·s`, `u = b + c·l` | `s`, `l` |
   | `ecdsa/signing/round_3.go` | `round3.Start` | `MulCT(k, gamma)`, `MulCT(k, w)` → `thelta`, `sigma` | `k`, `gamma`, `w` |
   | `ecdsa/signing/round_4.go` | `round4.Start` | `ModInverseCT(theta)` → `thetaInverse` | `theta` |
-  | `ecdsa/signing/round_5.go` | `round5.Start` | `MulCT(m, k)`, `MulCT(rx, sigma)` → `si` | `k`, `sigma` (`m` public msg hash; `rx` public sig `r`) |
+  | `ecdsa/signing/round_5.go` | `round5.Start` | `MulCT(m, k)`, `MulCT(rx, sigma)` → `si` | `k`, `sigma`, `rx` (`m` public message hash; `rx` remains secret until round 10) |
 - **Known residual gap (read before relying on "constant-time enabled"):** the
   `crypto/mta.AliceEnd`/`AliceEndWC` Paillier-decrypt path — which runs in signing rounds
   2-3 of this same protocol — remains variable-time `math/big`. Upstream protects it with a
