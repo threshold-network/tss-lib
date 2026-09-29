@@ -37,6 +37,7 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #19** — protobuf runtime and dependency housekeeping (stacked on PR #7).
 - **PR #9** — immutable per-party legacy/security-v2 transcript selection and
   exact historical legacy compatibility (stacked on PR #7).
+- **PR #16** — ECDSA signing context binding in the security-v2 SSID (stacked on PR #9).
 - **PR #17** (+ stack #8/#10/#11, extended by #23) — constant-time cryptographic hardening (BNB #328).
 
 ### ⚠️ Compatibility — read before upgrading
@@ -121,6 +122,16 @@ and the PR #9 entry below):
   derived from this branch's own `y < q^5` prover, rejecting honest
   historical `y < N` proofs and aborting mixed-version legacy signing at
   `AliceEnd`/`AliceEndWC`.
+
+#### PR #16. ECDSA signing context binding in the security-v2 SSID (wire incompatibility)
+- **What:** The security-v2 signing SSID now binds both the message integer and its
+  fixed-width encoding (`fullBytesLen`), and the signing constructors copy the message
+  integer so later caller mutations cannot change the party's signing context. This
+  intentionally changes the security-v2 proof transcript.
+- **Break type:** Wire/transcript (security-v2 only): security-v2 signers from before
+  and after this change cannot interoperate — deploy and activate this version
+  together across every signer in a ceremony (coordinated rollout).
+- **Legacy unchanged:** Legacy transcript bytes are unchanged.
 
 ### Breaking changes
 

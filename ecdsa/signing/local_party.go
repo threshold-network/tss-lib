@@ -110,6 +110,8 @@ func NewLocalParty(
 }
 
 // NewLocalPartyWithKDD returns a party with key derivation delta for HD support.
+// The message is copied so later caller mutations cannot change this party's
+// signing context.
 //
 // fullBytesLen fixes the byte width used to encode the message for the final
 // ECDSA verification/output path (preserving leading zero bytes). Every signer
@@ -152,7 +154,9 @@ func NewLocalPartyWithKDD(
 	p.temp.signRound9Messages = make([]tss.ParsedMessage, partyCount)
 	// temp data init
 	p.temp.keyDerivationDelta = keyDerivationDelta
-	p.temp.m = msg
+	if msg != nil {
+		p.temp.m = new(big.Int).Set(msg)
+	}
 	p.temp.fullBytesLen = validatedFullBytesLen
 	p.temp.cis = make([]*big.Int, partyCount)
 	p.temp.bigWs = make([]*crypto.ECPoint, partyCount)
