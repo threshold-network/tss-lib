@@ -61,10 +61,7 @@ func TestShareProtocol(t *testing.T) {
 }
 
 func TestProofBobSessionBinding(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	sk, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	sk, pk, err := loadPaillierKeyFixture(3)
 	assert.NoError(t, err)
 
 	q := tss.EC().Params().N
@@ -93,10 +90,7 @@ func TestProofBobSessionBinding(t *testing.T) {
 func TestShareProtocolWC(t *testing.T) {
 	q := tss.EC().Params().N
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	sk, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	sk, pk, err := loadPaillierKeyFixture(4)
 	assert.NoError(t, err)
 
 	a := common.GetRandomPositiveInt(q)
@@ -153,10 +147,7 @@ func TestShareProtocolWC(t *testing.T) {
 }
 
 func TestProofBobWCSessionBinding(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	sk, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	sk, pk, err := loadPaillierKeyFixture(5)
 	assert.NoError(t, err)
 
 	q := tss.EC().Params().N

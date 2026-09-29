@@ -7,16 +7,13 @@
 package mta
 
 import (
-	"context"
 	"math/big"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
-	"github.com/bnb-chain/tss-lib/crypto/paillier"
 	"github.com/bnb-chain/tss-lib/tss"
 )
 
@@ -34,10 +31,7 @@ func TestProofSessionRejectsEmptyTag(t *testing.T) {
 func TestProveRangeAlice(t *testing.T) {
 	q := tss.EC().Params().N
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	sk, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	sk, pk, err := loadPaillierKeyFixture(6)
 	assert.NoError(t, err)
 
 	m := common.GetRandomPositiveInt(q)
@@ -57,12 +51,8 @@ func TestProveRangeAlice(t *testing.T) {
 func TestProveRangeAliceBypassed(t *testing.T) {
 	q := tss.EC().Params().N
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	sk0, pk0, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	sk0, pk0, err := loadPaillierKeyFixture(7)
 	assert.NoError(t, err)
-
 	m0 := common.GetRandomPositiveInt(q)
 	c0, r0, err := sk0.EncryptAndReturnRandomness(m0)
 	assert.NoError(t, err)
@@ -75,7 +65,7 @@ func TestProveRangeAliceBypassed(t *testing.T) {
 
 	assert.True(t, proof0.Verify(tss.EC(), pk0, NTildei0, h1i0, h2i0, c0), "proof 0 must verify against its own parameters")
 
-	sk1, pk1, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	sk1, pk1, err := loadPaillierKeyFixture(8)
 	assert.NoError(t, err)
 
 	m1 := common.GetRandomPositiveInt(q)
@@ -107,10 +97,7 @@ func TestProveRangeAliceBypassed(t *testing.T) {
 func TestProveRangeAliceSessionBinding(t *testing.T) {
 	q := tss.EC().Params().N
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	sk, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	sk, pk, err := loadPaillierKeyFixture(9)
 	assert.NoError(t, err)
 
 	m := common.GetRandomPositiveInt(q)
@@ -132,10 +119,7 @@ func TestProveRangeAliceSessionBinding(t *testing.T) {
 func TestRangeProofAliceRejectsMalformedInputs(t *testing.T) {
 	q := tss.EC().Params().N
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	sk, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	sk, pk, err := loadPaillierKeyFixture(10)
 	assert.NoError(t, err)
 
 	m := common.GetRandomPositiveInt(q)
@@ -185,10 +169,7 @@ func TestRangeProofAliceRejectsMalformedInputs(t *testing.T) {
 // k = sum(k_i) stays unpredictable from other parties' randomness. We do
 // not reject c=1 in Verify because it is not a verifier-side bug.
 func TestRangeProofAliceAcceptsZeroContribution(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	_, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	_, pk, err := loadPaillierKeyFixture(11)
 	assert.NoError(t, err)
 
 	primes := [2]*big.Int{common.GetRandomPrimeInt(testSafePrimeBits), common.GetRandomPrimeInt(testSafePrimeBits)}

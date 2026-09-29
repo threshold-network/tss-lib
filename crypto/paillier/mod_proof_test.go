@@ -1,27 +1,18 @@
 package paillier
 
 import (
-	"context"
 	"fmt"
 	"math/big"
 	"testing"
-	"time"
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/stretchr/testify/assert"
 )
 
+// modSetUp shares the package-level fixture loaded by setUp: the
+// pre-generated 2048-bit Paillier key pair from test/_ecdsa_fixtures.
 func modSetUp(t *testing.T) {
-	if privateKey != nil && publicKey != nil {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	var err error
-	privateKey, publicKey, err = GenerateKeyPair(ctx, testPaillierKeyLength)
-	assert.NoError(t, err)
+	setUp(t)
 }
 
 func TestModProofVerify(t *testing.T) {

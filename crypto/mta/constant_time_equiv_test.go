@@ -7,16 +7,13 @@
 package mta
 
 import (
-	"context"
 	"math/big"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
-	"github.com/bnb-chain/tss-lib/crypto/paillier"
 	"github.com/bnb-chain/tss-lib/ecdsa/keygen"
 	"github.com/bnb-chain/tss-lib/tss"
 )
@@ -36,10 +33,7 @@ import (
 func TestShareProtocolWCConstantTime(t *testing.T) {
 	q := tss.EC().Params().N
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	sk, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	sk, pk, err := loadPaillierKeyFixture(12)
 	assert.NoError(t, err)
 
 	a := common.GetRandomPositiveInt(q)
