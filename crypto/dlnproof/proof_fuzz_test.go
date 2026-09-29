@@ -119,7 +119,7 @@ func validDLNSeed() (alphas, ts [][]byte) {
 	alphas = make([][]byte, Iterations)
 	ts = make([][]byte, Iterations)
 	for i := range alphas {
-		alphas[i] = []byte{byte(1 + i % 251)}
+		alphas[i] = []byte{byte(1 + i%251)}
 		ts[i] = []byte{byte(127 + i%124)}
 	}
 	return

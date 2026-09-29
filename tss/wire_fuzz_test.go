@@ -96,12 +96,12 @@ func unknownTypeWireSeed() ([]byte, error) {
 //     category pinned, wording not;
 //   - success invariants on any byte string that does parse:
 //     a) the resolved type name is a registered content type (Type()
-//        non-empty),
+//     non-empty),
 //     b) re-marshal + re-parse is stable: parsing the re-marshaled wire
-//        bytes yields content that is proto-equal to the first parse
-//        (semantic content preservation through the unmarshal path),
+//     bytes yields content that is proto-equal to the first parse
+//     (semantic content preservation through the unmarshal path),
 //     c) routing round-trips: the sender PartyID and the broadcast flag
-//        survive the decode.
+//     survive the decode.
 //
 // The routing flag under test is derived from the input length so both
 // branches are exercised without a second fuzz dimension. No key generation
