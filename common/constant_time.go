@@ -149,8 +149,11 @@ func NewCTModInt(mod *big.Int) *CTModInt {
 	}
 }
 
-// reduceToPaddedBytes reduces val into [0, modulus) and returns a zero-padded
-// big-endian byte slice of length ct.byteLen suitable for bigmod.Nat.SetBytes.
+// reduceToPaddedBytes reduces val into [0, modulus) and returns a pooled
+// pointer to a zero-padded big-endian byte slice of length ct.byteLen
+// suitable for bigmod.Nat.SetBytes. The caller must pass the returned
+// pointer to releasePadded (typically via defer) to return the same pooled
+// buffer instead of leaking it.
 // NOTE: big.Int.Mod is not constant-time, but it is applied unconditionally (no
 // secret-dependent branch) and the bases reduced here are public or already in range
 // at every call site. A caller passing a secret base near the modulus should be aware
@@ -163,7 +166,7 @@ func NewCTModInt(mod *big.Int) *CTModInt {
 // only in round 10 (finalize.go:60), five rounds later. The variable-time
 // reduction of a secret value is a bounded timing leak; making this reduction
 // constant-time is a tracked follow-up.
-func (ct *CTModInt) reduceToPaddedBytes(val *big.Int) []byte {
+func (ct *CTModInt) reduceToPaddedBytes(val *big.Int) *[]byte {
 	reduced := new(big.Int).Mod(val, ct.modBigInt)
 
 	bufPtr := ct.bytePool.Get().(*[]byte)
@@ -173,18 +176,21 @@ func (ct *CTModInt) reduceToPaddedBytes(val *big.Int) []byte {
 	}
 	b := reduced.Bytes()
 	copy(buf[ct.byteLen-len(b):], b)
-	return buf
+	return bufPtr
 }
 
-// releasePadded clears buf (a slice obtained from reduceToPaddedBytes) and
-// returns it to the pool as a *[]byte, matching the pointer type bytePool
-// stores; passing the []byte value itself would box a fresh interface on
-// every call (SA6002).
-func (ct *CTModInt) releasePadded(buf []byte) {
+// releasePadded clears the buffer behind bufPtr (as obtained from
+// reduceToPaddedBytes) and returns that same pointer to the pool. Putting
+// back the identical *[]byte -- rather than re-wrapping the dereferenced
+// slice in a new local pointer -- is what keeps this allocation-free: taking
+// the address of a fresh local would itself escape to the heap on every
+// call, just relocating the SA6002 allocation instead of removing it.
+func (ct *CTModInt) releasePadded(bufPtr *[]byte) {
+	buf := *bufPtr
 	for i := range buf {
 		buf[i] = 0
 	}
-	ct.bytePool.Put(&buf)
+	ct.bytePool.Put(bufPtr)
 }
 
 // ExpCT performs constant-time modular exponentiation using bigmod.
@@ -212,7 +218,7 @@ func (ct *CTModInt) ExpCTWithBitLen(base, exp *big.Int, bitLen int) *big.Int {
 	defer ct.releasePadded(paddedBase)
 
 	baseNat := bigmod.NewNat()
-	baseNat.SetBytes(paddedBase, ct.mod)
+	baseNat.SetBytes(*paddedBase, ct.mod)
 
 	result := bigmod.NewNat()
 	result.Exp(baseNat, expBytes, ct.mod)
@@ -243,7 +249,7 @@ func (ct *CTModInt) ModInverseCT(a *big.Int) *big.Int {
 	defer ct.releasePadded(paddedA)
 
 	aNat := bigmod.NewNat()
-	aNat.SetBytes(paddedA, ct.mod)
+	aNat.SetBytes(*paddedA, ct.mod)
 
 	result := bigmod.NewNat()
 	result.Exp(aNat, ct.inverseExp, ct.mod)
@@ -268,8 +274,8 @@ func (ct *CTModInt) MulCT(x, y *big.Int) *big.Int {
 
 	xNat := bigmod.NewNat()
 	yNat := bigmod.NewNat()
-	xNat.SetBytes(paddedX, ct.mod)
-	yNat.SetBytes(paddedY, ct.mod)
+	xNat.SetBytes(*paddedX, ct.mod)
+	yNat.SetBytes(*paddedY, ct.mod)
 
 	xNat.Mul(yNat, ct.mod)
 
