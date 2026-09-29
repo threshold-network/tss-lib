@@ -34,6 +34,7 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #5** — removal of EdDSA and ECDSA resharing protocols (stacked on PR #4).
 - **PR #6** — remaining BNB cryptographic hardening follow-ups (stacked on PR #5).
 - **PR #7** — signing round-9 decommitment validation and related fixes (stacked on PR #6).
+- **PR #19** — protobuf runtime and dependency housekeeping (stacked on PR #7).
 
 ### ⚠️ Compatibility — read before upgrading
 
@@ -296,6 +297,10 @@ rejecting input that an honest caller would previously have produced.
   distinct-generator policy already enforced by DLN and MtA proofs
   (`crypto/paillier/factor_proof.go`). Honest setups use distinct generators.
   _Provenance: `threshold-original`, PR #7._
+- **Security dependency updates (PR #19):** `google.golang.org/protobuf` upgraded to v1.33.0
+  (the published fix for GHSA-8r3f-844c-mc37 / Dependabot alert #10); `go.mod` now declares a
+  Go 1.17 minimum toolchain, as required by that runtime. _Provenance: `threshold-original`,
+  PR #19._
 
 ### Added
 
