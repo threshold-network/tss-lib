@@ -49,16 +49,27 @@ encoding, so a security-v2 party cannot interoperate with a historical party.
 PR #9 adds an explicit incremental-rollout mode. A party in
 `ProtocolModeLegacy` reproduces the historical untagged challenges, including
 the exact Schnorr ZK/ZKV `HashToN` input ordering and modular reduction, and can
-therefore share a legacy ceremony with the pre-upgrade binary. A ceremony must
+therefore share a legacy ceremony with the pre-upgrade binary **while the
+rollout window is active**: a legacy party signing with not-yet-upgraded peers
+must additionally select the default-off
+`tss.Parameters.SetLegacyHistoricalBobCompatibility(true)` opt-in (see the
+toggle entry below), because the default tighter Bob/BobWC verification can
+reject their historical `y < N` proofs. A ceremony must
 still be homogeneous by transcript mode: mixing legacy and security-v2 in one
 run fails cryptographic verification, and there is no negotiation, downgrade,
-fallback, or retry between modes.
+fallback, or retry between modes. Once every peer is upgraded, the rollout-only
+compatibility opt-in is disabled and the fleet is coordinated onto
+`ProtocolModeSecurityV2` with a shared per-ceremony session ID.
 
-Three caller obligations are enforced at runtime (see Breaking Changes 1 and 2
+Four caller obligations are enforced at runtime (see Breaking Changes 1 and 2
 and the PR #9 entry below):
 1. Select exactly one protocol mode before constructing a local party.
 2. In security-v2, set a unique per-ceremony session nonce; in legacy, leave it unset.
 3. Pass a positive `fullBytesLen` to every signing constructor.
+4. During a mixed-binary legacy signing window, legacy parties call
+   `tss.Parameters.SetLegacyHistoricalBobCompatibility(true)` while
+   pre-upgrade peers remain; it is then disabled fleet-wide before the
+   coordinated cutover to security-v2.
 
 #### PR #9. Explicit dual-mode transcript contract
 - **What:** ECDSA keygen/signing parameters require an explicit immutable
@@ -117,10 +128,10 @@ and the PR #9 entry below):
   default remains the hardened tight bound, and security-v2 is unaffected.
 - **Break type:** None (additive, opt-in). Callers that never set it keep
   the tightened legacy behavior.
-- **Provenance:** `threshold-original`, PR #9 (P1 `9-F1` of the pre-merge
-  review, `agent-docs/pr-integration/9.md`): the default legacy bound was
-  derived from this branch's own `y < q^5` prover, rejecting honest
-  historical `y < N` proofs and aborting mixed-version legacy signing at
+- **Provenance:** `threshold-original`, PR #9: P1 `9-F1` of the pre-merge
+  review identified that the default legacy bound was derived from this
+  branch's own `y < q^5` prover, rejecting honest historical `y < N` proofs
+  and aborting mixed-version legacy signing at
   `AliceEnd`/`AliceEndWC`.
 
 #### PR #16. ECDSA signing context binding in the security-v2 SSID (wire incompatibility)
@@ -461,8 +472,10 @@ rejecting input that an honest caller would previously have produced.
   `common.AppendBigIntToBytesSlice` (the last currently unused), and `tss.SameCurve` —
   helpers backing the hardened range checks and session/transcript context construction.
 - `schnorr.NewZKProofWithSession`, `NewZKVProofWithSession`, `VerifyWithSession` — session-
-  aware Schnorr proof overloads (the original signatures are retained and delegate with a
-  nil session).
+  aware Schnorr proof overloads. The original signatures retain their source
+  shape and call the historical `HashToN` challenge directly; the
+  `WithSession` APIs are security-v2-only, require a non-empty session, and
+  never interpret a nil or empty session as legacy.
 - `mta.ErrRangeProofVerify` (PR #4) — sentinel error letting ECDSA signing round 2 attribute
   a peer's MtA range-proof rejection to the offending party (`crypto/mta/share_protocol.go`,
   `ecdsa/signing/round_2.go`). _Provenance: `BNB #332`, PR #4._
@@ -496,8 +509,10 @@ rejecting input that an honest caller would previously have produced.
   `common/constant_time.go`).
 
 ### Residual risks
-
-- Applications **must** call `SetSessionNonce`/`SetSessionNonceBytes` before keygen and
-  signing; those protocols fail closed without it.
+- Applications using `ProtocolModeSecurityV2` **must** call
+  `SetSessionNonce`/`SetSessionNonceBytes` with a unique per-ceremony value
+  before constructing keygen or signing parties; those protocols fail closed
+  without it. Legacy parties leave the nonce unset — setting one in
+  `ProtocolModeLegacy` is rejected at party construction.
 
 [Unreleased]: https://github.com/threshold-network/tss-lib/compare/2e712689...HEAD
