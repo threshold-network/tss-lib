@@ -1,20 +1,76 @@
 name: Go Test
 on:
   push:
-    branches:
-    - master
+    # Post-merge signal only: dev and master (D9). Feature-branch push runs
+    # were dropped: merges into dev are already covered by the PR check that
+    # allowed the merge; release/* push runs are also dropped per D9.
     - dev
-    - release/*
-  # No branch filter: every pull request gets CI, whatever it targets. This fork
-  # stacks PRs on each other's branches, so filtering on `master` (or on any fixed
-  # list) silently leaves stacked PRs with no checks at all.
+    - master
+    # No branch filter: every pull request gets CI, whatever it targets. This fork
+    # stacks PRs on each other's branches, so filtering on `master` (or on any fixed
+    # list) silently leaves stacked PRs with no checks at all.
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# R2: cancel superseded PR runs. Only pull_request events cancel in-progress;
+# push/dispatch runs use their own run-scoped group, so a push can never cancel
+# another push (orchestrator concurrency guidance).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # R4: cheap early gate - folds the standalone gofmt.yml check in and fails a
+  # broken PR in ~1 min instead of ~10. go vet is the repo's only vet entry point
+  # (Makefile has no vet target), so run it here.
+  lint-fast:
+    name: Vet and Go fmt
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24.x'
+        cache: true
+
+    - name: Vet
+      run: go vet ./...
+
+    - name: Check gofmt
+      run: test -z "$(gofmt -l .)"
+
+  # R4: unit-level keygen slice (~30 s, no ceremony). Runs in parallel with the
+  # full suite so a broken keygen change fails early. The full-suite job below
+  # still covers every test, so nothing is skipped.
+  keygen-units:
+    name: Keygen units
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24.x'
+        cache: true
+
+    - name: Run Keygen Units
+      run: >
+        go test -timeout 60m -run
+        'TestKGRound|TestStoreMessage|TestSSID|TestKeygen_Start|TestStartRound1|TestFinishAndSave|TestBadMessage|TestPrepareTrapdoor|TestGeneratePreParams|TestGenerateWithContext|TestVerify'
+        ./ecdsa/keygen/
+
+  # Full suite - unchanged in coverage (the ceremonies live here and in the
+  # keygen-units slice above in parallel).
   build:
     name: Test
     runs-on: ubuntu-latest
