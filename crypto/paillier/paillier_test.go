@@ -163,6 +163,7 @@ func TestGenerateXs(t *testing.T) {
 }
 
 func TestGetPQGeneric(t *testing.T) {
+	setUp(t)
 	p, q := privateKey.GetPQ()
 
 	n := new(big.Int).Mul(p, q)

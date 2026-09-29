@@ -67,7 +67,7 @@ jobs:
     - name: Run Keygen Units
       run: >
         go test -timeout 60m -run
-        'TestKGRound|TestStoreMessage|TestSSID|TestKeygen_Start|TestStartRound1|TestFinishAndSave|TestBadMessage|TestPrepareTrapdoor|TestGeneratePreParams|TestGenerateWithContext|TestVerify'
+        'TestKGRound|TestStoreMessage|TestSSID|TestKeygen_Start|TestStartRound1|TestFinishAndSave|TestBadMessage|TestPrepareTrapdoor|TestGeneratePreParams|TestVerify'
         ./ecdsa/keygen/
 
   # Full suite - unchanged in coverage (the ceremonies live here and in the
