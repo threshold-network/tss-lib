@@ -7,6 +7,7 @@
 package paillier
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"math/big"
@@ -261,6 +262,81 @@ func TestEncryptCTRoundTrip(t *testing.T) {
 	dec, err := privateKey.Decrypt(cipher)
 	assert.NoError(t, err)
 	assert.Zero(t, pt.Cmp(dec), "CT Encrypt must round-trip through Decrypt")
+}
+
+// TestEncryptGammaBinomialEquivalence: EncryptAndReturnRandomness's CT path
+// replaces the full modular exponentiation gamma^m mod N2 with the Paillier
+// binomial identity gamma^m == 1+m*N (mod N2), computed as one constant-time
+// multiply. This reconstructs the reference ciphertext math/big.Exp would
+// produce from the same returned randomness x, at the plaintext boundaries
+// (0, 1, and the largest value the guard admits, N-1) where the identity's
+// "no further reduction needed" argument is tightest.
+func TestEncryptGammaBinomialEquivalence(t *testing.T) {
+	facSetUp(t)
+	setPaillierCTTestMode(t, true)
+	require.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
+
+	N2 := publicKey.NSquare()
+	nMinus1 := new(big.Int).Sub(publicKey.N, big.NewInt(1))
+	cases := []struct {
+		name string
+		m    *big.Int
+	}{
+		{"m=0", big.NewInt(0)},
+		{"m=1", big.NewInt(1)},
+		{"m=N-1", nMinus1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := tc.m
+			c, x, err := publicKey.EncryptAndReturnRandomness(m)
+			require.NoError(t, err)
+
+			expectedGm := new(big.Int).Exp(publicKey.Gamma(), m, N2)
+			expectedXN := new(big.Int).Exp(x, publicKey.N, N2)
+			expectedC := new(big.Int).Mod(new(big.Int).Mul(expectedGm, expectedXN), N2)
+
+			require.Zero(t, c.Cmp(expectedC), "binomial-identity ciphertext must match the math/big.Exp reference")
+		})
+	}
+}
+
+// TestHomoMultWidthBoundaryEquivalence: HomoMult's CT path pads the secret
+// multiplier to N.BitLen() rather than N2's default width. m = N-1 is the
+// largest multiplier the guard admits and, for a non-power-of-two N, has the
+// same bit length as N -- the exact boundary ExpCTWithBitLen's padding must
+// still accept.
+func TestHomoMultWidthBoundaryEquivalence(t *testing.T) {
+	facSetUp(t)
+	setPaillierCTTestMode(t, true)
+	require.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
+
+	nMinus1 := new(big.Int).Sub(publicKey.N, big.NewInt(1))
+	require.Equal(t, publicKey.N.BitLen(), nMinus1.BitLen(), "N-1 must exercise the full N.BitLen() width")
+
+	cA, err := publicKey.Encrypt(big.NewInt(424242))
+	require.NoError(t, err)
+
+	got, err := publicKey.HomoMult(nMinus1, cA)
+	require.NoError(t, err)
+
+	want := new(big.Int).Exp(cA, nMinus1, publicKey.NSquare())
+	require.Zero(t, got.Cmp(want), "ExpCTWithBitLen at the N.BitLen() boundary must match the math/big.Exp reference")
+}
+
+// TestLambdaNBoundedByN establishes the algebraic invariant Decrypt's CT path
+// relies on: LambdaN = lcm(p-1,q-1) <= (p-1)(q-1) < N, so N.BitLen() is
+// always a valid (never-truncating) public exponent bound for LambdaN,
+// across key sizes.
+func TestLambdaNBoundedByN(t *testing.T) {
+	for _, bits := range []int{18, 64, 256} {
+		t.Run(fmt.Sprint(bits), func(t *testing.T) {
+			sk, _, err := GenerateKeyPair(context.Background(), bits)
+			require.NoError(t, err)
+			require.Negative(t, sk.LambdaN.Cmp(sk.N), "LambdaN must be strictly less than N")
+			require.LessOrEqual(t, sk.LambdaN.BitLen(), sk.N.BitLen())
+		})
+	}
 }
 
 // TestPaillierProofCTEquivalence: the Paillier square-free Proof is deterministic

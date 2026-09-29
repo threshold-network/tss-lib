@@ -100,7 +100,8 @@ func TestExpCTZeroExponentUsesContext(t *testing.T) {
 			usedContext := false
 			ctMod.bytePool.New = func() interface{} {
 				usedContext = true
-				return make([]byte, ctMod.byteLen)
+				buf := make([]byte, ctMod.byteLen)
+				return &buf
 			}
 
 			got := ctMod.ExpCT(base, big.NewInt(0))

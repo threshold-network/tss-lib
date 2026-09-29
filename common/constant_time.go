@@ -78,7 +78,9 @@ type CTModInt struct {
 	modBigInt  *big.Int
 	inverseExp []byte // Exponent for modular inverse: p-2 (prime) or groupExponent-1 (composite)
 	byteLen    int
-	bytePool   sync.Pool
+	// bytePool holds *[]byte to avoid interface boxing allocations on the hot path
+	// (SA6002: storing a slice value in sync.Pool causes a heap allocation per Put).
+	bytePool sync.Pool
 }
 
 // leftPad returns b left-padded with zero bytes to width; if b is already at least
@@ -140,7 +142,8 @@ func NewCTModInt(mod *big.Int) *CTModInt {
 		byteLen:    byteLen,
 		bytePool: sync.Pool{
 			New: func() interface{} {
-				return make([]byte, byteLen)
+				buf := make([]byte, byteLen)
+				return &buf
 			},
 		},
 	}
@@ -163,13 +166,25 @@ func NewCTModInt(mod *big.Int) *CTModInt {
 func (ct *CTModInt) reduceToPaddedBytes(val *big.Int) []byte {
 	reduced := new(big.Int).Mod(val, ct.modBigInt)
 
-	buf := ct.bytePool.Get().([]byte)
+	bufPtr := ct.bytePool.Get().(*[]byte)
+	buf := *bufPtr
 	for i := range buf {
 		buf[i] = 0
 	}
 	b := reduced.Bytes()
 	copy(buf[ct.byteLen-len(b):], b)
 	return buf
+}
+
+// releasePadded clears buf (a slice obtained from reduceToPaddedBytes) and
+// returns it to the pool as a *[]byte, matching the pointer type bytePool
+// stores; passing the []byte value itself would box a fresh interface on
+// every call (SA6002).
+func (ct *CTModInt) releasePadded(buf []byte) {
+	for i := range buf {
+		buf[i] = 0
+	}
+	ct.bytePool.Put(&buf)
 }
 
 // ExpCT performs constant-time modular exponentiation using bigmod.
@@ -194,12 +209,7 @@ func (ct *CTModInt) ExpCTWithBitLen(base, exp *big.Int, bitLen int) *big.Int {
 	}()
 
 	paddedBase := ct.reduceToPaddedBytes(base)
-	defer func() {
-		for i := range paddedBase {
-			paddedBase[i] = 0
-		}
-		ct.bytePool.Put(paddedBase)
-	}()
+	defer ct.releasePadded(paddedBase)
 
 	baseNat := bigmod.NewNat()
 	baseNat.SetBytes(paddedBase, ct.mod)
@@ -230,12 +240,7 @@ func (ct *CTModInt) ModInverseCT(a *big.Int) *big.Int {
 	}
 
 	paddedA := ct.reduceToPaddedBytes(a)
-	defer func() {
-		for i := range paddedA {
-			paddedA[i] = 0
-		}
-		ct.bytePool.Put(paddedA)
-	}()
+	defer ct.releasePadded(paddedA)
 
 	aNat := bigmod.NewNat()
 	aNat.SetBytes(paddedA, ct.mod)
@@ -258,18 +263,8 @@ func (ct *CTModInt) ModInverseCT(a *big.Int) *big.Int {
 func (ct *CTModInt) MulCT(x, y *big.Int) *big.Int {
 	paddedX := ct.reduceToPaddedBytes(x)
 	paddedY := ct.reduceToPaddedBytes(y)
-	defer func() {
-		for i := range paddedX {
-			paddedX[i] = 0
-		}
-		ct.bytePool.Put(paddedX)
-	}()
-	defer func() {
-		for i := range paddedY {
-			paddedY[i] = 0
-		}
-		ct.bytePool.Put(paddedY)
-	}()
+	defer ct.releasePadded(paddedX)
+	defer ct.releasePadded(paddedY)
 
 	xNat := bigmod.NewNat()
 	yNat := bigmod.NewNat()
@@ -284,14 +279,17 @@ func (ct *CTModInt) MulCT(x, y *big.Int) *big.Int {
 // ctModIntCache memoizes *CTModInt instances by modulus byte string so that
 // repeated calls for a constant modulus (e.g. a curve order across signing
 // rounds) reuse one bigmod.NewModulus + sync.Pool instead of reallocating.
-// NewCTModInt is retained for one-shot / test use; GetCTModInt is the
-// zero-allocation-on-the-hot-path accessor.
+// NewCTModInt is retained for one-shot / test use; GetCTModInt is the shared,
+// cached accessor: it amortizes the bigmod.NewModulus and sync.Pool setup to
+// once per distinct modulus. It is not itself allocation-free -- deriving the
+// cache key (mod.Bytes, then a string conversion) allocates on every call,
+// cache hit or miss.
 var ctModIntCache sync.Map // key: mod.Bytes() string -> *CTModInt
 
 // GetCTModInt returns a shared, cached constant-time modular context for mod.
 // The modulus must be odd. Repeated calls with the same modulus value return
-// the same *CTModInt, so per-signing-round allocation of bigmod.NewModulus and
-// the byte pool is avoided.
+// the same *CTModInt, so the per-call bigmod.NewModulus construction and
+// sync.Pool setup are paid once per distinct modulus rather than every call.
 func GetCTModInt(mod *big.Int) *CTModInt {
 	if mod.Bit(0) == 0 {
 		panic("GetCTModInt: modulus must be odd")
@@ -331,7 +329,8 @@ func NewCTModIntWithPhi(mod, phiN *big.Int) *CTModInt {
 		byteLen:    byteLen,
 		bytePool: sync.Pool{
 			New: func() interface{} {
-				return make([]byte, byteLen)
+				buf := make([]byte, byteLen)
+				return &buf
 			},
 		},
 	}
