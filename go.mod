@@ -5,6 +5,7 @@ go 1.25.7
 toolchain go1.26.8
 
 require (
+	filippo.io/bigmod v0.1.0
 	github.com/btcsuite/btcd v0.24.2
 	github.com/btcsuite/btcd/btcec/v2 v2.2.0
 	github.com/btcsuite/btcd/btcutil v1.1.5
