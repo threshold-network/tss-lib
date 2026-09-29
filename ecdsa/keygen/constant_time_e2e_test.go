@@ -27,8 +27,15 @@ import (
 func TestE2EConcurrentConstantTime(t *testing.T) {
 	setUp("info")
 
+	previousMode := common.IsConstantTimeEnabled()
+	t.Cleanup(func() {
+		if previousMode {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+	})
 	common.EnableConstantTimeOps()
-	defer common.DisableConstantTimeOps()
 	assert.True(t, common.IsConstantTimeEnabled(), "constant-time ops must be enabled for this test")
 
 	threshold := testThreshold

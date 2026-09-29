@@ -14,6 +14,12 @@ import (
 	"time"
 )
 
+func TestConstantTimeOpsEnabledByDefault(t *testing.T) {
+	if !IsConstantTimeEnabled() {
+		t.Fatal("constant-time operations must be enabled by default")
+	}
+}
+
 // TestExpCTCorrectness verifies that constant-time exponentiation produces
 // correct results by comparing with math/big.Exp
 func TestExpCTCorrectness(t *testing.T) {
@@ -81,6 +87,48 @@ func TestExpCTEdgeCases(t *testing.T) {
 	result = ctMod.ExpCT(big.NewInt(1), exp)
 	if result.Cmp(big.NewInt(1)) != 0 {
 		t.Errorf("ExpCT(1, exp) should be 1, got %v", result)
+	}
+}
+
+// A zero exponent must enter the modular context just like a positive exponent.
+// Checking the fresh context's pool avoids a flaky wall-clock timing assertion.
+func TestExpCTZeroExponentUsesContext(t *testing.T) {
+	modulus := big.NewInt(65537)
+	for _, base := range []*big.Int{big.NewInt(0), big.NewInt(1), big.NewInt(-5), big.NewInt(65542)} {
+		t.Run(base.String(), func(t *testing.T) {
+			ctMod := NewCTModInt(modulus)
+			usedContext := false
+			ctMod.bytePool.New = func() interface{} {
+				usedContext = true
+				return make([]byte, ctMod.byteLen)
+			}
+
+			got := ctMod.ExpCT(base, big.NewInt(0))
+			want := new(big.Int).Exp(base, big.NewInt(0), modulus)
+			if got.Cmp(want) != 0 {
+				t.Errorf("ExpCT(%v, 0) = %v, want %v", base, got, want)
+			}
+			if !usedContext {
+				t.Fatal("zero exponent bypassed the modular context")
+			}
+		})
+	}
+}
+
+// An implicit exponent width must never grow with the secret value. Callers
+// needing a wider exponent must select that width from a public bound.
+func TestExpCTRejectsUnboundedExponent(t *testing.T) {
+	ctMod := NewCTModInt(big.NewInt(257)) // two-byte arithmetic modulus
+	for _, bits := range []uint{16, 24} {
+		exp := new(big.Int).Lsh(big.NewInt(1), bits)
+		t.Run(exp.String(), func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("ExpCT accepted an exponent wider than its public default width")
+				}
+			}()
+			ctMod.ExpCT(big.NewInt(2), exp)
+		})
 	}
 }
 
@@ -168,6 +216,18 @@ func TestCTModIntWithPhi(t *testing.T) {
 	}
 }
 
+func TestCTModIntWithCarmichaelExponent(t *testing.T) {
+	modulus := big.NewInt(77) // 7*11, with lambda(77)=lcm(6,10)=30.
+	ctMod := NewCTModIntWithPhi(modulus, big.NewInt(30))
+	for _, value := range []int64{-1, 0, 1, 2, 7, 11, 30, 76, 78} {
+		a := big.NewInt(value)
+		got, want := ctMod.ModInverseCT(a), new(big.Int).ModInverse(a, modulus)
+		if (got == nil) != (want == nil) || (got != nil && got.Cmp(want) != 0) {
+			t.Errorf("inverse of %d with Carmichael exponent = %v, want %v", value, got, want)
+		}
+	}
+}
+
 // TestModInverseCTNonCoprime: for a base that shares a factor with the modulus there
 // is no inverse; ModInverseCT must return nil, matching math/big.ModInverse. Regression
 // for the Fermat/Euler-inverse silent-wrong-answer issue.
@@ -190,16 +250,24 @@ func TestModInverseCTNonCoprime(t *testing.T) {
 	}
 }
 
-// TestExpCTExponentPadding verifies that padding the exponent to a fixed width (the
-// fix that hides the secret exponent's magnitude) does not change the result: leftPad
-// zero-extends correctly, and a short exponent still produces the same value as
-// math/big.Exp. Regression for the fixed-width exponent padding.
+// TestExpCTExponentPadding verifies the serializer used by bigmod.Exp, including
+// zero and exponents wider than an unrelated arithmetic modulus.
 func TestExpCTExponentPadding(t *testing.T) {
-	if got := leftPad([]byte{0x12, 0x34}, 5); !bytes.Equal(got, []byte{0, 0, 0, 0x12, 0x34}) {
-		t.Errorf("leftPad zero-extension = %v, want [0 0 0 18 52]", got)
-	}
-	if got := leftPad([]byte{0x12, 0x34}, 1); !bytes.Equal(got, []byte{0x12, 0x34}) {
-		t.Errorf("leftPad with width <= len must return input unchanged, got %v", got)
+	for _, tc := range []struct {
+		exp    int64
+		bits   int
+		padded []byte
+	}{
+		{0, 40, []byte{0, 0, 0, 0, 0}},
+		{1, 40, []byte{0, 0, 0, 0, 1}},
+		{0x1234, 40, []byte{0, 0, 0, 0x12, 0x34}},
+		{0x010203, 40, []byte{0, 0, 1, 2, 3}},
+		{0xffffffffff, 40, []byte{0xff, 0xff, 0xff, 0xff, 0xff}},
+		{0x1ff, 9, []byte{1, 0xff}},
+	} {
+		if got := padExponent(big.NewInt(tc.exp), tc.bits); !bytes.Equal(got, tc.padded) {
+			t.Errorf("padExponent(%x, %d) = %x, want %x", tc.exp, tc.bits, got, tc.padded)
+		}
 	}
 
 	p, _ := rand.Prime(rand.Reader, 512)
@@ -210,11 +278,57 @@ func TestExpCTExponentPadding(t *testing.T) {
 
 	// A short exponent is padded to the full modulus width internally; the result must
 	// still match math/big.Exp.
-	for _, exp := range []*big.Int{big.NewInt(1), big.NewInt(0x010203), big.NewInt(255)} {
+	for _, exp := range []*big.Int{big.NewInt(0), big.NewInt(1), big.NewInt(0x010203), big.NewInt(255)} {
 		want := new(big.Int).Exp(base, exp, N)
 		if got := ctMod.ExpCT(base, exp); got.Cmp(want) != 0 {
 			t.Errorf("ExpCT(base, %v) = %v, want %v", exp, got, want)
 		}
+	}
+}
+
+func TestExpCTPublicExponentBound(t *testing.T) {
+	publicBound := big.NewInt(0xffffffffc5)
+	// Exercise arithmetic moduli on both sides of the five-byte exponent bound.
+	for _, modulus := range []*big.Int{big.NewInt(257), big.NewInt(0x100000000000001)} {
+		ctMod := NewCTModInt(modulus)
+		for _, exp := range []*big.Int{
+			big.NewInt(0), big.NewInt(1), big.NewInt(255), big.NewInt(256),
+			big.NewInt(65536), big.NewInt(16777216), new(big.Int).Sub(publicBound, big.NewInt(1)),
+		} {
+			for _, base := range []*big.Int{
+				big.NewInt(0), big.NewInt(-3), new(big.Int).Mul(modulus, big.NewInt(2)), new(big.Int).Add(modulus, big.NewInt(3)),
+			} {
+				want := new(big.Int).Exp(base, exp, modulus)
+				got := ctMod.ExpCTWithBitLen(base, exp, publicBound.BitLen())
+				if got.Cmp(want) != 0 {
+					t.Errorf("ExpCTWithBitLen(%v, %v) mod %v = %v, want %v", base, exp, modulus, got, want)
+				}
+			}
+		}
+	}
+}
+
+func TestExpCTInvalidExponentBound(t *testing.T) {
+	ctMod := NewCTModInt(big.NewInt(257))
+	for _, tc := range []struct {
+		name string
+		exp  int64
+		bits int
+	}{
+		{"negative_exponent", -1, 16},
+		{"zero_bound", 0, 0},
+		{"negative_bound", 0, -1},
+		{"byte_overflow", 65536, 16},
+		{"bit_overflow", 512, 9},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("ExpCTWithBitLen accepted an invalid exponent bound")
+				}
+			}()
+			ctMod.ExpCTWithBitLen(big.NewInt(2), big.NewInt(tc.exp), tc.bits)
+		})
 	}
 }
 
@@ -249,7 +363,153 @@ func BenchmarkExpStandard(b *testing.B) {
 	}
 }
 
-// TestExpCTTimingConsistency checks timing consistency
+// BenchmarkMulCT benchmarks constant-time 256-bit-class modular multiplication
+func BenchmarkMulCT(b *testing.B) {
+	p, _ := rand.Prime(rand.Reader, 256)
+	ctMod := NewCTModInt(p)
+
+	x, _ := rand.Int(rand.Reader, p)
+	y, _ := rand.Int(rand.Reader, p)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctMod.MulCT(x, y)
+	}
+}
+
+// BenchmarkModInverseCT benchmarks constant-time 256-bit-class modular inverse
+func BenchmarkModInverseCT(b *testing.B) {
+	p, _ := rand.Prime(rand.Reader, 256)
+	ctMod := NewCTModInt(p)
+
+	x, _ := rand.Int(rand.Reader, p)
+	if x.Sign() == 0 {
+		x = big.NewInt(1)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctMod.ModInverseCT(x)
+	}
+}
+
+// BenchmarkMulStandard benchmarks standard math/big modular multiplication for
+// comparison with BenchmarkMulCT at the same 256-bit modulus.
+func BenchmarkMulStandard(b *testing.B) {
+	p, _ := rand.Prime(rand.Reader, 256)
+
+	x, _ := rand.Int(rand.Reader, p)
+	y, _ := rand.Int(rand.Reader, p)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		new(big.Int).Mod(new(big.Int).Mul(x, y), p)
+	}
+}
+
+// BenchmarkModInverseStandard benchmarks standard math/big modular inverse for
+// comparison with BenchmarkModInverseCT at the same 256-bit modulus.
+func BenchmarkModInverseStandard(b *testing.B) {
+	p, _ := rand.Prime(rand.Reader, 256)
+
+	x, _ := rand.Int(rand.Reader, p)
+	if x.Sign() == 0 {
+		x = big.NewInt(1)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		new(big.Int).ModInverse(x, p)
+	}
+}
+
+// TestMulCTTimingConsistency compares MulCT's mean elapsed time for a
+// zero operand vs a near-modulus operand. A non-constant-time implementation
+// would show a measurable spread; wall-clock noise on CI exceeds that, so
+// a drift beyond the 0.5x-2.0x band is logged (not a failure), matching
+// TestExpCTTimingConsistency's style.
+func TestMulCTTimingConsistency(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping timing test in short mode")
+	}
+
+	p, _ := rand.Prime(rand.Reader, 256)
+	ctMod := NewCTModInt(p)
+
+	xZero := big.NewInt(0)
+	xNear := new(big.Int).Sub(p, big.NewInt(1))
+	y, _ := rand.Int(rand.Reader, p)
+
+	const iterations = 100
+	var timesZero, timesNear []time.Duration
+
+	for i := 0; i < iterations; i++ {
+		start := time.Now()
+		ctMod.MulCT(xZero, y)
+		timesZero = append(timesZero, time.Since(start))
+
+		start = time.Now()
+		ctMod.MulCT(xNear, y)
+		timesNear = append(timesNear, time.Since(start))
+	}
+
+	var sumZero, sumNear time.Duration
+	for i := 0; i < iterations; i++ {
+		sumZero += timesZero[i]
+		sumNear += timesNear[i]
+	}
+	meanZero := sumZero / time.Duration(iterations)
+	meanNear := sumNear / time.Duration(iterations)
+
+	ratio := float64(meanNear) / float64(meanZero)
+	if ratio < 0.5 || ratio > 2.0 {
+		t.Logf("Warning: MulCT timing ratio between zero and near-modulus operands: %.2f", ratio)
+		t.Logf("Zero-operand mean: %v, near-modulus mean: %v", meanZero, meanNear)
+	}
+}
+
+// TestModInverseCTTimingConsistency is the ModInverseCT analogue of
+// TestMulCTTimingConsistency: a non-constant-time inverse would time differently
+// for zero, one, and near-modulus inputs.
+func TestModInverseCTTimingConsistency(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping timing test in short mode")
+	}
+
+	p, _ := rand.Prime(rand.Reader, 256)
+	ctMod := NewCTModInt(p)
+
+	one := big.NewInt(1)
+	near := new(big.Int).Sub(p, big.NewInt(1))
+
+	const iterations = 100
+	var timesOne, timesNear []time.Duration
+
+	for i := 0; i < iterations; i++ {
+		start := time.Now()
+		ctMod.ModInverseCT(one)
+		timesOne = append(timesOne, time.Since(start))
+
+		start = time.Now()
+		ctMod.ModInverseCT(near)
+		timesNear = append(timesNear, time.Since(start))
+	}
+
+	var sumOne, sumNear time.Duration
+	for i := 0; i < iterations; i++ {
+		sumOne += timesOne[i]
+		sumNear += timesNear[i]
+	}
+	meanOne := sumOne / time.Duration(iterations)
+	meanNear := sumNear / time.Duration(iterations)
+
+	ratio := float64(meanNear) / float64(meanOne)
+	if ratio < 0.5 || ratio > 2.0 {
+		t.Logf("Warning: ModInverseCT timing ratio between one and near-modulus operands: %.2f", ratio)
+		t.Logf("One mean: %v, near-modulus mean: %v", meanOne, meanNear)
+	}
+}
+
 func TestExpCTTimingConsistency(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping timing test in short mode")

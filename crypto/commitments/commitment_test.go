@@ -36,3 +36,20 @@ func TestDeCommit(t *testing.T) {
 
 	assert.NotZero(t, len(secrets), "len(secrets) must be non-zero")
 }
+
+func TestDecommitmentMinimumParts(t *testing.T) {
+	for _, commitment := range []*HashCommitDecommit{
+		{C: big.NewInt(1), D: HashDeCommitment{}},
+		NewHashCommitmentWithRandomness(big.NewInt(1)),
+	} {
+		assert.False(t, commitment.Verify())
+		ok, values := commitment.DeCommit()
+		assert.False(t, ok)
+		assert.Nil(t, values)
+	}
+	commitment := NewHashCommitmentWithRandomness(big.NewInt(1), big.NewInt(2))
+	assert.True(t, commitment.Verify())
+	ok, values := commitment.DeCommit()
+	assert.True(t, ok)
+	assert.Equal(t, HashDeCommitment{big.NewInt(2)}, values)
+}

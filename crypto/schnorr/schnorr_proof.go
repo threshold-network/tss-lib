@@ -90,8 +90,15 @@ func newZKProof(
 	alpha := crypto.ScalarBaseMult(ec, a)
 
 	c := challenge(q, X, g, alpha)
-	t := new(big.Int).Mul(c, x)
-	t = common.ModInt(q).Add(a, t)
+
+	modQ := common.ModInt(q)
+	var t *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: constant-time multiplication for secret x (BNB 3709c25).
+		t = modQ.Add(a, common.GetCTModInt(q).MulCT(c, x))
+	} else {
+		t = modQ.Add(a, new(big.Int).Mul(c, x))
+	}
 
 	return &ZKProof{Alpha: alpha, T: t}, nil
 }
@@ -243,8 +250,16 @@ func newZKVProof(
 	c := challenge(q, V, R, g, alpha)
 
 	modQ := common.ModInt(q)
-	t := modQ.Add(a, new(big.Int).Mul(c, s))
-	u := modQ.Add(b, new(big.Int).Mul(c, l))
+	var t, u *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: constant-time multiplication for secret values s, l (BNB 3709c25).
+		ctModQ := common.GetCTModInt(q)
+		t = modQ.Add(a, ctModQ.MulCT(c, s))
+		u = modQ.Add(b, ctModQ.MulCT(c, l))
+	} else {
+		t = modQ.Add(a, new(big.Int).Mul(c, s))
+		u = modQ.Add(b, new(big.Int).Mul(c, l))
+	}
 
 	return &ZKVProof{Alpha: alpha, T: t, U: u}, nil
 }
