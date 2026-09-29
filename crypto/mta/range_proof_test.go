@@ -8,6 +8,7 @@ package mta
 
 import (
 	"math/big"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -183,4 +184,40 @@ func TestRangeProofAliceAcceptsZeroContribution(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, proof.Verify(tss.EC(), pk, NTildei, h1i, h2i, cOne),
 		"c=1 with r=1, m=0 verifies because it is honest zero contribution; see test docstring")
+}
+
+// TestRangeProofAliceBytesInvalidReceiver pins that an invalid
+// RangeProofAlice receiver is rejected by ValidateBasic, and that Bytes
+// fails loud with a diagnostic error value on that receiver -- consistent
+// with the sibling ProofBob.Bytes/ProofBobWC.Bytes guards -- instead of
+// letting a nil *big.Int field surface as an unguarded runtime nil-pointer
+// dereference panic.
+func TestRangeProofAliceBytesInvalidReceiver(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pf   *RangeProofAlice
+	}{
+		{"nil receiver", nil},
+		{"nil fields", &RangeProofAlice{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.pf.ValidateBasic() {
+				t.Fatalf("expected ValidateBasic to reject an invalid %s receiver", tc.name)
+			}
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("Bytes() did not panic on an invalid %s receiver", tc.name)
+				}
+				err, ok := r.(error)
+				if !ok {
+					t.Fatalf("Bytes() panicked with %T, want a diagnostic error value", r)
+				}
+				if _, isRuntimeErr := err.(runtime.Error); isRuntimeErr {
+					t.Fatalf("Bytes() panicked with a runtime error (%v); want a fail-loud diagnostic, not an unguarded nil-pointer dereference", err)
+				}
+			}()
+			tc.pf.Bytes()
+		})
+	}
 }
