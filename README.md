@@ -61,6 +61,12 @@ ctx := tss.NewPeerContext(parties)
 curve := tss.S256()
 
 params := tss.NewParameters(curve, ctx, thisParty, len(parties), threshold)
+// New ceremonies must select a protocol mode and bind a per-ceremony session
+// ID before constructing a local party; the mode is frozen at construction.
+// For the legacy mixed-binary rollout procedure, see "How to use this securely"
+// below.
+params.SetProtocolMode(tss.ProtocolModeSecurityV2)
+params.SetSessionNonceBytes([]byte(sessionID)) // high-entropy, >=16 bytes, unique to this ceremony
 
 // You should keep a local mapping of `id` strings to `*PartyID` instances so that an incoming message can have its origin party's `*PartyID` recovered for passing to `UpdateFromBytes` (see below)
 partyIDMap := make(map[string]*PartyID)
@@ -146,6 +152,14 @@ use the historical untagged GG20 transcript. A ceremony must be homogeneous:
 legacy and security-v2 parties cannot interoperate. The selected mode is frozen
 when the local party is constructed and cannot change while the protocol is in
 flight.
+Mixed-binary legacy rollout: while not every peer has been upgraded to this
+version, select `ProtocolModeLegacy`, call
+`params.SetLegacyHistoricalBobCompatibility(true)` before constructing the
+local party, and leave the session nonce unset. Without this rollout-only
+opt-in the default tighter Bob/BobWC verification can reject the historical
+`y < N` proofs that pre-upgrade peers produce. Once every peer is upgraded,
+disable `SetLegacyHistoricalBobCompatibility` for all parties, then coordinate
+the cutover to `ProtocolModeSecurityV2` with a shared per-ceremony session ID.
 
 Security-v2 ECDSA signing binds both the message integer and `fullBytesLen`
 into the signing SSID. All signers must agree on the message and its byte width
@@ -157,15 +171,16 @@ Security-v2 signers from before and after this change cannot interoperate.
 Legacy transcript bytes remain unchanged.
 
 The low-level proof APIs follow the same unambiguous split. The historical
-generic APIs (for example `schnorr.NewZKProof` / `ZKProof.Verify`) reproduce the
-exact pre-hardening `HashToN` transcript. Their `WithSession` counterparts are
-security-v2-only, require a non-empty session, and never interpret nil or an
-empty slice as legacy. DLN, MtA range/Bob/BobWC, ModProof, and FactorProof retain
-their source-compatible optional session argument: omitting the argument is
-legacy, while supplying one requires a non-empty value and selects the tagged
-transcript. The legacy Bob/BobWC path also restores the historical `tau` and
-relatively-prime Paillier `gamma` sampling ranges; security-v2 retains its
-hardened `q^3*N-tilde` and `q^7` ranges.
+generic APIs (`NewZKProof`, `NewZKVProof`, and their `Verify` methods) call the
+exact historical `HashToN` challenge directly, so no session argument selects a
+transcript. The `WithSession` counterparts are security-v2-only, require a
+non-empty session, and never interpret nil or an empty slice as legacy. DLN,
+MtA range/Bob/BobWC, ModProof, and FactorProof retain their source-compatible
+optional session argument: omitting the argument is legacy, while supplying
+one requires a non-empty value and selects the tagged transcript. The legacy
+Bob/BobWC path also restores the historical `tau` and relatively-prime
+Paillier `gamma` sampling ranges; security-v2 retains its hardened `q^3*N-tilde`
+and `q^7` ranges.
 
 The checked-in bidirectional compatibility oracle and release test commands
 are:
