@@ -149,6 +149,87 @@ func TestBobProofUnequalWidthsCTEquivalence(t *testing.T) {
 	}
 }
 
+// TestShareProtocolUnequalWidthsCTEquivalence restores the #10 regression guard that
+// #17 dropped: a byte-exact comparison of the complete MtA share-protocol transcript
+// (AliceInit -> BobMid/BobMidWC -> AliceEnd/AliceEndWC, including all proof bytes, the
+// homomorphic ciphertexts, and the decrypted shares) across constant-time ops off vs
+// on. With a fixed replayed entropy stream, every randomized commitment and blind is
+// identical in both modes, so the two transcripts must be byte-identical. That
+// determinism invariant is the guard: if a future change makes the CT path diverge
+// from the math/big path for a secret-exponent operation in the full share protocol —
+// for example reintroducing a padding width derived from the auxiliary modulus instead
+// of the public plaintext bound, or a width change that breaks determinism — the CT-on
+// transcript will stop matching the CT-off one and this test fails.
+//
+// The protocol's internal Verify calls must complete, so the keygen fixture's ~2048-bit
+// auxiliary moduli are used instead of #10's tiny 11*23 modulus, which the current
+// hardened verifiers reject (verifyMinModulusBitLen floor). The witness betaPrm is a
+// q5-width random that can approach the public plaintext domain width; it is a valid
+// Paillier plaintext and the homomorphic result does not wrap the domain.
+func TestShareProtocolUnequalWidthsCTEquivalence(t *testing.T) {
+	key := mtaFixtureKey(t)
+	pk := &key.PublicKey
+	q := tss.EC().Params().N
+
+	NTildei, h1i, h2i, err := keygen.LoadNTildeH1H2FromTestFixture(0)
+	require.NoError(t, err)
+	NTildej, h1j, h2j, err := keygen.LoadNTildeH1H2FromTestFixture(1)
+	require.NoError(t, err)
+	// The fixture auxiliary moduli must clear the verifier floor so the full share
+	// protocol's internal Verify calls complete.
+	require.True(t, common.IsUsableUnknownOrderModulus(NTildei, verifyMinModulusBitLen), "fixture auxiliary modulus must clear the verifier floor")
+	require.True(t, common.IsUsableUnknownOrderModulus(NTildej, verifyMinModulusBitLen), "fixture auxiliary modulus must clear the verifier floor")
+
+	a, b := big.NewInt(1<<24+3), big.NewInt(1<<32+5)
+	B := crypto.ScalarBaseMult(tss.EC(), b)
+	want := new(big.Int).Mod(new(big.Int).Mul(a, b), q)
+
+	for _, withCheck := range []bool{false, true} {
+		t.Run(fmt.Sprintf("WC=%t", withCheck), func(t *testing.T) {
+			var transcriptOff [][]byte
+			for _, enabled := range []bool{false, true} {
+				t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
+					setMTAProofTestMode(t, enabled)
+					cA, proofA, err := AliceInit(tss.EC(), pk, a, NTildej, h1j, h2j)
+					require.NoError(t, err)
+					var alpha, beta, cB, betaPrm *big.Int
+					var proofBytes [][]byte
+					if withCheck {
+						var proofB *ProofBobWC
+						beta, cB, betaPrm, proofB, err = BobMidWC(tss.EC(), pk, proofA, b, cA, NTildei, h1i, h2i, NTildej, h1j, h2j, B)
+						require.NoError(t, err)
+						alpha, err = AliceEndWC(tss.EC(), pk, proofB, B, cA, cB, NTildei, h1i, h2i, key)
+						require.NoError(t, err)
+						proofBWCParts := proofB.Bytes()
+						proofBytes = proofBWCParts[:]
+					} else {
+						var proofB *ProofBob
+						beta, cB, betaPrm, proofB, err = BobMid(tss.EC(), pk, proofA, b, cA, NTildei, h1i, h2i, NTildej, h1j, h2j)
+						require.NoError(t, err)
+						alpha, err = AliceEnd(tss.EC(), pk, proofB, h1i, h2i, cA, cB, NTildei, key)
+						require.NoError(t, err)
+						proofBParts := proofB.Bytes()
+						proofBytes = proofBParts[:]
+					}
+					// betaPrm is a valid Paillier plaintext and the homomorphic result
+					// does not wrap the plaintext domain.
+					require.True(t, betaPrm.Cmp(pk.N) < 0, "betaPrm must be a valid Paillier plaintext")
+					require.True(t, new(big.Int).Add(new(big.Int).Mul(a, b), betaPrm).Cmp(pk.N) < 0, "fixed transcript must avoid Paillier plaintext wraparound")
+					require.Zero(t, common.ModInt(q).Add(alpha, beta).Cmp(want), "MtA shares must sum to a*b mod q")
+					transcript := append([][]byte{cA.Bytes(), cB.Bytes(), betaPrm.Bytes(), alpha.Bytes(), beta.Bytes()}, proofBytes...)
+					aliceParts := proofA.Bytes()
+					transcript = append(transcript, aliceParts[:]...)
+					if enabled {
+						require.Equal(t, transcriptOff, transcript, "fixed randomness must produce identical complete MtA transcripts")
+					} else {
+						transcriptOff = transcript
+					}
+				})
+			}
+		})
+	}
+}
+
 // These tests verify that the MtA flow run with constant-time ops enabled — which
 // hardens the secret-witness exponentiations h1^x, h1^y (proofs.go) and h1^m
 // (range_proof.go), plus the secret-exponent Paillier Encrypt (gamma^m) and HomoMult
