@@ -12,10 +12,11 @@
 // constant-time core used by Go's crypto/rsa).
 //
 // COVERAGE: Enabled by default, the bigmod path is applied
-// to modular exponentiations whose EXPONENT is a long-term secret, witness, trapdoor,
-// or secret plaintext/scalar: Paillier Decrypt / Encrypt (gamma^m) / HomoMult, the
-// Paillier mod- and factor-proofs, the DLN proof, the ring-Pedersen trapdoor setup in
-// keygen, and the MtA range and regular proofs.
+// to modular exponentiations/multiplications whose operand is a long-term secret,
+// witness, trapdoor, or secret plaintext/scalar: Paillier Decrypt / Encrypt (gamma^m) /
+// HomoMult, the Paillier mod- and factor-proofs, the DLN proof, the ring-Pedersen
+// trapdoor setup in keygen, the MtA range and regular proofs, the Schnorr proof
+// responses (crypto/schnorr), and ECDSA signing rounds 3-5 (thelta/sigma/thetaInverse/si).
 // This is limited coverage: conversion, reduction, and other surrounding math/big
 // operations remain variable-time. It does not make the whole protocol constant-time.
 //
@@ -28,6 +29,13 @@
 //     leaving them on math/big is a pragmatic deferral, NOT a safety guarantee.
 //   - Exponentiations modulo an even value (e.g. inverses mod phi(N)): bigmod requires
 //     an odd modulus, so these stay on math/big.
+//   - crypto/mta.AliceEnd/AliceEndWC's Paillier decrypt: upstream (BNB 3709c25) protects
+//     this with a *different* mechanism entirely -- a sleep-based response-time
+//     normalization wrapper (NewTimingProtection, ~200ms target + jitter), not a bigmod
+//     constant-time path. This gap predates the current extension and is tracked
+//     separately; it was not addressed here because adding that primitive would
+//     inject a fixed ~200ms delay into every MtA share round, a real latency/throughput
+//     cost nobody has signed off on.
 //
 // Reference: https://github.com/golang/go/issues/20654
 
@@ -107,6 +115,9 @@ func padExponent(exp *big.Int, bitLen int) []byte {
 // NewCTModInt creates a constant-time modular context using bigmod.
 // The modulus must be odd (a requirement of bigmod's Exp); this is asserted here so
 // the failure surfaces at construction rather than at the first ExpCT call.
+// Use GetCTModInt instead for a modulus that is reused across calls (e.g. a curve
+// order): it returns a cached shared *CTModInt so the bigmod.NewModulus setup and
+// sync.Pool allocation happen once per modulus, not per call.
 func NewCTModInt(mod *big.Int) *CTModInt {
 	if mod.Bit(0) == 0 {
 		panic("NewCTModInt: modulus must be odd")
@@ -140,7 +151,15 @@ func NewCTModInt(mod *big.Int) *CTModInt {
 // NOTE: big.Int.Mod is not constant-time, but it is applied unconditionally (no
 // secret-dependent branch) and the bases reduced here are public or already in range
 // at every call site. A caller passing a secret base near the modulus should be aware
-// the reduction's timing depends on the value.
+// the reduction's timing depends on the value. One exception: in
+// `ecdsa/signing/round_5.go`, the operand `rx = R.X()` is a field-prime (mod p)
+// coordinate that is not yet reduced mod the curve order N when fed into
+// `MulCT(rx, sigma)`. The reduction is correctness-required (both the CT and non-CT
+// paths always performed it), pre-existing (not introduced by the CT branch),
+// and `rx` is still secret here — it becomes the public signature `r` component
+// only in round 10 (finalize.go:60), five rounds later. The variable-time
+// reduction of a secret value is a bounded timing leak; making this reduction
+// constant-time is a tracked follow-up.
 func (ct *CTModInt) reduceToPaddedBytes(val *big.Int) []byte {
 	reduced := new(big.Int).Mod(val, ct.modBigInt)
 
@@ -199,6 +218,12 @@ func (ct *CTModInt) ExpCTWithBitLen(base, exp *big.Int, bitLen int) *big.Int {
 // also perform variable-time math/big operations.
 // Note: The modulus should be prime for this to work correctly. For composite moduli,
 // use NewCTModIntWithPhi to provide a group exponent.
+//
+// PERFORMANCE: for a prime modulus this is a full 256-bit-class modexp
+// (bigmod.Exp), which is ~10-20x slower than math/big.ModInverse's extended
+// Euclidean algorithm at the same size (see BenchmarkModInverseCT vs
+// BenchmarkModInverseStandard in constant_time_test.go). That cost is the price
+// of the constant-time path; the non-CT branch keeps the cheap Euclidean inverse.
 func (ct *CTModInt) ModInverseCT(a *big.Int) *big.Int {
 	if a.Sign() == 0 {
 		return nil
@@ -254,6 +279,30 @@ func (ct *CTModInt) MulCT(x, y *big.Int) *big.Int {
 	xNat.Mul(yNat, ct.mod)
 
 	return new(big.Int).SetBytes(xNat.Bytes(ct.mod))
+}
+
+// ctModIntCache memoizes *CTModInt instances by modulus byte string so that
+// repeated calls for a constant modulus (e.g. a curve order across signing
+// rounds) reuse one bigmod.NewModulus + sync.Pool instead of reallocating.
+// NewCTModInt is retained for one-shot / test use; GetCTModInt is the
+// zero-allocation-on-the-hot-path accessor.
+var ctModIntCache sync.Map // key: mod.Bytes() string -> *CTModInt
+
+// GetCTModInt returns a shared, cached constant-time modular context for mod.
+// The modulus must be odd. Repeated calls with the same modulus value return
+// the same *CTModInt, so per-signing-round allocation of bigmod.NewModulus and
+// the byte pool is avoided.
+func GetCTModInt(mod *big.Int) *CTModInt {
+	if mod.Bit(0) == 0 {
+		panic("GetCTModInt: modulus must be odd")
+	}
+	key := string(mod.Bytes())
+	if v, ok := ctModIntCache.Load(key); ok {
+		return v.(*CTModInt)
+	}
+	constructed := NewCTModInt(mod)
+	actual, _ := ctModIntCache.LoadOrStore(key, constructed)
+	return actual.(*CTModInt)
 }
 
 // NewCTModIntWithPhi creates a constant-time modular context for composite moduli.

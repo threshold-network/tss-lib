@@ -363,7 +363,153 @@ func BenchmarkExpStandard(b *testing.B) {
 	}
 }
 
-// TestExpCTTimingConsistency checks timing consistency
+// BenchmarkMulCT benchmarks constant-time 256-bit-class modular multiplication
+func BenchmarkMulCT(b *testing.B) {
+	p, _ := rand.Prime(rand.Reader, 256)
+	ctMod := NewCTModInt(p)
+
+	x, _ := rand.Int(rand.Reader, p)
+	y, _ := rand.Int(rand.Reader, p)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctMod.MulCT(x, y)
+	}
+}
+
+// BenchmarkModInverseCT benchmarks constant-time 256-bit-class modular inverse
+func BenchmarkModInverseCT(b *testing.B) {
+	p, _ := rand.Prime(rand.Reader, 256)
+	ctMod := NewCTModInt(p)
+
+	x, _ := rand.Int(rand.Reader, p)
+	if x.Sign() == 0 {
+		x = big.NewInt(1)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctMod.ModInverseCT(x)
+	}
+}
+
+// BenchmarkMulStandard benchmarks standard math/big modular multiplication for
+// comparison with BenchmarkMulCT at the same 256-bit modulus.
+func BenchmarkMulStandard(b *testing.B) {
+	p, _ := rand.Prime(rand.Reader, 256)
+
+	x, _ := rand.Int(rand.Reader, p)
+	y, _ := rand.Int(rand.Reader, p)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		new(big.Int).Mod(new(big.Int).Mul(x, y), p)
+	}
+}
+
+// BenchmarkModInverseStandard benchmarks standard math/big modular inverse for
+// comparison with BenchmarkModInverseCT at the same 256-bit modulus.
+func BenchmarkModInverseStandard(b *testing.B) {
+	p, _ := rand.Prime(rand.Reader, 256)
+
+	x, _ := rand.Int(rand.Reader, p)
+	if x.Sign() == 0 {
+		x = big.NewInt(1)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		new(big.Int).ModInverse(x, p)
+	}
+}
+
+// TestMulCTTimingConsistency compares MulCT's mean elapsed time for a
+// zero operand vs a near-modulus operand. A non-constant-time implementation
+// would show a measurable spread; wall-clock noise on CI exceeds that, so
+// a drift beyond the 0.5x-2.0x band is logged (not a failure), matching
+// TestExpCTTimingConsistency's style.
+func TestMulCTTimingConsistency(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping timing test in short mode")
+	}
+
+	p, _ := rand.Prime(rand.Reader, 256)
+	ctMod := NewCTModInt(p)
+
+	xZero := big.NewInt(0)
+	xNear := new(big.Int).Sub(p, big.NewInt(1))
+	y, _ := rand.Int(rand.Reader, p)
+
+	const iterations = 100
+	var timesZero, timesNear []time.Duration
+
+	for i := 0; i < iterations; i++ {
+		start := time.Now()
+		ctMod.MulCT(xZero, y)
+		timesZero = append(timesZero, time.Since(start))
+
+		start = time.Now()
+		ctMod.MulCT(xNear, y)
+		timesNear = append(timesNear, time.Since(start))
+	}
+
+	var sumZero, sumNear time.Duration
+	for i := 0; i < iterations; i++ {
+		sumZero += timesZero[i]
+		sumNear += timesNear[i]
+	}
+	meanZero := sumZero / time.Duration(iterations)
+	meanNear := sumNear / time.Duration(iterations)
+
+	ratio := float64(meanNear) / float64(meanZero)
+	if ratio < 0.5 || ratio > 2.0 {
+		t.Logf("Warning: MulCT timing ratio between zero and near-modulus operands: %.2f", ratio)
+		t.Logf("Zero-operand mean: %v, near-modulus mean: %v", meanZero, meanNear)
+	}
+}
+
+// TestModInverseCTTimingConsistency is the ModInverseCT analogue of
+// TestMulCTTimingConsistency: a non-constant-time inverse would time differently
+// for zero, one, and near-modulus inputs.
+func TestModInverseCTTimingConsistency(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping timing test in short mode")
+	}
+
+	p, _ := rand.Prime(rand.Reader, 256)
+	ctMod := NewCTModInt(p)
+
+	one := big.NewInt(1)
+	near := new(big.Int).Sub(p, big.NewInt(1))
+
+	const iterations = 100
+	var timesOne, timesNear []time.Duration
+
+	for i := 0; i < iterations; i++ {
+		start := time.Now()
+		ctMod.ModInverseCT(one)
+		timesOne = append(timesOne, time.Since(start))
+
+		start = time.Now()
+		ctMod.ModInverseCT(near)
+		timesNear = append(timesNear, time.Since(start))
+	}
+
+	var sumOne, sumNear time.Duration
+	for i := 0; i < iterations; i++ {
+		sumOne += timesOne[i]
+		sumNear += timesNear[i]
+	}
+	meanOne := sumOne / time.Duration(iterations)
+	meanNear := sumNear / time.Duration(iterations)
+
+	ratio := float64(meanNear) / float64(meanOne)
+	if ratio < 0.5 || ratio > 2.0 {
+		t.Logf("Warning: ModInverseCT timing ratio between one and near-modulus operands: %.2f", ratio)
+		t.Logf("One mean: %v, near-modulus mean: %v", meanOne, meanNear)
+	}
+}
+
 func TestExpCTTimingConsistency(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping timing test in short mode")
