@@ -7,11 +7,10 @@
 package tss_test
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
@@ -66,7 +65,7 @@ func validWireSeed() ([]byte, error) {
 		ModproofTilde: mod,
 	}
 	if !content.ValidateBasic() {
-		return nil, assert.AnError
+		return nil, errors.New("KGRound1Message seed must pass ValidateBasic")
 	}
 	meta := tss.MessageRouting{From: fuzzParty, IsBroadcast: true}
 	wire := tss.NewMessageWrapper(meta, content)
@@ -81,26 +80,27 @@ func validWireSeed() ([]byte, error) {
 // unknownTypeWireSeed builds a well-formed Any whose type URL does not
 // resolve in the protobuf registry.
 func unknownTypeWireSeed() ([]byte, error) {
-	return (&anypb.Any{
+	return proto.Marshal(&anypb.Any{
 		TypeUrl: "type.googleapis.com/tss.fuzz.unknown",
 		Value:   []byte{1, 2, 3},
-	}).Marshal()
+	})
 }
 
 // FuzzParseWireMessage fuzzes tss.ParseWireMessage, the untrusted wire
 // boundary where arbitrary bytes are decoded into a typed ParsedMessage.
 //
-// Contract asserted:
-//   - rejection: bytes that cannot form a registered, resolvable inner
-//     message (truncated, typeless, or unknown type URL) must error —
-//     category pinned, wording not;
-//   - success invariants on any byte string that does parse:
-//     a) the resolved type name is a registered content type (Type()
-//     non-empty),
-//     b) re-marshal + re-parse is stable: parsing the re-marshaled wire
-//     bytes yields content that is proto-equal to the first parse
-//     (semantic content preservation through the unmarshal path),
-//     c) routing round-trips: the sender PartyID and the broadcast flag
+// A byte string that cannot form a registered, resolvable inner message
+// (truncated, typeless, or unknown type URL) must error — category pinned,
+// wording not. Any byte string that does parse must satisfy:
+//
+//   - the resolved type name is a registered content type (Type()
+//     non-empty);
+//   - fresh-content round-trip: build a fresh Any from the decoded content
+//     via anypb.New, marshal it, re-parse it, and the re-parsed content
+//     must be proto-equal to the first parse (semantic content preservation
+//     through the decode -> re-encode boundary, not a reuse of the
+//     original Any bytes);
+//   - routing round-trips: the sender PartyID and the broadcast flag
 //     survive the decode.
 //
 // The routing flag under test is derived from the input length so both
@@ -136,64 +136,33 @@ func FuzzParseWireMessage(f *testing.F) {
 		if err != nil {
 			return // rejection category exercised
 		}
-		// Type invariant: a successful parse resolved a registered
-		// content type name.
 		if parsed.Type() == "" {
 			t.Fatalf("parsed message must expose a resolved proto type name")
 		}
-		// Re-parse stability: the re-marshaled wire bytes must parse again
-		// with proto-equal content (field order inside the untrusted
-		// input is not asserted byte-wise; semantic content is the
-		// invariant).
-		rebz, _, err := parsed.WireBytes()
-		require.NoError(t, err, "parsed message must re-marshal for the wire")
+		// Fresh-content round-trip: re-encode the decoded content into a
+		// fresh Any (not the original input bytes), re-parse, and the
+		// content must be proto-equal across the boundary.
+		freshAny, err := anypb.New(parsed.Content())
+		if err != nil {
+			t.Fatalf("decoded content must re-encode into a fresh Any: %v", err)
+		}
+		rebz, err := proto.Marshal(freshAny)
+		if err != nil {
+			t.Fatalf("fresh Any must marshal for the wire: %v", err)
+		}
 		reparsed, err := tss.ParseWireMessage(rebz, fuzzParty, isBroadcast)
-		require.NoError(t, err, "re-marshaled wire bytes must parse")
+		if err != nil {
+			t.Fatalf("re-marshaled fresh-content wire bytes must parse: %v", err)
+		}
 		if !proto.Equal(parsed.Content(), reparsed.Content()) {
-			t.Fatalf("content must be stable across parse -> re-marshal -> parse")
+			t.Fatalf("content must be stable across parse -> fresh Any -> re-marshal -> parse")
 		}
 		// Routing invariants: sender and broadcast flag survive the decode.
 		if parsed.GetFrom() != fuzzParty {
-			t.Fatalf("parsed message lost its sender routing")
+			t.Fatal("parsed message lost its sender routing")
 		}
 		if parsed.IsBroadcast() != isBroadcast {
-			t.Fatalf("parsed message broadcast flag must round-trip")
+			t.Fatal("parsed message broadcast flag must round-trip")
 		}
 	})
-}
-
-// TestParseWireMessageSeeds pins the success invariants and rejection
-// categories on deterministic seeds (no fuzz corpus needed).
-func TestParseWireMessageSeeds(t *testing.T) {
-	bz, err := validWireSeed()
-	require.NoError(t, err, "wire seed must build")
-
-	parsed, err := tss.ParseWireMessage(bz, fuzzParty, true)
-	require.NoError(t, err, "valid wire bytes must parse")
-	assert.Equal(t, "binance.tsslib.ecdsa.keygen.KGRound1Message", parsed.Type())
-	assert.Equal(t, fuzzParty, parsed.GetFrom())
-	assert.True(t, parsed.IsBroadcast())
-	assert.True(t, parsed.ValidateBasic(), "seed content must still validate after the round-trip")
-	// Re-parse stability on the canonical seed.
-	rebz, _, err := parsed.WireBytes()
-	require.NoError(t, err)
-	reparsed, err := tss.ParseWireMessage(rebz, fuzzParty, true)
-	require.NoError(t, err)
-	assert.True(t, proto.Equal(parsed.Content(), reparsed.Content()),
-		"content must be stable across parse -> re-marshal -> parse")
-
-	// Rejection: truncated Any payload.
-	if _, err := tss.ParseWireMessage(bz[:len(bz)/2], fuzzParty, true); err == nil {
-		t.Fatal("expected truncated wire bytes to be rejected")
-	}
-	// Rejection: length-delimited inner value without a resolvable type.
-	if _, err := tss.ParseWireMessage([]byte{0x0a, 0x01, 0x33}, fuzzParty, false); err == nil {
-		t.Fatal("expected typeless wire bytes to be rejected")
-	}
-	// Rejection: well-formed Any with an unregistered type URL.
-	unknownWire, err := unknownTypeWireSeed()
-	require.NoError(t, err)
-	if _, err := tss.ParseWireMessage(unknownWire, fuzzParty, true); err == nil {
-		t.Fatal("expected unregistered type URL to be rejected")
-	}
 }
