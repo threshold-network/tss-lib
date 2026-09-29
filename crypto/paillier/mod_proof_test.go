@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"math/big"
 
-	"strings"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -302,6 +302,7 @@ func TestModSqrt(t *testing.T) {
 
 	assert.Equal(b(37), quadResidueModComposite(b(58), b(7), b(11), b(77), b(60)))
 }
+
 // TestModProofVerifyAcceptsCeilingBoundary pins the exact modulus width
 // verifyMaxModulusBitLen (65536 bits): a modulus of that width is NOT rejected
 // at the ceiling, so it fails at the later oddness check. This guards against

@@ -8,9 +8,9 @@ package mta
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"strings"
-	"fmt"
 	"testing"
 	"time"
 
@@ -205,6 +205,7 @@ func TestRangeProofAliceAcceptsZeroContribution(t *testing.T) {
 	assert.True(t, proof.Verify(tss.EC(), pk, NTildei, h1i, h2i, cOne),
 		"c=1 with r=1, m=0 verifies because it is honest zero contribution; see test docstring")
 }
+
 // TestRangeProofAliceBytesInvalidReceiver pins that RangeProofAlice.Bytes
 // fails loud on an invalid receiver the way the sibling
 // ProofBob.Bytes/ProofBobWC.Bytes do, and that an honest proof's encoding
