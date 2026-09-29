@@ -41,13 +41,22 @@ func TestDLNProofCTVerifies(t *testing.T) {
 	h1 := modNTilde.Mul(f1, f1)
 	h2 := modNTilde.Exp(h1, alpha)
 
+	previousMode := common.IsConstantTimeEnabled()
+	t.Cleanup(func() {
+		if previousMode {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+	})
+	common.DisableConstantTimeOps()
+
 	// Baseline: non-CT proof verifies.
 	proofOff := NewDLNProof(h1, h2, alpha, p, q, NTilde)
 	assert.True(t, proofOff.Verify(h1, h2, NTilde), "non-CT DLN proof must verify")
 
 	// CT proof must also verify.
 	common.EnableConstantTimeOps()
-	defer common.DisableConstantTimeOps()
 	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
 	proofOn := NewDLNProof(h1, h2, alpha, p, q, NTilde)
 	assert.True(t, proofOn.Verify(h1, h2, NTilde), "CT DLN proof must verify")

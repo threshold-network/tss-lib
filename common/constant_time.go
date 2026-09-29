@@ -11,11 +11,13 @@
 // secret-exponent operations enumerated below, using filippo.io/bigmod (the same
 // constant-time core used by Go's crypto/rsa).
 //
-// COVERAGE: When enabled via EnableConstantTimeOps, the constant-time path is applied
+// COVERAGE: Enabled by default, the bigmod path is applied
 // to modular exponentiations whose EXPONENT is a long-term secret, witness, trapdoor,
 // or secret plaintext/scalar: Paillier Decrypt / Encrypt (gamma^m) / HomoMult, the
 // Paillier mod- and factor-proofs, the DLN proof, the ring-Pedersen trapdoor setup in
 // keygen, and the MtA range and regular proofs.
+// This is limited coverage: conversion, reduction, and other surrounding math/big
+// operations remain variable-time. It does not make the whole protocol constant-time.
 //
 // Deliberately NOT hardened (left on math/big), and the reasons:
 //   - Public-exponent operations, where the timing reveals only public data: x^N in
@@ -40,16 +42,18 @@ import (
 )
 
 // constantTimeEnabled controls whether constant-time operations are used.
-// Default is false (disabled) for performance. Enable for high-security environments.
-var constantTimeEnabled int32 = 0
+// The covered operations use the bigmod path by default.
+var constantTimeEnabled int32 = 1
 
-// EnableConstantTimeOps enables constant-time cryptographic operations.
-// Call this at application startup if timing side-channel protection is required.
+// EnableConstantTimeOps enables the covered bigmod operations (the default).
+// Configure the mode at application startup. An operation snapshots its mode;
+// changing it does not retroactively change an operation already in progress.
 func EnableConstantTimeOps() {
 	atomic.StoreInt32(&constantTimeEnabled, 1)
 }
 
-// DisableConstantTimeOps disables constant-time operations (default).
+// DisableConstantTimeOps selects the variable-time math/big path for the covered
+// operations. This explicit opt-out can be used for compatibility or comparison.
 func DisableConstantTimeOps() {
 	atomic.StoreInt32(&constantTimeEnabled, 0)
 }
@@ -64,16 +68,13 @@ func IsConstantTimeEnabled() bool {
 type CTModInt struct {
 	mod        *bigmod.Modulus
 	modBigInt  *big.Int
-	inverseExp []byte // Exponent for modular inverse: p-2 (prime) or phi(n)-1 (composite)
+	inverseExp []byte // Exponent for modular inverse: p-2 (prime) or groupExponent-1 (composite)
 	byteLen    int
 	bytePool   sync.Pool
 }
 
 // leftPad returns b left-padded with zero bytes to width; if b is already at least
-// width bytes it is returned unchanged. Padding a secret exponent to a fixed width
-// keeps bigmod.Nat.Exp's running time independent of the exponent's magnitude (its
-// work is proportional to len(e)); leading zero bytes are no-op squarings and do not
-// change the result.
+// width bytes it is returned unchanged.
 func leftPad(b []byte, width int) []byte {
 	if len(b) >= width {
 		return b
@@ -81,6 +82,26 @@ func leftPad(b []byte, width int) []byte {
 	padded := make([]byte, width)
 	copy(padded[width-len(b):], b)
 	return padded
+}
+
+// padExponent encodes a nonnegative exponent in exactly the public bit bound's
+// byte width. Reject overflow instead of increasing bigmod.Exp's work according
+// to the secret exponent's magnitude. Leading zero bytes preserve the result.
+func padExponent(exp *big.Int, bitLen int) []byte {
+	if exp.Sign() < 0 {
+		panic("ExpCT: negative exponents are not supported; use ModInverseCT explicitly")
+	}
+	if bitLen <= 0 {
+		panic("ExpCT: public exponent bit length must be positive")
+	}
+	if exp.BitLen() > bitLen {
+		panic("ExpCT: exponent exceeds public bit length; use a sufficient public bound")
+	}
+	byteLen := bitLen / 8
+	if bitLen%8 != 0 {
+		byteLen++
+	}
+	return exp.FillBytes(make([]byte, byteLen))
 }
 
 // NewCTModInt creates a constant-time modular context using bigmod.
@@ -133,14 +154,25 @@ func (ct *CTModInt) reduceToPaddedBytes(val *big.Int) []byte {
 }
 
 // ExpCT performs constant-time modular exponentiation using bigmod.
-// IMPORTANT: The modulus must be odd. Negative exponents are not supported and will panic.
+// The exponent is padded to the modulus's byte width. Negative exponents and
+// exponents exceeding that width panic. Use ExpCTWithBitLen when the exponent's
+// public bound is wider than the arithmetic modulus. The modulus must be odd.
 func (ct *CTModInt) ExpCT(base, exp *big.Int) *big.Int {
-	if exp.Sign() == 0 {
-		return big.NewInt(1)
-	}
-	if exp.Sign() < 0 {
-		panic("ExpCT: negative exponents are not supported; use ModInverseCT explicitly")
-	}
+	return ct.ExpCTWithBitLen(base, exp, ct.byteLen*8)
+}
+
+// ExpCTWithBitLen performs constant-time modular exponentiation, padding every
+// exponent (including zero) to ceil(bitLen/8) bytes. bitLen must come from a
+// public bound, never exp.BitLen(). It must be positive, and exp must be
+// nonnegative and fit within bitLen bits; violations panic without truncation
+// or reduction. The arithmetic modulus must be odd.
+func (ct *CTModInt) ExpCTWithBitLen(base, exp *big.Int, bitLen int) *big.Int {
+	expBytes := padExponent(exp, bitLen)
+	defer func() {
+		for i := range expBytes {
+			expBytes[i] = 0
+		}
+	}()
 
 	paddedBase := ct.reduceToPaddedBytes(base)
 	defer func() {
@@ -153,14 +185,6 @@ func (ct *CTModInt) ExpCT(base, exp *big.Int) *big.Int {
 	baseNat := bigmod.NewNat()
 	baseNat.SetBytes(paddedBase, ct.mod)
 
-	// Pad the exponent to a fixed width so the exponentiation's running time does not
-	// leak the secret exponent's magnitude (see leftPad).
-	expBytes := leftPad(exp.Bytes(), ct.byteLen)
-	defer func() {
-		for i := range expBytes {
-			expBytes[i] = 0
-		}
-	}()
 	result := bigmod.NewNat()
 	result.Exp(baseNat, expBytes, ct.mod)
 
@@ -169,10 +193,12 @@ func (ct *CTModInt) ExpCT(base, exp *big.Int) *big.Int {
 
 // ModInverseCT computes the modular inverse in constant time using Fermat's little theorem.
 // For a prime modulus p: a^(-1) = a^(p-2) mod p
-// For a non-prime modulus n with known phi(n): a^(-1) = a^(phi(n)-1) mod n
-// SECURITY: This uses constant-time Exp, making the entire operation constant-time.
+// For a composite modulus n with known group exponent e: a^(-1) = a^(e-1) mod n.
+// The Euler totient phi(n) and Carmichael function lambda(n) are both valid e.
+// The exponentiation uses bigmod; conversion, reduction, and inverse validation
+// also perform variable-time math/big operations.
 // Note: The modulus should be prime for this to work correctly. For composite moduli,
-// use NewCTModIntWithPhi to provide phi(n).
+// use NewCTModIntWithPhi to provide a group exponent.
 func (ct *CTModInt) ModInverseCT(a *big.Int) *big.Int {
 	if a.Sign() == 0 {
 		return nil
@@ -193,7 +219,7 @@ func (ct *CTModInt) ModInverseCT(a *big.Int) *big.Int {
 	result.Exp(aNat, ct.inverseExp, ct.mod)
 	inv := new(big.Int).SetBytes(result.Bytes(ct.mod))
 
-	// The Fermat/Euler inverse a^(mod-2) (or a^(phi-1)) is only the true inverse when
+	// The Fermat/Euler inverse a^(mod-2) (or a^(groupExponent-1)) is only the true inverse when
 	// gcd(a, mod) == 1; for non-coprime a it returns a well-defined but WRONG value
 	// rather than failing. Verify a*inv == 1 and return nil otherwise, so this matches
 	// math/big.ModInverse's nil-on-no-inverse contract and both code paths agree.
@@ -231,8 +257,10 @@ func (ct *CTModInt) MulCT(x, y *big.Int) *big.Int {
 }
 
 // NewCTModIntWithPhi creates a constant-time modular context for composite moduli.
-// This is required for correct ModInverse on composite moduli where phi(n) is known.
-// For RSA-like moduli n = p*q, pass phiN = (p-1)*(q-1).
+// The phiN argument must be a positive group exponent: every unit a modulo mod
+// must satisfy a^phiN = 1. For n = p*q with distinct primes, either the Euler
+// totient (p-1)*(q-1) or the Carmichael exponent lcm(p-1, q-1) can be used.
+// The parameter name is retained for compatibility; inversion uses a^(phiN-1).
 func NewCTModIntWithPhi(mod, phiN *big.Int) *CTModInt {
 	if mod.Bit(0) == 0 {
 		panic("NewCTModIntWithPhi: modulus must be odd")
@@ -243,14 +271,14 @@ func NewCTModIntWithPhi(mod, phiN *big.Int) *CTModInt {
 		panic(err)
 	}
 
-	// For composite modulus: a^(-1) = a^(phi(n)-1) mod n
-	phiMinusOne := new(big.Int).Sub(phiN, big.NewInt(1))
+	// For a unit a and known group exponent: a^(-1) = a^(phiN-1) mod n.
+	groupExponentMinusOne := new(big.Int).Sub(phiN, big.NewInt(1))
 
 	byteLen := len(modBytes)
 	return &CTModInt{
 		mod:        m,
 		modBigInt:  new(big.Int).Set(mod),
-		inverseExp: leftPad(phiMinusOne.Bytes(), byteLen), // Use phi(n)-1 instead of n-2
+		inverseExp: leftPad(groupExponentMinusOne.Bytes(), byteLen),
 		byteLen:    byteLen,
 		bytePool: sync.Pool{
 			New: func() interface{} {
