@@ -67,6 +67,11 @@ func init() {
 
 // len is the length of the modulus (each prime = len / 2)
 func GenerateKeyPair(ctx context.Context, modulusBitLen int, optionalConcurrency ...int) (privateKey *PrivateKey, publicKey *PublicKey, err error) {
+	// Smaller sizes cannot supply two safe primes with the required separation
+	// using the safe-prime generator's candidate range.
+	if modulusBitLen < 18 {
+		return nil, nil, errors.New("paillier modulus size must be at least 18 bits")
+	}
 	var concurrency int
 	if 0 < len(optionalConcurrency) {
 		if 1 < len(optionalConcurrency) {
@@ -115,6 +120,9 @@ func (publicKey *PublicKey) EncryptAndReturnRandomness(m *big.Int) (c *big.Int, 
 		return nil, nil, ErrMessageTooLong
 	}
 	x = common.GetRandomPositiveRelativelyPrimeInt(publicKey.N)
+	if x == nil {
+		return nil, nil, errors.New("EncryptAndReturnRandomness: could not sample randomness")
+	}
 	N2 := publicKey.NSquare()
 	// 1. gamma^m mod N2
 	var Gm *big.Int
@@ -192,8 +200,9 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 		return nil, ErrMessageMalFormed
 	}
 
+	useCT := common.IsConstantTimeEnabled()
 	var cExpLambda, gammaExpLambda *big.Int
-	if common.IsConstantTimeEnabled() {
+	if useCT {
 		// SECURITY: constant-time exponentiation prevents leaking the secret
 		// exponent LambdaN through execution-time variation. N2 is odd.
 		ctModN2 := common.NewCTModInt(N2)
@@ -210,10 +219,11 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 	Lg := L(gammaExpLambda, privateKey.N)
 	// 3. (1) * modInv(2) mod N
 	var inv *big.Int
-	if common.IsConstantTimeEnabled() {
-		// SECURITY: Lg derives from the secret LambdaN exponentiation; N = P*Q is
-		// composite, so provide phi(N) for the Euler inverse (the bigmod modulus N is odd).
-		ctModN := common.NewCTModIntWithPhi(privateKey.N, privateKey.PhiN)
+	if useCT {
+		// LambdaN is a group exponent for the units modulo N, so raising a
+		// unit to LambdaN-1 computes its inverse. Reuse the value already
+		// needed for decryption without requiring the optional PhiN field.
+		ctModN := common.NewCTModIntWithPhi(privateKey.N, privateKey.LambdaN)
 		inv = ctModN.ModInverseCT(Lg)
 	} else {
 		inv = new(big.Int).ModInverse(Lg, privateKey.N)
@@ -229,10 +239,14 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 // In: In Proc. of the 5th ACM Conference on Computer and Communications Security (CCS-98. Citeseer (1998)
 //
 // This only implements the stage 1 proof that N is square-free from 3.1
+// It panics if the private key modulus cannot supply challenges.
 func (privateKey *PrivateKey) Proof(k *big.Int, ecdsaPub *crypto2.ECPoint) Proof {
 	var pi Proof
 	iters := ProofIters
 	xs := GenerateXs(iters, k, privateKey.N, ecdsaPub)
+	if len(xs) != iters {
+		panic(errors.New("paillier proof: invalid modulus for challenges"))
+	}
 	// M = N^(-1) mod PhiN. PhiN is even, so this inverse stays on math/big (bigmod
 	// requires an odd modulus); only the subsequent Exp mod N (odd) carries the secret
 	// exponent M and gets the constant-time path when enabled.
@@ -314,12 +328,18 @@ func L(u, N *big.Int) *big.Int {
 }
 
 // GenerateXs generates the challenges used in Paillier key Proof
+// and returns nil if N is nil or N <= 1.
 func GenerateXs(m int, k, N *big.Int, ecdsaPub *crypto2.ECPoint) []*big.Int {
+	if N == nil || N.Cmp(one) <= 0 {
+		return nil
+	}
 	var i, n int
 	ret := make([]*big.Int, m)
 	sX, sY := ecdsaPub.X(), ecdsaPub.Y()
 	kb, sXb, sYb, Nb := k.Bytes(), sX.Bytes(), sY.Bytes(), N.Bytes()
 	bits := N.BitLen()
+	mask := new(big.Int).Lsh(one, uint(bits))
+	mask.Sub(mask, one)
 	blocks := int(gmath.Ceil(float64(bits) / 256))
 	chs := make([]chan []byte, blocks)
 	for k := range chs {
@@ -344,6 +364,9 @@ func GenerateXs(m int, k, N *big.Int, ecdsaPub *crypto2.ECPoint) []*big.Int {
 			xi = append(xi, rx...) // xi1||···||xib
 		}
 		ret[i] = new(big.Int).SetBytes(xi)
+		// Discard expansion bits above the modulus width before rejection.
+		// This leaves challenges unchanged when bits is a multiple of 256.
+		ret[i].And(ret[i], mask)
 		if common.IsNumberInMultiplicativeGroup(N, ret[i]) {
 			i++
 		} else {

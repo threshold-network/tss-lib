@@ -40,12 +40,13 @@ var (
 )
 
 func NewDLNProof(h1, h2, x, p, q, N *big.Int, session ...[]byte) *Proof {
+	useCT := common.IsConstantTimeEnabled()
 	Session := optionalSession(session)
 	pMulQ := new(big.Int).Mul(p, q)
 	modN, modPQ := common.ModInt(N), common.ModInt(pMulQ)
 	a := make([]*big.Int, Iterations)
 	alpha := [Iterations]*big.Int{}
-	if common.IsConstantTimeEnabled() {
+	if useCT {
 		// SECURITY: h1^a[i] mod N uses the constant-time path (N is odd).
 		ctModN := common.NewCTModInt(N)
 		for i := range alpha {
@@ -62,7 +63,7 @@ func NewDLNProof(h1, h2, x, p, q, N *big.Int, session ...[]byte) *Proof {
 	c := common.SHA512_256i_TAGGED(fsSessionDLNProof(Session), msg...)
 	t := [Iterations]*big.Int{}
 	cIBI := new(big.Int)
-	if common.IsConstantTimeEnabled() {
+	if useCT {
 		// SECURITY: x is the secret discrete-log witness; multiply it in constant time
 		// (the modulus p*q is odd).
 		ctModPQ := common.NewCTModInt(pMulQ)
