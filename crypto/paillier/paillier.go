@@ -35,6 +35,25 @@ const (
 	verifyPrimesUntil      = 1000 // Verify uses primes <1000
 	pQBitLenDifference     = 3    // >1020-bit P-Q
 	verifyMinModulusBitLen = 2048
+	// verifyMaxModulusBitLen is the widest modulus bit length the ModVerify
+	// session-tagged sampler is defined for.
+	//
+	// sampleYModN (mod_proof.go) expands its 32-byte seed in 256-bit
+	// blocks -- `blocks := (byteLen + 31) / 32` -- and separates the blocks
+	// with a single byte (`make([]byte, 4)` holding the block index), so the
+	// blocks are distinct PRF evaluations only while blocks <= 256; at
+	// blocks == 257 the block index wraps and the expansion repeats an 8 KiB
+	// pattern instead of deriving the challenges the proof claims:
+	//   blocks <= 256  <=>  (bitLen + 255) / 256 <= 256  <=>  bitLen <= 65536.
+	//
+	// The same bound caps allocation: N arrives through the exported ModVerify
+	// and the mask, the expansion buffer and every sampled candidate are
+	// O(bitLen), so without it a 65537-bit modulus made one ModVerify call
+	// allocate and hash proportional to 8 KiB of challenge data times
+	// PARAM_M iterations. The wire path already pins moduli to
+	// verifyMinModulusBitLen (2048); the ceiling exists for the exported
+	// API, and it excludes nothing this library can produce.
+	verifyMaxModulusBitLen = 65536
 )
 
 type (

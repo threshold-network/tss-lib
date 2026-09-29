@@ -94,6 +94,10 @@ func (pf ModProof) ModVerify(N *big.Int, session ...[]byte) (bool, error) {
 		return false, fmt.Errorf("mod proof verify: nil inputs in proof")
 	}
 
+	if N != nil && N.BitLen() > verifyMaxModulusBitLen {
+		return false, fmt.Errorf("mod proof verify: modulus bit length %d exceeds maximum %d", N.BitLen(), verifyMaxModulusBitLen)
+	}
+
 	if !common.IsUsableUnknownOrderModulus(N, verifyMinModulusBitLen) {
 		return false, fmt.Errorf("mod proof verify: invalid modulus %d", N)
 	}

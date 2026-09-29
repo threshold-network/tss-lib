@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+
+	"strings"
+	"runtime"
 	"testing"
 	"time"
 
@@ -298,4 +301,79 @@ func TestModSqrt(t *testing.T) {
 	assert.False(isQuadResidueModComposite(b(59), b(7), b(11)))
 
 	assert.Equal(b(37), quadResidueModComposite(b(58), b(7), b(11), b(77), b(60)))
+}
+// TestModProofVerifyAcceptsCeilingBoundary pins the exact modulus width
+// verifyMaxModulusBitLen (65536 bits): a modulus of that width is NOT rejected
+// at the ceiling, so it fails at the later oddness check. This guards against
+// an off-by-one in the ceiling comparison.
+func TestModProofVerifyAcceptsCeilingBoundary(t *testing.T) {
+	// 2^(65536-1) is exactly 65536 bits and even, so it is rejected at the
+	// oddness check, not the ceiling check.
+	n := new(big.Int).Lsh(one, uint(verifyMaxModulusBitLen-1))
+	if n.BitLen() != verifyMaxModulusBitLen {
+		t.Fatalf("boundary modulus is %d bits, wanted %d", n.BitLen(), verifyMaxModulusBitLen)
+	}
+	if n.Bit(0) == 1 {
+		t.Fatal("boundary modulus must be even to reach the ceiling check")
+	}
+	proof := minimalModProof()
+	res, err := proof.ModVerify(n)
+	if res {
+		t.Fatal("expected even modulus to be rejected")
+	}
+	if err == nil {
+		t.Fatal("expected error for even modulus")
+	}
+	if strings.Contains(err.Error(), "exceeds maximum") {
+		t.Fatalf("65536-bit modulus must pass the ceiling check, got %v", err)
+	}
+}
+
+// TestModProofVerifyRejectsOversizedModulus pins the ceiling: a 65537-bit odd
+// composite modulus is rejected up front with an "exceeds maximum" error,
+// without the O(bitLen) allocation the session sampler would otherwise make.
+func TestModProofVerifyRejectsOversizedModulus(t *testing.T) {
+	// Odd composite of exactly verifyMaxModulusBitLen+1 bits, built as a
+	// product so no primality search is needed.
+	//
+	//	a = 2^h + 1, b = 2^h + 3 with h = (verifyMaxModulusBitLen+1)/2,
+	//	both odd; a*b > 2^verifyMaxModulusBitLen, so a*b is
+	//	verifyMaxModulusBitLen+1 bits wide.
+	h := uint((verifyMaxModulusBitLen + 1) / 2)
+	a := new(big.Int).Add(new(big.Int).Lsh(one, h), big.NewInt(1))
+	b := new(big.Int).Add(new(big.Int).Lsh(one, h), big.NewInt(3))
+	n := new(big.Int).Mul(a, b)
+	if n.BitLen() != verifyMaxModulusBitLen+1 || n.Bit(0) == 0 {
+		t.Fatalf("oversized modulus produced a %d-bit, parity-%d value", n.BitLen(), n.Bit(0))
+	}
+	proof := minimalModProof()
+	res, err := proof.ModVerify(n)
+	if res {
+		t.Fatal("ModVerify accepted a modulus wider than the sampler is defined for")
+	}
+	if err == nil {
+		t.Fatal("expected an error for the oversized modulus")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Fatalf("expected ceiling rejection, got %v", err)
+	}
+	// The ceiling check must fire before any O(bitLen) allocation.
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	proof.ModVerify(n)
+	runtime.ReadMemStats(&after)
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 256<<10 {
+		t.Fatalf("ModVerify allocated %d bytes for a %d-bit modulus it must reject up front", grew, n.BitLen())
+	}
+}
+
+// minimalModProof builds a ModProof that clears every per-member check, so
+// control reaches the ceiling comparison and later checks.
+func minimalModProof() *ModProof {
+	proof := &ModProof{W: big.NewInt(2)}
+	for i := range proof.X {
+		proof.X[i], proof.Z[i] = big.NewInt(7), big.NewInt(5)
+	}
+	return proof
 }

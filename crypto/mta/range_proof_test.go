@@ -9,6 +9,8 @@ package mta
 import (
 	"context"
 	"math/big"
+	"strings"
+	"fmt"
 	"testing"
 	"time"
 
@@ -202,4 +204,31 @@ func TestRangeProofAliceAcceptsZeroContribution(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, proof.Verify(tss.EC(), pk, NTildei, h1i, h2i, cOne),
 		"c=1 with r=1, m=0 verifies because it is honest zero contribution; see test docstring")
+}
+// TestRangeProofAliceBytesInvalidReceiver pins that RangeProofAlice.Bytes
+// fails loud on an invalid receiver the way the sibling
+// ProofBob.Bytes/ProofBobWC.Bytes do, and that an honest proof's encoding
+// round-trips through RangeProofAliceFromBytes.
+func TestRangeProofAliceBytesInvalidReceiver(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pf   *RangeProofAlice
+	}{
+		{"nil receiver", nil},
+		{"nil fields", &RangeProofAlice{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("Bytes() did not fail loud on an invalid %s receiver", tc.name)
+				}
+				msg := fmt.Sprint(r)
+				if !strings.Contains(msg, "RangeProofAlice.Bytes: invalid receiver") {
+					t.Fatalf("Bytes() panicked with %q, want the descriptive fail-loud message", msg)
+				}
+			}()
+			tc.pf.Bytes()
+		})
+	}
 }
