@@ -64,6 +64,9 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 	alpha := common.GetRandomPositiveInt(q3)
 	// 2.
 	beta := common.GetRandomPositiveRelativelyPrimeInt(pk.N)
+	if beta == nil {
+		return nil, errors.New("ProveRangeAlice: could not sample randomness")
+	}
 
 	// 3.
 	gamma := common.GetRandomPositiveInt(q3NTilde)
