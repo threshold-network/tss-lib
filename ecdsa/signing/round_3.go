@@ -104,8 +104,16 @@ func (round *round3) Start() *tss.Error {
 	}
 
 	modN := common.ModInt(round.Params().EC().Params().N)
-	thelta := modN.Mul(round.temp.k, round.temp.gamma)
-	sigma := modN.Mul(round.temp.k, round.temp.w)
+	var thelta, sigma *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: constant-time multiplication for secret values k, gamma, w (BNB 3709c25).
+		ctModN := common.GetCTModInt(round.Params().EC().Params().N)
+		thelta = ctModN.MulCT(round.temp.k, round.temp.gamma)
+		sigma = ctModN.MulCT(round.temp.k, round.temp.w)
+	} else {
+		thelta = modN.Mul(round.temp.k, round.temp.gamma)
+		sigma = modN.Mul(round.temp.k, round.temp.w)
+	}
 
 	for j := range round.Parties().IDs() {
 		if j == round.PartyID().Index {
