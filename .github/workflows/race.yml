@@ -1,0 +1,32 @@
+name: Go Race
+on:
+  # D11: weekly off-PR -race full-suite run. NOTE: schedule events only fire
+  # from the default branch (master), so this activates after the dev -> master
+  # merge; until then use workflow_dispatch to run it.
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  race:
+    name: Go race test
+    runs-on: ubuntu-latest
+    # -race slows the keygen ceremony ~2-3x (estimate), so give the full
+    # suite a generous budget.
+    timeout-minutes: 120
+    steps:
+
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24.x'
+        cache: true
+
+    - name: Run Tests with Race Detector
+      run: go test -timeout 60m -race ./...
