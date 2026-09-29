@@ -318,7 +318,13 @@ func runGenPrimeRoutine(
 					q.BitLen() == qBitLen {
 
 					if sgp := (&GermainSafePrime{p: p, q: q}); sgp.Validate() {
-						primeCh <- &GermainSafePrime{p: p, q: q}
+						// The caller cancels and waits for workers after it has
+						// enough results, so delivery must also allow cancellation.
+						select {
+						case primeCh <- sgp:
+						case <-ctx.Done():
+							return
+						}
 					}
 					p, q = new(big.Int), new(big.Int)
 				}
