@@ -8,9 +8,8 @@ package mta
 
 import (
 	"context"
-	"fmt"
 	"math/big"
-	"strings"
+	"runtime"
 	"testing"
 	"time"
 
@@ -206,10 +205,12 @@ func TestRangeProofAliceAcceptsZeroContribution(t *testing.T) {
 		"c=1 with r=1, m=0 verifies because it is honest zero contribution; see test docstring")
 }
 
-// TestRangeProofAliceBytesInvalidReceiver pins that RangeProofAlice.Bytes
-// fails loud on an invalid receiver the way the sibling
-// ProofBob.Bytes/ProofBobWC.Bytes do, and that an honest proof's encoding
-// round-trips through RangeProofAliceFromBytes.
+// TestRangeProofAliceBytesInvalidReceiver pins that an invalid
+// RangeProofAlice receiver is rejected by ValidateBasic, and that Bytes
+// fails loud with a diagnostic error value on that receiver -- consistent
+// with the sibling ProofBob.Bytes/ProofBobWC.Bytes guards -- instead of
+// letting a nil *big.Int field surface as an unguarded runtime nil-pointer
+// dereference panic.
 func TestRangeProofAliceBytesInvalidReceiver(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -219,14 +220,20 @@ func TestRangeProofAliceBytesInvalidReceiver(t *testing.T) {
 		{"nil fields", &RangeProofAlice{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.pf.ValidateBasic() {
+				t.Fatalf("expected ValidateBasic to reject an invalid %s receiver", tc.name)
+			}
 			defer func() {
 				r := recover()
 				if r == nil {
-					t.Fatalf("Bytes() did not fail loud on an invalid %s receiver", tc.name)
+					t.Fatalf("Bytes() did not panic on an invalid %s receiver", tc.name)
 				}
-				msg := fmt.Sprint(r)
-				if !strings.Contains(msg, "RangeProofAlice.Bytes: invalid receiver") {
-					t.Fatalf("Bytes() panicked with %q, want the descriptive fail-loud message", msg)
+				err, ok := r.(error)
+				if !ok {
+					t.Fatalf("Bytes() panicked with %T, want a diagnostic error value", r)
+				}
+				if _, isRuntimeErr := err.(runtime.Error); isRuntimeErr {
+					t.Fatalf("Bytes() panicked with a runtime error (%v); want a fail-loud diagnostic, not an unguarded nil-pointer dereference", err)
 				}
 			}()
 			tc.pf.Bytes()

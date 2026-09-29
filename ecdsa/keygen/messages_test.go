@@ -209,4 +209,14 @@ func TestKGRound2UnmarshalFactorProofNil(t *testing.T) {
 	if _, err = msg.UnmarshalFactorProofTilde(); err == nil {
 		t.Fatalf("expected nil FacproofTilde to be rejected")
 	}
+
+	// Symmetric positive round-trip once FacproofTilde is also populated.
+	msg.FacproofTilde = validFactorProofForValidation()
+	proofTilde, err = msg.UnmarshalFactorProofTilde()
+	if err != nil {
+		t.Fatalf("expected valid FacproofTilde to decode, got err=%v", err)
+	}
+	if proofTilde.P.Cmp(big.NewInt(1)) != 0 || proofTilde.Sigma.Cmp(big.NewInt(1)) != 0 {
+		t.Fatalf("expected all factor proof values to be 1, got P=%v Sigma=%v", proofTilde.P, proofTilde.Sigma)
+	}
 }

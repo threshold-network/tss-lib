@@ -35,24 +35,29 @@ const (
 	verifyPrimesUntil      = 1000 // Verify uses primes <1000
 	pQBitLenDifference     = 3    // >1020-bit P-Q
 	verifyMinModulusBitLen = 2048
-	// verifyMaxModulusBitLen is the widest modulus bit length the ModVerify
-	// session-tagged sampler is defined for.
+	// verifyMaxModulusBitLen is a resource ceiling on the modulus width the
+	// exported ModVerify will accept.
 	//
-	// sampleYModN (mod_proof.go) expands its 32-byte seed in 256-bit
-	// blocks -- `blocks := (byteLen + 31) / 32` -- and separates the blocks
-	// with a single byte (`make([]byte, 4)` holding the block index), so the
-	// blocks are distinct PRF evaluations only while blocks <= 256; at
-	// blocks == 257 the block index wraps and the expansion repeats an 8 KiB
-	// pattern instead of deriving the challenges the proof claims:
-	//   blocks <= 256  <=>  (bitLen + 255) / 256 <= 256  <=>  bitLen <= 65536.
+	// This is ported from upstream e65fb36, but the upstream rationale does
+	// not transfer exactly: upstream's sampler tags each 256-bit expansion
+	// block with a single byte, so the tag itself wraps (and the sampler's
+	// output stops being the challenge the proof claims) once blocks > 256,
+	// i.e. bitLen > 65536 -- there, the bound is a correctness requirement.
+	// This fork's sampleYModN (mod_proof.go) instead tags each block with a
+	// 4-byte uint32 index, which does not wrap until 2^32 blocks (~2^40
+	// bits); the sampler here stays correct far past this ceiling.
 	//
-	// The same bound caps allocation: N arrives through the exported ModVerify
-	// and the mask, the expansion buffer and every sampled candidate are
-	// O(bitLen), so without it a 65537-bit modulus made one ModVerify call
-	// allocate and hash proportional to 8 KiB of challenge data times
-	// PARAM_M iterations. The wire path already pins moduli to
-	// verifyMinModulusBitLen (2048); the ceiling exists for the exported
-	// API, and it excludes nothing this library can produce.
+	// The bound is kept anyway as an allocation/operational cap, matching
+	// the width upstream chose for the same class of problem: N arrives
+	// through the exported ModVerify, and everything derived from it --
+	// common.IsUsableUnknownOrderModulus's ProbablyPrime call, the sampler's
+	// mask, expansion buffer, and every one of the PARAM_M candidates -- is
+	// O(bitLen), so without a ceiling an exported call allocates and hashes
+	// proportional to a caller-controlled, unbounded width. The wire path
+	// already pins a peer's modulus to exactly paillierBitsLen (2048) bits
+	// before any proof is verified, verifyMinModulusBitLen is that same
+	// 2048, and this ceiling is 32x it -- it excludes nothing this library's
+	// wire path can produce.
 	verifyMaxModulusBitLen = 65536
 )
 
