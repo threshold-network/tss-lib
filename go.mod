@@ -1,6 +1,6 @@
 module github.com/bnb-chain/tss-lib
 
-go 1.25.7
+go 1.25.6
 
 toolchain go1.26.8
 
