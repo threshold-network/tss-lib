@@ -151,9 +151,14 @@ func (publicKey *PublicKey) EncryptAndReturnRandomness(m *big.Int) (c *big.Int, 
 	// 1. gamma^m mod N2
 	var Gm *big.Int
 	if common.IsConstantTimeEnabled() {
-		// SECURITY: m is the (often secret) plaintext used as the exponent; exponentiate
-		// in constant time (N2 is odd).
-		Gm = common.NewCTModInt(N2).ExpCT(publicKey.Gamma(), m)
+		// SECURITY/PERFORMANCE: gamma = N+1, so by the binomial theorem
+		// gamma^m = sum_i C(m,i)*N^i, and every term with i>=2 carries a
+		// factor of N2, i.e. gamma^m == 1 + m*N (mod N2). The guard above
+		// bounds 0 <= m < N, so 1+m*N < N2 already holds -- this is the
+		// exact reduced value, not merely a congruence. m is the only secret
+		// operand; MulCT computes m*N mod N2 in constant time, replacing a
+		// full-width bigmod.Exp with one fixed-width multiply. N2 is odd.
+		Gm = new(big.Int).Add(common.NewCTModInt(N2).MulCT(m, publicKey.N), one)
 	} else {
 		Gm = new(big.Int).Exp(publicKey.Gamma(), m, N2)
 	}
@@ -180,8 +185,10 @@ func (publicKey *PublicKey) HomoMult(m, c1 *big.Int) (*big.Int, error) {
 	// cipher^m mod N2
 	if common.IsConstantTimeEnabled() {
 		// SECURITY: m is the secret scalar multiplier used as the exponent; exponentiate
-		// in constant time (N2 is odd).
-		return common.NewCTModInt(N2).ExpCT(c1, m), nil
+		// in constant time (N2 is odd). The guard above bounds 0 <= m < N, so
+		// N.BitLen() is a proven public bound narrower than N2's default width,
+		// halving the exponent padding bigmod.Exp works over.
+		return common.NewCTModInt(N2).ExpCTWithBitLen(c1, m, publicKey.N.BitLen()), nil
 	}
 	return common.ModInt(N2).Exp(c1, m), nil
 }
@@ -229,9 +236,16 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 	if useCT {
 		// SECURITY: constant-time exponentiation prevents leaking the secret
 		// exponent LambdaN through execution-time variation. N2 is odd.
+		// LambdaN = lcm(p-1,q-1) < (p-1)*(q-1) < N, so N.BitLen() is a proven
+		// public bound narrower than N2's default width for cExpLambda.
 		ctModN2 := common.NewCTModInt(N2)
-		cExpLambda = ctModN2.ExpCT(c, privateKey.LambdaN)
-		gammaExpLambda = ctModN2.ExpCT(privateKey.Gamma(), privateKey.LambdaN)
+		cExpLambda = ctModN2.ExpCTWithBitLen(c, privateKey.LambdaN, privateKey.N.BitLen())
+		// gamma^LambdaN mod N2 is (N+1)^LambdaN mod N2; by the same binomial
+		// identity used in EncryptAndReturnRandomness, this is exactly
+		// 1 + LambdaN*N (mod N2) for every integer LambdaN (the higher-order
+		// binomial terms vanish mod N2), so one constant-time multiply
+		// replaces a second full-width bigmod.Exp.
+		gammaExpLambda = new(big.Int).Add(ctModN2.MulCT(privateKey.LambdaN, privateKey.N), one)
 	} else {
 		cExpLambda = new(big.Int).Exp(c, privateKey.LambdaN, N2)
 		gammaExpLambda = new(big.Int).Exp(privateKey.Gamma(), privateKey.LambdaN, N2)
