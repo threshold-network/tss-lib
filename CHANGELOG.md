@@ -49,6 +49,7 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #32** — live current/historical mixed-binary signing interoperability harness.
 - **PR #33** — signing-context, message-boundary, and round-readiness regression coverage.
 - **PR #34** — shared proof-verifier resource bounds and `ModProof` context reuse.
+- **PR #36** — publish complete signing-round state before outbound messages.
 
 ### ⚠️ Compatibility — read before upgrading
 
@@ -174,6 +175,10 @@ and the PR #9 entry below):
   harness exchanges real current/historical messages through round 8. It does
   not claim final signature completion because the pinned fixture supplies
   only two shares from a threshold-10 key set.
+- **Signing state publication (PR #36):** rounds 5 and 7 finish storing their
+  local state before emitting the corresponding outbound message. This makes
+  message receipt a valid synchronization boundary for concurrent drivers;
+  wire bytes and protocol arithmetic are unchanged.
 
 ### Breaking changes
 
