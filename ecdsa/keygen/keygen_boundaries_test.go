@@ -12,12 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/bnb-chain/tss-lib/common"
-	"github.com/bnb-chain/tss-lib/crypto"
 	"github.com/bnb-chain/tss-lib/crypto/commitments"
-	"github.com/bnb-chain/tss-lib/crypto/dlnproof"
-	"github.com/bnb-chain/tss-lib/crypto/paillier"
-	"github.com/bnb-chain/tss-lib/crypto/vss"
 	"github.com/bnb-chain/tss-lib/tss"
 )
 
@@ -57,79 +52,58 @@ func keygenRound1ReadinessFixture(t *testing.T, n int) (*round1, tss.SortedParty
 	return &round1{base}, pIDs
 }
 
-// buildMinimalKGRound1Message constructs a valid KGRound1Message for testing.
-// Uses real fixture pre-params for cryptographic correctness.
-func buildMinimalKGRound1Message(t *testing.T, from *tss.PartyID, fixtureIdx int) tss.ParsedMessage {
+// buildMinimalKGRound1Message constructs a minimal valid KGRound1Message for testing.
+// Round1.Update only checks CanAccept (type + IsBroadcast), not cryptographic content.
+// We construct a ParsedMessage directly with the correct content type and broadcast flag.
+func buildMinimalKGRound1Message(t *testing.T, from *tss.PartyID) tss.ParsedMessage {
 	t.Helper()
 
-	// Load enough fixtures to satisfy the threshold (which is 3 for n=4)
-	fixtureCount := 4 // threshold = 3, need 4 parties for VSS
-	keys, pIDs, err := LoadKeygenTestFixtures(fixtureCount)
-	require.NoError(t, err)
-	fixture := keys[fixtureIdx]
+	// Minimal content with correct type
+	content := &KGRound1Message{
+		Commitment: commitments.NewHashCommitment(big.NewInt(1)).C.Bytes(),
+		PaillierN:  big.NewInt(1).Bytes(),
+		NTilde:     big.NewInt(1).Bytes(),
+		H1:         big.NewInt(1).Bytes(),
+		H2:         big.NewInt(1).Bytes(),
+		Dlnproof_1: &KGRound1Message_DLNProof{
+			Alpha: [][]byte{{1}},
+			T:     [][]byte{{1}},
+		},
+		Dlnproof_2: &KGRound1Message_DLNProof{
+			Alpha: [][]byte{{1}},
+			T:     [][]byte{{1}},
+		},
+		Modproof: &KGRound1Message_ModProof{
+			W: big.NewInt(1).Bytes(),
+			X: [][]byte{{1}},
+			A: []bool{true},
+			B: []bool{true},
+			Z: [][]byte{{1}},
+		},
+		ModproofTilde: &KGRound1Message_ModProof{
+			W: big.NewInt(1).Bytes(),
+			X: [][]byte{{1}},
+			A: []bool{true},
+			B: []bool{true},
+			Z: [][]byte{{1}},
+		},
+	}
 
-	preParams := fixture.LocalPreParams
-	require.True(t, preParams.ValidateWithProof(), "fixture must have pre-params with proof")
-
-	// Commitment: need at least threshold+1 parties for VSS
-	ec := tss.S256()
-	vs, _, err := vss.Create(ec, fixtureCount-1, common.GetRandomPositiveInt(ec.Params().N), pIDs.Keys())
-	require.NoError(t, err)
-	pGFlat, err := crypto.FlattenECPoints(vs)
-	require.NoError(t, err)
-	cmt := commitments.NewHashCommitment(pGFlat...)
-
-	// DLN proofs (legacy, no session)
-	h1i, h2i, alpha, beta, p, q, NTildei :=
-		preParams.H1i,
-		preParams.H2i,
-		preParams.Alpha,
-		preParams.Beta,
-		preParams.P,
-		preParams.Q,
-		preParams.NTildei
-
-	dlnProof1 := dlnproof.NewDLNProof(
-		h1i, h2i, alpha, p, q, NTildei,
-	)
-	dlnProof2 := dlnproof.NewDLNProof(
-		h2i, h1i, beta, p, q, NTildei,
-	)
-
-	// Mod proofs (legacy, no session)
-	modProof := preParams.PaillierSK.ModProof()
-	pp := new(big.Int).Add(p, p)
-	qq := new(big.Int).Add(q, q)
-	phiNTilde := new(big.Int).Mul(pp, qq)
-	gcdTilde := new(big.Int).GCD(nil, nil, pp, qq)
-	lambdaNTilde := new(big.Int).Div(phiNTilde, gcdTilde)
-	pkTilde := &paillier.PublicKey{N: NTildei}
-	skTilde := &paillier.PrivateKey{PublicKey: *pkTilde, LambdaN: lambdaNTilde, PhiN: phiNTilde}
-	modProofTilde := skTilde.ModProof()
-
-	msg, err := NewKGRound1Message(
-		from,
-		cmt.C,
-		&preParams.PaillierSK.PublicKey,
-		NTildei,
-		h1i,
-		h2i,
-		dlnProof1,
-		dlnProof2,
-		modProof,
-		modProofTilde,
-	)
-	require.NoError(t, err)
-	return msg
+	meta := tss.MessageRouting{
+		From:        from,
+		IsBroadcast: true,
+	}
+	wrapper := tss.NewMessageWrapper(meta, content)
+	return tss.NewMessage(meta, content, wrapper)
 }
 
 func TestKeygenRound1OutOfOrderReadinessAccumulation(t *testing.T) {
-	n := 3 // self + 2 peers (indices 0,1,2) (need later-ready peer after earlier-incomplete)
+	n := 3 // self + 2 peers (indices 0,1,2)
 	rnd, pIDs := keygenRound1ReadinessFixture(t, n)
 
-	// Build real KGRound1Messages from fixtures for peers 1 and 2
-	msgPeer1 := buildMinimalKGRound1Message(t, pIDs[1], 1)
-	msgPeer2 := buildMinimalKGRound1Message(t, pIDs[2], 2)
+	// Build minimal KGRound1Messages for peers 1 and 2
+	msgPeer1 := buildMinimalKGRound1Message(t, pIDs[1])
+	msgPeer2 := buildMinimalKGRound1Message(t, pIDs[2])
 
 	// First delivery: peer 2 (later index) complete, peer 1 (earlier index) incomplete
 	rnd.temp.kgRound1Messages[2] = msgPeer2
