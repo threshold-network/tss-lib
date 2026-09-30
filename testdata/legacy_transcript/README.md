@@ -61,3 +61,82 @@ prunes nested modules from a parent module zip, while ordinary fixture files are
 part of the immutable module keep-core downloads. The pinned fixture therefore
 makes the historical identity independent of a developer's module cache without
 disappearing from the release artifact being qualified.
+
+## Mixed-binary legacy signing interop harness
+
+`verify.sh`'s oracle proves byte-for-byte proof compatibility from fixed,
+pre-recorded transcripts. It never runs an actual historical binary, so it
+cannot by itself prove that a *live* historical peer and a live current peer
+can complete a real signing exchange together. `verify_mixed_interop.sh`
+closes that gap: it drives a genuine two-process ECDSA signing ceremony
+between this checked-out (current) implementation and a subprocess running
+the pinned historical `threshold-network/tss-lib@2e712689` commit (the same
+commit qualified above), exchanging real GG18/GG20 round wire messages.
+
+```sh
+./testdata/legacy_transcript/verify_mixed_interop.sh
+```
+
+`historical_signer/main.go` is copied into a temporary module built from the
+same `historical/go.mod.fixture`/`historical/go.sum.fixture` pin as the
+oracle, exactly like `verify.sh`'s pattern. It drives one live historical
+`ecdsa/signing.LocalParty` (party index 1, "Bob") over a bounded,
+newline-delimited JSON protocol on stdin/stdout: `init`/`deliver`/`quit`
+commands in, `message`/`signature`/`error`/`turn_done` events out. No network
+access happens at run time; the pinned module must already be in the local
+module cache (the same precondition `verify.sh` has always had).
+
+`mixed_interop/main.go` is the current-side orchestrator (`go run` from the
+repository root, matching the oracle). For a fixed 2-of-20 `keygen_data_0/1`
+fixture pair, deterministic seeds, and a fixed message, it drives three
+scenarios:
+
+- **reject**: a current party with `tss.ProtocolModeLegacy` and the default
+  (off) `SetLegacyHistoricalBobCompatibility` opts asserts that round 3 fails
+  closed against the historical peer's live, real Bob/BobWC proof, whose T1
+  witness (recovered from the actual wire bytes via
+  `SignRound2Message.UnmarshalProofBob`/`UnmarshalProofBobWC`, not a
+  hand-picked value) is asserted to exceed the default tight `N + q^6` bound.
+- **accept**: the identical exchange with `SetLegacyHistoricalBobCompatibility(true)`
+  set before construction; round 3 succeeds and the ceremony provably
+  continues through round 8 (both directions), proving the current party
+  didn't just tolerate the historical proof but kept advancing the protocol
+  with the historical peer afterward.
+- **homogeneous-control**: two current-implementation parties, no historical
+  subprocess at all, complete the identical ceremony shape under the default
+  configuration — proof that "reject" above is specific to the historical
+  witness range and not a general legacy-mode defect. This scenario is never
+  substituted for the cross-version exchanges above.
+
+All three scenarios deliberately stop once a party's own round 8 message
+appears (never delivering a round-8-or-later message onward): this
+repository's own `round3Fixture` (`ecdsa/signing/round_3_test.go`) and
+`historicalBobProofForWitnessY`
+(`crypto/mta/legacy_bob_historical_witness_test.go`) already establish the
+precedent of driving a 2-of-20 minimal subset of the `test/_ecdsa_fixtures`
+keygen fixtures (threshold 1, not the fixture set's real threshold 10) for
+this exact class of round-level interop check. That minimal subset is
+sufficient for every per-peer MtA/Schnorr check through round 8 (each is a
+property of the two parties' own consistent local computation), but round 9's
+final aggregate check (`U == T`) verifies a *global* Shamir reconstruction
+identity that only holds for a correctly-sized threshold+1 co-signer set.
+Reaching a real, live-exchanged round 8 message already proves the historical
+Bob/BobWC witness was accepted and every subsequent round 3–8
+verification/decommitment step (Bob_end, the Gamma/Schnorr proofs, and both
+decommitments) succeeded against a genuine historical binary. Driving a full,
+globally-valid signature to completion is possible but requires
+`testThreshold+1` (11) correctly-thresholded co-signers rather than an
+arbitrary 2-of-20 subset — substantially more harness complexity for a
+property (global reconstruction validity) that is orthogonal to the specific
+Bob/BobWC compatibility mechanism this harness exists to exercise.
+
+The exact witness scalar values are not byte-reproducible run to run: signing
+round 2 (`ecdsa/signing/round_2.go`) draws the Bob and BobWC witnesses from
+two goroutines running concurrently against the process-global
+`crypto/rand.Reader`, so which goroutine consumes which slice of the
+deterministic keystream is scheduler-dependent. Every run nonetheless
+deterministically reproduces the *qualitative* property under test — a high
+witness that exceeds the tight bound, a closed-by-default rejection, and an
+opt-in acceptance that keeps progressing — which is what `verify_mixed_interop.sh`
+asserts and fails on.
+
