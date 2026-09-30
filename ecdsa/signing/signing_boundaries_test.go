@@ -9,6 +9,7 @@ package signing
 import (
 	"context"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,8 +28,8 @@ import (
 
 // securityV2CeremonyAbortFixture constructs N parties from keygen fixtures with
 // the given message and width overrides per party. Returns parties, their out
-// channels, end channels, and the peer context used for routing.
-func securityV2CeremonyAbortFixture(t *testing.T, n int, overrides func(i int) (*big.Int, int)) ([]*LocalParty, []chan tss.Message, []chan common.SignatureData, *tss.PeerContext) {
+// channels, and end channels.
+func securityV2CeremonyAbortFixture(t *testing.T, n int, overrides func(i int) (*big.Int, int)) ([]*LocalParty, []chan tss.Message, []chan common.SignatureData) {
 	t.Helper()
 
 	keys, signPIDs, err := keygen.LoadKeygenTestFixtures(n)
@@ -59,7 +60,7 @@ func securityV2CeremonyAbortFixture(t *testing.T, n int, overrides func(i int) (
 		P := NewLocalParty(msg, params, keys[i], outCh, endCh, width).(*LocalParty)
 		parties[i] = P
 	}
-	return parties, outChs, endChs, p2pCtx
+	return parties, outChs, endChs
 }
 
 // startAllAndAwait starts every party concurrently and blocks until every
@@ -84,117 +85,187 @@ func startAllAndAwait(parties []*LocalParty) []*tss.Error {
 	return errs
 }
 
-// drainOwnRound1Output drains a party's own out channel of its round-1
-// emission (n-1 directed messages + 1 broadcast = n messages), so that a
-// later round-2 emission (on unexpected success) cannot block on a full
-// channel.
-func drainOwnRound1Output(t *testing.T, outCh chan tss.Message, n int) {
+// collectRound1MessagesForTargets drains every party's round-1 output exactly
+// once (n messages per party: n-1 directed + 1 broadcast) and partitions the
+// messages addressed to target0 and target1 (a broadcast message is
+// delivered to both targets except the originating target itself, which
+// already has its own broadcast stored locally by Start(); a directed
+// message only goes to its specific recipient). Draining every party's own
+// channel, not just the two targets', also guards against a full
+// out-channel deadlocking a later round if the SSID check regresses and
+// round 2 unexpectedly succeeds.
+func collectRound1MessagesForTargets(
+	t *testing.T,
+	parties []*LocalParty,
+	outChs []chan tss.Message,
+	target0, target1 *tss.PartyID,
+) (forTarget0, forTarget1 []tss.ParsedMessage) {
 	t.Helper()
-	for range n {
-		select {
-		case <-outCh:
-		case <-time.After(time.Second):
-			t.Fatal("timed out draining party's own round-1 output")
-		}
-	}
-}
+	n := len(parties)
 
-// collectRound1Messages drains each peer's out channel and returns the
-// round-1 messages intended for the target party (directed to target, or broadcast).
-func collectRound1Messages(t *testing.T, parties []*LocalParty, outChs []chan tss.Message, target *tss.PartyID) []tss.ParsedMessage {
-	t.Helper()
-
-	var msgs []tss.ParsedMessage
 	for i, P := range parties {
-		if P.PartyID().Index == target.Index {
-			continue
-		}
-		// Each peer emits (n-1) directed messages and 1 broadcast; drain all.
-		for range len(parties) {
+		for range n {
+			var msg tss.Message
 			select {
-			case msg := <-outChs[i]:
-				if dest := msg.GetTo(); dest == nil || dest[0].Index == target.Index {
-					bz, _, err := msg.WireBytes()
-					require.NoError(t, err)
-					parsed, err := tss.ParseWireMessage(bz, msg.GetFrom(), msg.IsBroadcast())
-					require.NoError(t, err)
-					msgs = append(msgs, parsed)
-				}
+			case msg = <-outChs[i]:
 			case <-time.After(time.Second):
-				t.Fatal("timed out collecting round-1 messages from peer")
+				t.Fatalf("timed out draining round-1 output from party %d", i)
+			}
+
+			dest := msg.GetTo()
+			isBroadcast := dest == nil
+			wantsTarget := func(target *tss.PartyID) bool {
+				if P.PartyID().Index == target.Index {
+					// The sender's own broadcast is already stored locally by
+					// its own Start(); it never needs to be delivered back.
+					return false
+				}
+				return isBroadcast || dest[0].Index == target.Index
+			}
+
+			want0 := wantsTarget(target0)
+			want1 := wantsTarget(target1)
+			if !want0 && !want1 {
+				continue
+			}
+
+			bz, _, err := msg.WireBytes()
+			require.NoError(t, err)
+			parsed, err := tss.ParseWireMessage(bz, msg.GetFrom(), msg.IsBroadcast())
+			require.NoError(t, err)
+
+			if want0 {
+				forTarget0 = append(forTarget0, parsed)
+			}
+			if want1 {
+				forTarget1 = append(forTarget1, parsed)
 			}
 		}
 	}
-	return msgs
+	return
 }
 
-// assertOpposingCulpritAndNoSignature drives the mismatch scenario: starts
-// all parties, drains party 0's own round-1 output (deadlock guard), feeds
-// party 0 every peer round-1 message, and asserts round-2 aborts with the
-// opposing party attributed among the culprits (BobMid and BobMidWC may both
-// attribute to the same peer, so the culprit set can contain a duplicate).
-// Asserts no signature is produced on any party's end channel within a
-// bounded deadline.
-func assertOpposingCulpritAndNoSignature(t *testing.T, n int, overrides func(i int) (*big.Int, int)) {
+// assertNoSignatureWithinWindow concurrently monitors every end channel for
+// the given window, so that channels later in the slice are not shortchanged
+// by a shared timeout that already elapsed while sequentially checking
+// earlier ones (which could randomly mask an already-buffered signature via
+// select's race between a ready channel and an already-canceled context). A
+// final nonblocking check per channel, with no competing canceled context,
+// guards against a signature buffered exactly at the window boundary.
+func assertNoSignatureWithinWindow(t *testing.T, endChs []chan common.SignatureData, window time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), window)
+	defer cancel()
+
+	got := make([]bool, len(endChs))
+	var wg sync.WaitGroup
+	for i, endCh := range endChs {
+		wg.Add(1)
+		go func(i int, endCh chan common.SignatureData) {
+			defer wg.Done()
+			select {
+			case <-endCh:
+				got[i] = true
+			case <-ctx.Done():
+			}
+		}(i, endCh)
+	}
+	wg.Wait()
+
+	// Final nonblocking check with no competing canceled context: catches a
+	// signature buffered exactly at the boundary that the racy select above
+	// could have missed by resolving via ctx.Done() instead of the ready endCh.
+	for i, endCh := range endChs {
+		if got[i] {
+			continue
+		}
+		select {
+		case <-endCh:
+			got[i] = true
+		default:
+		}
+	}
+
+	for i, produced := range got {
+		if produced {
+			t.Errorf("party %d produced a signature despite mismatched context", i)
+		}
+	}
+}
+
+// culpritIndexSet returns the unique set of party indices among err's culprits.
+func culpritIndexSet(err *tss.Error) map[int]struct{} {
+	set := make(map[int]struct{})
+	for _, c := range err.Culprits() {
+		set[c.Index] = struct{}{}
+	}
+	return set
+}
+
+func indexSet(pids ...*tss.PartyID) map[int]struct{} {
+	set := make(map[int]struct{}, len(pids))
+	for _, p := range pids {
+		set[p.Index] = struct{}{}
+	}
+	return set
+}
+
+// assertOpposingCulpritsAndNoSignature drives the mismatch scenario from both
+// receivers' viewpoints. Party 0 (majority context) should reject only the
+// single opposing party (party 1), since every other peer shares party 0's
+// context. Party 1 (minority context) should reject every other party, since
+// its own SSID differs from all of them. Both must abort in round 2 (the
+// first proof-verification stage) with the exact expected culprit set, and
+// no party may ever produce a signature.
+func assertOpposingCulpritsAndNoSignature(t *testing.T, n int, overrides func(i int) (*big.Int, int)) {
 	t.Helper()
 
-	parties, outChs, endChs, _ := securityV2CeremonyAbortFixture(t, n, overrides)
+	parties, outChs, endChs := securityV2CeremonyAbortFixture(t, n, overrides)
 
-	// Start every party and await completion before touching any channel.
 	startErrs := startAllAndAwait(parties)
 	for i, err := range startErrs {
 		require.Nil(t, err, "party %d Start must not fail in round 1", i)
 	}
 
-	// Drain party 0's own round-1 emission so a possible (regressed) round-2
-	// success cannot block on a full out channel.
-	drainOwnRound1Output(t, outChs[0], n)
+	msgsFor0, msgsFor1 := collectRound1MessagesForTargets(t, parties, outChs, parties[0].PartyID(), parties[1].PartyID())
 
-	// Collect round-1 messages destined for party 0 from every peer.
-	msgs := collectRound1Messages(t, parties, outChs, parties[0].PartyID())
-
-	// Feed messages to party 0; the message that completes round 1 triggers
-	// round-2 Start synchronously and returns its error (if any).
-	var lastErr *tss.Error
-	for _, msg := range msgs {
+	var lastErr0 *tss.Error
+	for _, msg := range msgsFor0 {
 		_, err := parties[0].Update(msg)
 		if err != nil {
-			lastErr = err
+			lastErr0 = err
+		}
+	}
+	var lastErr1 *tss.Error
+	for _, msg := range msgsFor1 {
+		_, err := parties[1].Update(msg)
+		if err != nil {
+			lastErr1 = err
 		}
 	}
 
-	require.NotNil(t, lastErr, "expected round-2 proof verification to fail")
-	require.Equal(t, 2, lastErr.Round(), "abort must occur in round 2, the first proof-verification stage")
+	// Party 0 (majority context) only disagrees with party 1.
+	require.NotNil(t, lastErr0, "party 0 expected round-2 proof verification to fail")
+	require.Equal(t, 2, lastErr0.Round(), "party 0 abort must occur in round 2")
+	require.NotEmpty(t, lastErr0.Culprits())
+	wantCulprits0 := indexSet(parties[1].PartyID())
+	require.Equal(t, wantCulprits0, culpritIndexSet(lastErr0), "party 0's culprit set must be exactly the opposing party")
 
-	// Culprits must include the opposing party (party 1). BobMid and BobMidWC
-	// both attribute failures to the same peer, so the culprit set is
-	// expected to contain that party's ID (possibly more than once).
-	require.NotEmpty(t, lastErr.Culprits(), "culprits must be attributed to the peer with mismatched context")
-	opposingIdx := parties[1].PartyID().Index
-	found := false
-	for _, c := range lastErr.Culprits() {
-		if c.Index == opposingIdx {
-			found = true
-			break
+	// Party 1 (minority context) disagrees with every other party.
+	require.NotNil(t, lastErr1, "party 1 expected round-2 proof verification to fail")
+	require.Equal(t, 2, lastErr1.Round(), "party 1 abort must occur in round 2")
+	require.NotEmpty(t, lastErr1.Culprits())
+	wantOthers := make([]*tss.PartyID, 0, n-1)
+	for i, P := range parties {
+		if i == 1 {
+			continue
 		}
+		wantOthers = append(wantOthers, P.PartyID())
 	}
-	require.True(t, found, "culprit set must include the party with the mismatched context")
-	for _, c := range lastErr.Culprits() {
-		require.Equal(t, opposingIdx, c.Index, "every culprit must be the single opposing party, not an unrelated peer")
-	}
+	wantCulprits1 := indexSet(wantOthers...)
+	require.Equal(t, wantCulprits1, culpritIndexSet(lastErr1), "party 1's culprit set must be every other party")
 
-	// No signature may be produced on any end channel; give a bounded
-	// deadline in case the check above regressed and the ceremony proceeded.
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	for i, endCh := range endChs {
-		select {
-		case <-endCh:
-			t.Errorf("party %d produced a signature despite mismatched context", i)
-		case <-ctx.Done():
-			// timeout expected; no signature was produced
-		}
-	}
+	assertNoSignatureWithinWindow(t, endChs, 500*time.Millisecond)
 }
 
 func TestSecurityV2CeremonyAbortsOnMessageMismatch(t *testing.T) {
@@ -206,7 +277,7 @@ func TestSecurityV2CeremonyAbortsOnMessageMismatch(t *testing.T) {
 			}
 			return big.NewInt(42), 32
 		}
-		assertOpposingCulpritAndNoSignature(t, n, overrides)
+		assertOpposingCulpritsAndNoSignature(t, n, overrides)
 	})
 
 	t.Run("opposingPartyUsesDifferentFullBytesLen", func(t *testing.T) {
@@ -217,7 +288,7 @@ func TestSecurityV2CeremonyAbortsOnMessageMismatch(t *testing.T) {
 			}
 			return big.NewInt(42), 32
 		}
-		assertOpposingCulpritAndNoSignature(t, n, overrides)
+		assertOpposingCulpritsAndNoSignature(t, n, overrides)
 	})
 }
 
