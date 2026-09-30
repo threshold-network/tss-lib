@@ -163,7 +163,7 @@ func TestBobProofUnequalWidthsCTEquivalence(t *testing.T) {
 //
 // The protocol's internal Verify calls must complete, so the keygen fixture's ~2048-bit
 // auxiliary moduli are used instead of #10's tiny 11*23 modulus, which the current
-// hardened verifiers reject (verifyMinModulusBitLen floor). The witness betaPrm is a
+// hardened verifiers reject (MinUnknownOrderModulusBitLen floor). The witness betaPrm is a
 // q5-width random that can approach the public plaintext domain width; it is a valid
 // Paillier plaintext and the homomorphic result does not wrap the domain.
 func TestShareProtocolUnequalWidthsCTEquivalence(t *testing.T) {
@@ -177,8 +177,8 @@ func TestShareProtocolUnequalWidthsCTEquivalence(t *testing.T) {
 	require.NoError(t, err)
 	// The fixture auxiliary moduli must clear the verifier floor so the full share
 	// protocol's internal Verify calls complete.
-	require.True(t, common.IsUsableUnknownOrderModulus(NTildei, verifyMinModulusBitLen), "fixture auxiliary modulus must clear the verifier floor")
-	require.True(t, common.IsUsableUnknownOrderModulus(NTildej, verifyMinModulusBitLen), "fixture auxiliary modulus must clear the verifier floor")
+	require.True(t, common.IsUsableUnknownOrderModulus(NTildei, common.MinUnknownOrderModulusBitLen), "fixture auxiliary modulus must clear the verifier floor")
+	require.True(t, common.IsUsableUnknownOrderModulus(NTildej, common.MinUnknownOrderModulusBitLen), "fixture auxiliary modulus must clear the verifier floor")
 
 	a, b := big.NewInt(1<<24+3), big.NewInt(1<<32+5)
 	B := crypto.ScalarBaseMult(tss.EC(), b)

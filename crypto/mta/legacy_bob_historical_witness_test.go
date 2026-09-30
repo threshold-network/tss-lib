@@ -88,15 +88,10 @@ func TestLegacyBobWidenedVerifierAcceptsHistoricalWitnessRange(t *testing.T) {
 	q5 := new(big.Int).Exp(q, big.NewInt(5), nil)
 	q6 := new(big.Int).Mul(q5, q)
 	tightMaxT1 := new(big.Int).Add(pk.N, q6)
-	widenedMaxT1 := legacyT1Max(ec, pk, true)
+	widenedMaxT1 := new(big.Int).Mul(new(big.Int).Add(q, big.NewInt(1)), pk.N)
 	// The widened bound must be exactly the historical witness-range bound:
 	// T1 = e*y + gamma with e < q, y < N, gamma < N gives T1 < q*N + N.
-	if widenedMaxT1.Cmp(new(big.Int).Mul(new(big.Int).Add(q, big.NewInt(1)), pk.N)) != 0 {
-		t.Fatal("widened legacy T1 bound is not (q+1)*N")
-	}
-	if legacyT1Max(ec, pk, false).Cmp(tightMaxT1) != 0 {
-		t.Fatal("tight legacy T1 bound is not N + q^6")
-	}
+	// (The verifier computes it inline in VerifyLegacy when compat is on.)
 
 	X := crypto.ScalarBaseMult(ec, x)
 	cases := []struct {
@@ -168,9 +163,11 @@ func TestLegacyHistoricalWitnessRangeRejectsWiderT1(t *testing.T) {
 	c1 := fixedPaillierEncryption(pk, big.NewInt(5), firstSmallUnit(pk.N, 3))
 	y := new(big.Int).Sub(pk.N, big.NewInt(1))
 	bobProof, c2 := historicalBobProofForWitnessY(t, ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, x, y, r, nil)
-
-	if bobProof.T1.Cmp(legacyT1Max(ec, pk, false)) < 0 {
-		t.Fatal("y = N - 1 witness did not place T1 above the tight bound; the y = N-T wrap family is not exercised")
+	// The shared verify core owns the default tight legacy bound: N + q^6.
+	q6 := new(big.Int).Exp(ec.Params().N, big.NewInt(6), nil)
+	tightT1Max := new(big.Int).Add(pk.N, q6)
+	if bobProof.T1.Cmp(tightT1Max) < 0 {
+		t.Fatal("y = N - 1 witness did not place T1 above the tight N + q^6 bound; the y = N-T wrap family is not exercised")
 	}
 	if _, err := AliceEnd(ec, pk, bobProof.ProofBob, aux.H1i, aux.H2i, c1, c2, aux.NTildei, owner.PaillierSK); err == nil {
 		t.Fatal("default AliceEnd accepted a proof with T1 above the tight bound")
@@ -195,8 +192,8 @@ func TestLegacyHistoricalWitnessRangeRejectsWiderT1(t *testing.T) {
 
 	X := crypto.ScalarBaseMult(ec, x)
 	wcProof, _ := historicalBobProofForWitnessY(t, ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, x, y, r, X)
-	if wcProof.T1.Cmp(legacyT1Max(ec, pk, false)) < 0 {
-		t.Fatal("y = N - 1 WC witness did not place T1 above the tight bound; the y = N-T wrap family is not exercised")
+	if wcProof.T1.Cmp(tightT1Max) < 0 {
+		t.Fatal("y = N - 1 WC witness did not place T1 above the tight N + q^6 bound; the y = N-T wrap family is not exercised")
 	}
 	if _, err := AliceEndWC(ec, pk, wcProof, X, c1, c2, aux.NTildei, aux.H1i, aux.H2i, owner.PaillierSK); err == nil {
 		t.Fatal("default AliceEndWC accepted a proof with T1 above the tight bound")

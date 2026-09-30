@@ -230,32 +230,15 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 	return pf.verify(ec, pk, NTilde, h1, h2, c1, c2, X, optionalProofSession(session), nil)
 }
 
-// legacyT1Max returns the exclusive T1 upper bound for the session-less
-// legacy Bob/BobWC verifier.
-//
-// The tight bound N + q^6 admits this implementation's own legacy prover:
-// T1 = e*y + gamma with e < q, y < q^5 and gamma < N, so an honest legacy
-// response is below q^6 + N.
-//
-// The widened bound (q+1)*N admits the historical (2e712689) BobMid/BobMidWC
-// witness range, which samples y below the Paillier modulus: T1 = e*y + gamma
-// with e < q, y < N, gamma < N, hence T1 < (q-1)*N + N < (q+1)*N.
-func legacyT1Max(ec elliptic.Curve, pk *paillier.PublicKey, historicalBobCompat bool) *big.Int {
-	if historicalBobCompat {
-		return new(big.Int).Mul(new(big.Int).Add(ec.Params().N, one), pk.N)
-	}
-	q := ec.Params().N
-	q3 := new(big.Int).Mul(q, q)
-	q3 = new(big.Int).Mul(q, q3)
-	q6 := new(big.Int).Mul(q3, q3)
-	return new(big.Int).Add(pk.N, q6)
-}
-
 // VerifyLegacy verifies a session-less legacy Bob/BobWC proof (the exact
 // 2e712689 untagged challenge). It is the explicit compatibility-aware entry
-// point used by signing round 3 for legacy parties: the default bound is the
-// tight N + q^6 cap, and historicalBobCompat widens it to the historical
-// witness-range bound (q+1)*N described on legacyT1Max.
+// point used by signing round 3 for legacy parties. The shared verify core
+// owns the default tight legacy bound, N + q^6: the session-less prover
+// samples y below q^5 with T1 = e*y + gamma, e < q, gamma < N, so an honest
+// legacy response stays below q^6 + N. historicalBobCompat passes the
+// widened historical witness-range bound (q+1)*N as an explicit override,
+// computed and passed only in that case; every other entry point gets the
+// core's tight bound.
 func (pf *ProofBobWC) VerifyLegacy(
 	ec elliptic.Curve,
 	pk *paillier.PublicKey,
@@ -263,7 +246,14 @@ func (pf *ProofBobWC) VerifyLegacy(
 	X *crypto.ECPoint,
 	historicalBobCompat bool,
 ) bool {
-	return pf.verify(ec, pk, NTilde, h1, h2, c1, c2, X, nil, legacyT1Max(ec, pk, historicalBobCompat))
+	var maxT1Override *big.Int
+	if historicalBobCompat {
+		// The historical (2e712689) prover samples y below the Paillier
+		// modulus: T1 = e*y + gamma with e < q, y < N, gamma < N, hence
+		// T1 < (q-1)*N + N < (q+1)*N.
+		maxT1Override = new(big.Int).Mul(new(big.Int).Add(ec.Params().N, one), pk.N)
+	}
+	return pf.verify(ec, pk, NTilde, h1, h2, c1, c2, X, nil, maxT1Override)
 }
 
 // verify is the shared Bob/BobWC verification core. maxT1Override, when
@@ -290,8 +280,15 @@ func (pf *ProofBobWC) verify(
 	} else if !pf.ProofBob.ValidateBasic() {
 		return false
 	}
-	if !common.IsUsableUnknownOrderModulus(pk.N, verifyMinModulusBitLen) ||
-		!common.IsUsableUnknownOrderModulus(NTilde, verifyMinModulusBitLen) {
+	// Width policy: reject caller-supplied moduli wider than the shared
+	// ceiling before IsUsableUnknownOrderModulus's ProbablyPrime call or any
+	// modulus-sized work is run against them.
+	if common.ExceedsUnknownOrderModulusCeiling(pk.N) ||
+		common.ExceedsUnknownOrderModulusCeiling(NTilde) {
+		return false
+	}
+	if !common.IsUsableUnknownOrderModulus(pk.N, common.MinUnknownOrderModulusBitLen) ||
+		!common.IsUsableUnknownOrderModulus(NTilde, common.MinUnknownOrderModulusBitLen) {
 		return false
 	}
 	if !common.IsCanonicalGenerator(NTilde, h1) || !common.IsCanonicalGenerator(NTilde, h2) || h1.Cmp(h2) == 0 {
@@ -578,7 +575,7 @@ func (pf *ProofBob) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1
 
 // ProveBob.VerifyLegacy is the explicit compatibility-aware session-less
 // counterpart of ProveBob.Verify: historicalBobCompat widens the T1 bound to
-// the historical witness range per legacyT1Max; the prover and every other
+// the historical witness range via VerifyLegacy's (q+1)*N override; the prover and every other
 // check are unchanged.
 func (pf *ProofBob) VerifyLegacy(
 	ec elliptic.Curve,
