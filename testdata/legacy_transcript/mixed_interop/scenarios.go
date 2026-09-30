@@ -96,14 +96,15 @@ func roundNumberOf(m tss.Message) int {
 
 type scenarioResult struct {
 	Name string `json:"name"`
-	// Behavioral: default rejection. RejectionRound/RejectionCulpritIsPeer
+	// Behavioral: default rejection. RejectionRound and the peer culprit count
 	// come from *tss.Error's structured Round()/Culprits() accessors, never
-	// from parsing RejectionErr's text.
-	DefaultRejected        bool   `json:"default_rejected"`
-	RejectionRound         int    `json:"rejection_round,omitempty"`
-	RejectionCulpritIsPeer bool   `json:"rejection_culprit_is_peer"`
-	AliceEmittedRound3     bool   `json:"alice_emitted_round3"`
-	RejectionErr           string `json:"rejection_err,omitempty"`
+	// from parsing RejectionErr's text. Both round-3 verifier goroutines must
+	// independently attribute their failure to the historical peer.
+	DefaultRejected           bool   `json:"default_rejected"`
+	RejectionRound            int    `json:"rejection_round,omitempty"`
+	RejectionPeerCulpritCount int    `json:"rejection_peer_culprit_count"`
+	AliceEmittedRound3        bool   `json:"alice_emitted_round3"`
+	RejectionErr              string `json:"rejection_err,omitempty"`
 	// Behavioral: acceptance/progress
 	Accepted        bool `json:"accepted"`
 	AliceProgressed bool `json:"alice_progressed"`
@@ -404,16 +405,17 @@ pump:
 				result.DefaultRejected = true
 				result.RejectionErr = aErr.Error()
 				// Structural (non-text) constraints on the rejection: it
-				// must be tss.Error's own Round()==3, and the historical
-				// peer (partyIDs[1]) must be among its Culprits() — never
-				// inferred by parsing the error string.
+				// must be tss.Error's own Round()==3, and both production
+				// verifier failures must attribute the historical peer.
 				result.RejectionRound = aErr.Round()
 				for _, culprit := range aErr.Culprits() {
 					if culprit.Index == partyIDs[1].Index {
-						result.RejectionCulpritIsPeer = true
-						break
+						result.RejectionPeerCulpritCount++
 					}
 				}
+				// UpdateFromBytes may enqueue output before returning an
+				// error. Observe that output before asserting fail-closed.
+				drainOut()
 				verifyPerProofIndependently(result, capturedBobR2, aliceCA, keys, partyIDs, ec)
 				return result, nil
 			}

@@ -95,8 +95,8 @@ func main() {
 					fmt.Printf("FAIL: %s: rejection was not at round 3 (tss.Error.Round()=%d)\n", name, r.RejectionRound)
 					os.Exit(1)
 				}
-				if !r.RejectionCulpritIsPeer {
-					fmt.Printf("FAIL: %s: rejection did not name the historical peer as a culprit\n", name)
+				if r.RejectionPeerCulpritCount < 2 {
+					fmt.Printf("FAIL: %s: both production verifier failures did not name the historical peer (count=%d)\n", name, r.RejectionPeerCulpritCount)
 					os.Exit(1)
 				}
 				if r.AliceEmittedRound3 {
