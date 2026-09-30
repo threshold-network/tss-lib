@@ -39,6 +39,16 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
   exact historical legacy compatibility (stacked on PR #7).
 - **PR #16** — ECDSA signing context binding in the security-v2 SSID (stacked on PR #9).
 - **PR #17** (+ stack #8/#10/#11, extended by #23) — constant-time cryptographic hardening (BNB #328).
+- **PR #25** — faster CI feedback plus scheduled race and cache-safety coverage.
+- **PR #26** — concurrent local-party lifecycle regression coverage.
+- **PR #27** — unequal-width constant-time arithmetic regression coverage.
+- **PR #28** — bounded proof-input validation and panic-free proof decoding.
+- **PR #29** — native fuzz targets for proof and wire-message decoders.
+- **PR #30** — corrected rollout documentation and consistent CI toolchains.
+- **PR #31** — constant-time Paillier performance and allocation improvements.
+- **PR #32** — live current/historical mixed-binary signing interoperability harness.
+- **PR #33** — signing-context, message-boundary, and round-readiness regression coverage.
+- **PR #34** — shared proof-verifier resource bounds and `ModProof` context reuse.
 
 ### ⚠️ Compatibility — read before upgrading
 
@@ -143,6 +153,27 @@ and the PR #9 entry below):
   and after this change cannot interoperate — deploy and activate this version
   together across every signer in a ceremony (coordinated rollout).
 - **Legacy unchanged:** Legacy transcript bytes are unchanged.
+
+### Integration follow-ups
+
+- **Bounded and panic-free proof input handling (PRs #28 and #34):**
+  malformed proof encodings return errors instead of reaching arity or
+  nil-value panics. Every exported unknown-order proof verifier rejects
+  moduli above 65,536 bits before expensive primality, modular, or challenge
+  work. `ModProof` also reuses its fixed constant-time contexts and exponents
+  across all 80 iterations without changing proof bytes.
+- **Constant-time Paillier performance (PR #31):** encryption uses the
+  `Gamma = N+1` identity through constant-time multiplication, bounded
+  exponents use the public `N.BitLen()` width, and pooled scratch buffers no
+  longer allocate boxed slice headers on each return. Proof bytes and public
+  APIs are unchanged.
+- **Rollout assurance (PRs #27, #29, #32, #33):** regression, fuzz, and live
+  mixed-binary checks cover constant-time width handling, proof and wire
+  decoding, both historical Bob/BobWC rejection paths, context mismatch
+  rejection, message boundaries, and out-of-order readiness. The mixed-binary
+  harness exchanges real current/historical messages through round 8. It does
+  not claim final signature completion because the pinned fixture supplies
+  only two shares from a threshold-10 key set.
 
 ### Breaking changes
 
