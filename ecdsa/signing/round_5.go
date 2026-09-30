@@ -98,7 +98,6 @@ func (round *round5) Start() *tss.Error {
 	cmt := commitments.NewHashCommitment(bigVi.X(), bigVi.Y(), bigAi.X(), bigAi.Y())
 	r5msg := NewSignRound5Message(round.PartyID(), cmt.C)
 	round.temp.signRound5Messages[round.PartyID().Index] = r5msg
-	round.out <- r5msg
 
 	round.temp.li = li
 	round.temp.bigAi = bigAi
@@ -109,6 +108,7 @@ func (round *round5) Start() *tss.Error {
 	round.temp.rx = rx
 	round.temp.ry = ry
 	round.temp.bigR = R
+	round.out <- r5msg
 
 	return nil
 }
