@@ -107,10 +107,20 @@ func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int, session ...[]byte) (bo
 	if common.AnyIsNil(pf.P, pf.Q, pf.A, pf.B, pf.T, pf.Sigma, pf.Z1, pf.Z2, pf.W1, pf.W2, pf.V) {
 		return false, fmt.Errorf("fac proof verify: nil bigint present in proof")
 	}
-	if !common.IsUsableUnknownOrderModulus(pkN, verifyMinModulusBitLen) {
+	// Width policy: reject moduli wider than the shared ceiling before any
+	// ProbablyPrime call or modulus-sized work is run against them.
+	if common.ExceedsUnknownOrderModulusCeiling(pkN) {
+		return false, fmt.Errorf("fac proof verify: Paillier modulus bit length %d exceeds maximum %d",
+			pkN.BitLen(), common.MaxUnknownOrderModulusBitLen)
+	}
+	if common.ExceedsUnknownOrderModulusCeiling(N) {
+		return false, fmt.Errorf("fac proof verify: auxiliary modulus bit length %d exceeds maximum %d",
+			N.BitLen(), common.MaxUnknownOrderModulusBitLen)
+	}
+	if !common.IsUsableUnknownOrderModulus(pkN, common.MinUnknownOrderModulusBitLen) {
 		return false, fmt.Errorf("fac proof verify: invalid Paillier modulus %x", pkN)
 	}
-	if !common.IsUsableUnknownOrderModulus(N, verifyMinModulusBitLen) {
+	if !common.IsUsableUnknownOrderModulus(N, common.MinUnknownOrderModulusBitLen) {
 		return false, fmt.Errorf("fac proof verify: invalid auxiliary modulus %x", N)
 	}
 	for name, base := range map[string]*big.Int{

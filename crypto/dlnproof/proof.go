@@ -19,9 +19,8 @@ import (
 )
 
 const (
-	Iterations             = 128
-	verifyMinModulusBitLen = 2048
-	fsDomainTagDLNProof    = "tss-lib.threshold.dlnproof"
+	Iterations          = 128
+	fsDomainTagDLNProof = "tss-lib.threshold.dlnproof"
 )
 
 func fsSessionDLNProof(session []byte) []byte {
@@ -87,7 +86,13 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 	if p == nil {
 		return false
 	}
-	if !common.IsUsableUnknownOrderModulus(N, verifyMinModulusBitLen) {
+	// Width policy: reject a caller-supplied modulus wider than the shared
+	// ceiling before any ProbablyPrime call or per-candidate modular
+	// exponentiation is run against it.
+	if common.ExceedsUnknownOrderModulusCeiling(N) {
+		return false
+	}
+	if !common.IsUsableUnknownOrderModulus(N, common.MinUnknownOrderModulusBitLen) {
 		return false
 	}
 	modN := common.ModInt(N)

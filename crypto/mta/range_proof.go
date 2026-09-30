@@ -18,7 +18,6 @@ import (
 
 const (
 	RangeProofAliceBytesParts = 6
-	verifyMinModulusBitLen    = 2048
 	fsDomainTagRangeAlice     = "tss-lib.threshold.mta.range-alice"
 	fsDomainTagBob            = "tss-lib.threshold.mta.bob"
 	fsDomainTagBobWC          = "tss-lib.threshold.mta.bob-wc"
@@ -136,8 +135,15 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 		NTilde == nil || h1 == nil || h2 == nil || c == nil {
 		return false
 	}
-	if !common.IsUsableUnknownOrderModulus(pk.N, verifyMinModulusBitLen) ||
-		!common.IsUsableUnknownOrderModulus(NTilde, verifyMinModulusBitLen) {
+	// Width policy: reject caller-supplied moduli wider than the shared
+	// ceiling before any ProbablyPrime call or modulus-sized work is run
+	// against them.
+	if common.ExceedsUnknownOrderModulusCeiling(pk.N) ||
+		common.ExceedsUnknownOrderModulusCeiling(NTilde) {
+		return false
+	}
+	if !common.IsUsableUnknownOrderModulus(pk.N, common.MinUnknownOrderModulusBitLen) ||
+		!common.IsUsableUnknownOrderModulus(NTilde, common.MinUnknownOrderModulusBitLen) {
 		return false
 	}
 	if !common.IsCanonicalGenerator(NTilde, h1) || !common.IsCanonicalGenerator(NTilde, h2) || h1.Cmp(h2) == 0 {

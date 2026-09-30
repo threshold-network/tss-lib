@@ -432,3 +432,46 @@ func TestModProofHelpersCTEquivalence(t *testing.T) {
 	assert.Equal(t, qrCompOff, qrCompOn, "isQuadResidueModComposite must agree")
 	assert.Zero(t, rootOff.Cmp(rootOn), "quadResidueModComposite must be byte-identical")
 }
+
+// TestModProofCTEquivalence: ModProof is randomised only through w; replaying
+// the entropy stream makes every derived challenge and 4th root deterministic,
+// so CT-on and CT-off proofs must be byte-identical and both must verify.
+func TestModProofCTEquivalence(t *testing.T) {
+	facSetUp(t)
+
+	var proofOff, proofOn *ModProof
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
+			previousReader := rand.Reader
+			t.Cleanup(func() {
+				rand.Reader = previousReader
+			})
+			rand.Reader = mathrand.New(mathrand.NewSource(42))
+			setPaillierCTTestMode(t, enabled)
+			proof := privateKey.ModProof()
+			if enabled {
+				proofOn = proof
+			} else {
+				proofOff = proof
+			}
+		})
+	}
+
+	require.NotNil(t, proofOff)
+	require.NotNil(t, proofOn)
+	require.Zero(t, proofOff.W.Cmp(proofOn.W), "w must be identical")
+	for i := range PARAM_M {
+		require.Zero(t, proofOff.X[i].Cmp(proofOn.X[i]), "X[%d] must be byte-identical", i)
+		require.Zero(t, proofOff.Z[i].Cmp(proofOn.Z[i]), "Z[%d] must be byte-identical", i)
+		require.Equal(t, proofOff.A[i], proofOn.A[i], "A[%d] must match", i)
+		require.Equal(t, proofOff.B[i], proofOn.B[i], "B[%d] must match", i)
+	}
+
+	ok, err := proofOff.ModVerify(publicKey.N)
+	assert.NoError(t, err)
+	assert.True(t, ok, "proofOff must verify")
+
+	ok, err = proofOn.ModVerify(publicKey.N)
+	assert.NoError(t, err)
+	assert.True(t, ok, "proofOn must verify")
+}
