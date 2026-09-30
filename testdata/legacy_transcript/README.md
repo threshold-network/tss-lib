@@ -86,22 +86,41 @@ commands in, `message`/`signature`/`error`/`turn_done` events out. No network
 access happens at run time; the pinned module must already be in the local
 module cache (the same precondition `verify.sh` has always had).
 
-`mixed_interop/main.go` is the current-side orchestrator (`go run` from the
+`mixed_interop/main.go` (entry point/orchestration), `mixed_interop/peer.go`
+(subprocess wire protocol), `mixed_interop/scenarios.go` (scenario logic and
+per-proof verification), and `mixed_interop/homogeneous.go` (the control
+scenario) together implement the current-side driver (`go run` from the
 repository root, matching the oracle). For a fixed 2-of-20 `keygen_data_0/1`
-fixture pair, deterministic seeds, and a fixed message, it drives three
+fixture pair, deterministic seeds, and a fixed message, they drive three
 scenarios:
 
 - **reject**: a current party with `tss.ProtocolModeLegacy` and the default
-  (off) `SetLegacyHistoricalBobCompatibility` opts asserts that round 3 fails
+  (off) `SetLegacyHistoricalBobCompatibility` opt asserts that round 3 fails
   closed against the historical peer's live, real Bob/BobWC proof, whose T1
   witness (recovered from the actual wire bytes via
   `SignRound2Message.UnmarshalProofBob`/`UnmarshalProofBobWC`, not a
   hand-picked value) is asserted to exceed the default tight `N + q^6` bound.
+  The rejection is additionally constrained structurally — never by parsing
+  the error string — to `tss.Error.Round() == 3`, the historical peer's
+  party ID present in `tss.Error.Culprits()`, and no round-3 message ever
+  emitted by the current party. Independently of the live round-3 failure,
+  the harness also re-verifies Bob's and BobWC's proofs *separately* (each
+  against its own compat-off/compat-on call to `ProofBob.VerifyLegacy` /
+  `ProofBobWC.VerifyLegacy`, using the actual captured wire proof and public
+  inputs — Alice's own Paillier key/Ring-Pedersen parameters, her round-1
+  ciphertext, Bob's round-2 response, and Bob's `PrepareForSigning`-derived
+  EC contribution): both must independently reject at the tight bound *and*
+  independently accept at the loose bound. This catches a regression where
+  only one of the two proof paths is correctly wired (e.g. Bob accepts the
+  widened bound but BobWC is left at the tight one, or vice versa), which an
+  aggregate round-3 pass/fail alone cannot distinguish.
 - **accept**: the identical exchange with `SetLegacyHistoricalBobCompatibility(true)`
   set before construction; round 3 succeeds and the ceremony provably
   continues through round 8 (both directions), proving the current party
   didn't just tolerate the historical proof but kept advancing the protocol
-  with the historical peer afterward.
+  with the historical peer afterward. The same independent per-proof
+  Bob/BobWC verification above is asserted here too (both accepting at the
+  loose bound).
 - **homogeneous-control**: two current-implementation parties, no historical
   subprocess at all, complete the identical ceremony shape under the default
   configuration — proof that "reject" above is specific to the historical

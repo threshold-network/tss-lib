@@ -43,541 +43,123 @@
 package main
 
 import (
-	"bufio"
-	cryptorand "crypto/rand"
-	"crypto/sha512"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"os"
-	"os/exec"
-	"sync"
-
-	"github.com/bnb-chain/tss-lib/common"
-	"github.com/bnb-chain/tss-lib/ecdsa/keygen"
-	"github.com/bnb-chain/tss-lib/ecdsa/signing"
-	"github.com/bnb-chain/tss-lib/tss"
 )
-
-// ---- deterministic randomness (host side) ----
-
-type deterministicReader struct {
-	seed    []byte
-	mu      sync.Mutex
-	counter uint64
-	buffer  []byte
-}
-
-// Read is safe for concurrent use: this implementation's signing rounds draw
-// fresh MtA blinding randomness for a peer's Bob and BobWC proofs from two
-// goroutines running concurrently (round_2.go), and both draw from the
-// process-global crypto/rand.Reader this function replaces. Serializing
-// access to the counter/buffer keystream state avoids torn reads that would
-// otherwise corrupt both goroutines' values.
-func (r *deterministicReader) Read(output []byte) (int, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	total := len(output)
-	for len(output) > 0 {
-		if len(r.buffer) == 0 {
-			counter := make([]byte, 8)
-			binary.BigEndian.PutUint64(counter, r.counter)
-			digest := sha512.Sum512(append(append([]byte{}, r.seed...), counter...))
-			r.buffer = digest[:]
-			r.counter++
-		}
-		copied := copy(output, r.buffer)
-		output = output[copied:]
-		r.buffer = r.buffer[copied:]
-	}
-	return total, nil
-}
-
-func fixedRandom(label string) func() {
-	original := cryptorand.Reader
-	cryptorand.Reader = &deterministicReader{seed: []byte("mixed-interop/" + label)}
-	return func() { cryptorand.Reader = original }
-}
-
-// ---- subprocess wire protocol ----
-
-type command struct {
-	Cmd         string `json:"cmd"`
-	Seed        string `json:"seed,omitempty"`
-	MessageHex  string `json:"message_hex,omitempty"`
-	IsBroadcast bool   `json:"is_broadcast,omitempty"`
-	WireHex     string `json:"wire_hex,omitempty"`
-}
-
-type event struct {
-	Event       string `json:"event"`
-	IsBroadcast bool   `json:"is_broadcast,omitempty"`
-	WireHex     string `json:"wire_hex,omitempty"`
-	Message     string `json:"message,omitempty"`
-	RHex        string `json:"r_hex,omitempty"`
-	SHex        string `json:"s_hex,omitempty"`
-}
-
-type historicalPeer struct {
-	cmd    *exec.Cmd
-	stdin  *json.Encoder
-	stdout *bufio.Scanner
-}
-
-func spawnHistoricalPeer(dir string) (*historicalPeer, error) {
-	cmd := exec.Command("go", "run", "-mod=readonly", "./main.go")
-	cmd.Dir = dir
-	cmd.Stderr = os.Stderr
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	return &historicalPeer{cmd: cmd, stdin: json.NewEncoder(stdin), stdout: scanner}, nil
-}
-
-func (h *historicalPeer) send(c command) error {
-	return h.stdin.Encode(c)
-}
-
-// readTurn reads events until (and excluding) a "turn_done" sentinel.
-func (h *historicalPeer) readTurn() ([]event, error) {
-	var events []event
-	for h.stdout.Scan() {
-		line := h.stdout.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var e event
-		if err := json.Unmarshal(line, &e); err != nil {
-			return events, fmt.Errorf("decode historical event: %w", err)
-		}
-		if e.Event == "turn_done" {
-			return events, nil
-		}
-		events = append(events, e)
-	}
-	return events, fmt.Errorf("historical subprocess closed stdout before turn_done")
-}
-
-func (h *historicalPeer) quit() {
-	_ = h.send(command{Cmd: "quit"})
-	_ = h.cmd.Wait()
-}
-
-// ---- scenario machinery ----
-
-// roundNumberOf identifies the signing-round number of a message purely from
-// its concrete protobuf content type, never from error text or any other
-// source-derived string.
-func roundNumberOf(m tss.Message) int {
-	pm, ok := m.(tss.ParsedMessage)
-	if !ok {
-		return 0
-	}
-	switch pm.Content().(type) {
-	case *signing.SignRound1Message1, *signing.SignRound1Message2:
-		return 1
-	case *signing.SignRound2Message:
-		return 2
-	case *signing.SignRound3Message:
-		return 3
-	case *signing.SignRound4Message:
-		return 4
-	case *signing.SignRound5Message:
-		return 5
-	case *signing.SignRound6Message:
-		return 6
-	case *signing.SignRound7Message:
-		return 7
-	case *signing.SignRound8Message:
-		return 8
-	case *signing.SignRound9Message:
-		return 9
-	default:
-		return 0
-	}
-}
-
-type scenarioResult struct {
-	Name            string `json:"name"`
-	DefaultRejected bool   `json:"default_rejected"`
-	RejectionErr    string `json:"rejection_err,omitempty"`
-	Accepted        bool   `json:"accepted"`
-	AliceProgressed bool   `json:"alice_progressed"`
-	ReachedRound8   bool   `json:"reached_round_8"`
-	Completed       bool   `json:"completed"`
-	AliceR          string `json:"alice_r,omitempty"`
-	AliceS          string `json:"alice_s,omitempty"`
-	PeerR           string `json:"peer_r,omitempty"`
-	PeerS           string `json:"peer_s,omitempty"`
-	WitnessBobT1    string `json:"witness_bob_t1,omitempty"`
-	WitnessBobWCT1  string `json:"witness_bob_wc_t1,omitempty"`
-	TightBound      string `json:"tight_bound,omitempty"`
-	AboveTightBound bool   `json:"above_tight_bound"`
-}
-
-const fixedMessageHex = "00f163ee51bcaeff9cdff5e0e3c1a646abd19885fffbab0b3b4236e0cf95c9f5"
-
-// runMixedScenario drives one live ceremony between a current-implementation
-// Alice (party index 0, in this process) and a historical subprocess Bob
-// (party index 1), asserting the given compatibility configuration.
-//
-// The exchange is deliberately bounded to round 8: this repository's own
-// existing round3Fixture (ecdsa/signing/round_3_test.go) and
-// historicalBobProofForWitnessY (crypto/mta/legacy_bob_historical_witness_test.go)
-// already establish the precedent of driving a 2-of-20 minimal subset of the
-// test/_ecdsa_fixtures keygen fixtures (threshold=1, not the fixture set's
-// real threshold=10) for exactly this kind of round-level interop check.
-// That minimal subset is sufficient for every per-peer MtA/Schnorr check
-// through round 8 (each is a property of the two parties' own consistent
-// local computation), but round 9's final aggregate check (U == T) verifies
-// a *global* Shamir reconstruction identity that only holds for a
-// correctly-sized threshold+1 co-signer set. Reaching a real, live-exchanged
-// round 8 message already proves the historical Bob/BobWC witness was
-// accepted and every subsequent round-3..8 verification/decommitment step
-// (Bob_end, the Gamma/Schnorr proofs, and both decommitments) succeeded
-// against a genuine historical binary; deliberately stopping there avoids an
-// unrelated, expected reconstruction mismatch rather than masking a real one.
-func runMixedScenario(name, seedSuffix string, historicalDir string, compat bool) (*scenarioResult, error) {
-	restore := fixedRandom("alice-" + seedSuffix)
-	defer restore()
-
-	keys, partyIDs, err := keygen.LoadKeygenTestFixtures(2)
-	if err != nil {
-		return nil, fmt.Errorf("load keygen fixtures: %w", err)
-	}
-	ec := tss.S256()
-	pk := &keys[0].PaillierSK.PublicKey
-	q := ec.Params().N
-	q3 := new(big.Int).Mul(q, q)
-	q3 = new(big.Int).Mul(q, q3)
-	q6 := new(big.Int).Mul(q3, q3)
-	tightBound := new(big.Int).Add(pk.N, q6)
-
-	ctx := tss.NewPeerContext(partyIDs)
-	params := tss.NewParameters(ec, ctx, partyIDs[0], 2, 1)
-	params.SetProtocolMode(tss.ProtocolModeLegacy)
-	if compat {
-		params.SetLegacyHistoricalBobCompatibility(true)
-	}
-
-	msg := new(big.Int)
-	msg.SetString(fixedMessageHex, 16)
-	msgBytes, _ := hex.DecodeString(fixedMessageHex)
-
-	outCh := make(chan tss.Message, 16)
-	endCh := make(chan common.SignatureData, 1)
-	alice := signing.NewLocalParty(msg, params, keys[0], outCh, endCh, len(msgBytes))
-
-	peer, err := spawnHistoricalPeer(historicalDir)
-	if err != nil {
-		return nil, fmt.Errorf("spawn historical peer: %w", err)
-	}
-	defer peer.quit()
-
-	if err := peer.send(command{Cmd: "init", Seed: "bob-" + seedSuffix, MessageHex: fixedMessageHex}); err != nil {
-		return nil, fmt.Errorf("send init: %w", err)
-	}
-	peerEvents, err := peer.readTurn()
-	if err != nil {
-		return nil, fmt.Errorf("read historical init turn: %w", err)
-	}
-
-	if err := alice.Start(); err != nil {
-		return nil, fmt.Errorf("alice start: %w", err)
-	}
-
-	result := &scenarioResult{Name: name, TightBound: tightBound.Text(16)}
-
-	var pendingToBob []tss.Message
-	var pendingToAlice []event
-
-	drainOut := func() {
-		for {
-			select {
-			case m := <-outCh:
-				if roundNumberOf(m) >= 8 {
-					result.ReachedRound8 = true
-				}
-				pendingToBob = append(pendingToBob, m)
-			case <-endCh:
-				// Unreachable in practice: this scenario deliberately stops
-				// before round 9 (see runMixedScenario's doc comment), so
-				// the ceremony never actually produces a signature. Kept
-				// only so a future change to the stopping point doesn't
-				// silently deadlock on an undrained channel. Matches this
-				// package's own local_party_test.go convention of not
-				// binding the received value (a common.SignatureData is a
-				// protobuf message and copying it by value trips go vet's
-				// lock-copy check).
-				result.Completed = true
-			default:
-				return
-			}
-		}
-	}
-	drainOut()
-	pendingToAlice = append(pendingToAlice, peerEvents...)
-
-	captureWitness := func(e event) {
-		if result.WitnessBobT1 != "" {
-			return
-		}
-		wireBytes, decErr := hex.DecodeString(e.WireHex)
-		if decErr != nil {
-			return
-		}
-		parsed, parseErr := tss.ParseWireMessage(wireBytes, partyIDs[1], e.IsBroadcast)
-		if parseErr != nil {
-			return
-		}
-		r2msg, ok := parsed.Content().(*signing.SignRound2Message)
-		if !ok {
-			return
-		}
-		bob, bErr := r2msg.UnmarshalProofBob()
-		if bErr == nil && bob != nil {
-			result.WitnessBobT1 = bob.T1.Text(16)
-			result.AboveTightBound = bob.T1.Cmp(tightBound) >= 0
-		}
-		bobWC, wcErr := r2msg.UnmarshalProofBobWC(ec)
-		if wcErr == nil && bobWC != nil {
-			result.WitnessBobWCT1 = bobWC.T1.Text(16)
-			if bobWC.T1.Cmp(tightBound) < 0 {
-				result.AboveTightBound = false
-			}
-		}
-	}
-
-pump:
-	for len(pendingToBob) > 0 || len(pendingToAlice) > 0 {
-		for _, m := range pendingToBob {
-			if result.ReachedRound8 {
-				break pump
-			}
-			wireBytes, _, wErr := m.WireBytes()
-			if wErr != nil {
-				return nil, fmt.Errorf("alice wire bytes: %w", wErr)
-			}
-			if sErr := peer.send(command{Cmd: "deliver", IsBroadcast: m.IsBroadcast(), WireHex: hex.EncodeToString(wireBytes)}); sErr != nil {
-				return nil, fmt.Errorf("send deliver to historical peer: %w", sErr)
-			}
-			events, rErr := peer.readTurn()
-			if rErr != nil {
-				return nil, fmt.Errorf("read historical peer turn: %w", rErr)
-			}
-			for _, e := range events {
-				switch e.Event {
-				case "message":
-					pendingToAlice = append(pendingToAlice, e)
-				case "signature":
-					result.PeerR, result.PeerS = e.RHex, e.SHex
-				case "error":
-					// A historical-side rejection is unexpected in every
-					// scenario this harness drives (the current legacy
-					// prover's own witness stays well inside every
-					// historical/current bound); surface it as a hard
-					// failure rather than silently ignoring it.
-					return nil, fmt.Errorf("historical peer reported an unexpected error: %s", e.Message)
-				}
-			}
-		}
-		pendingToBob = nil
-
-		toDeliver := pendingToAlice
-		pendingToAlice = nil
-		for _, e := range toDeliver {
-			if result.ReachedRound8 {
-				break
-			}
-			captureWitness(e)
-			wireBytes, decErr := hex.DecodeString(e.WireHex)
-			if decErr != nil {
-				return nil, fmt.Errorf("decode historical wire hex: %w", decErr)
-			}
-			// Peek at the message's concrete type before delivering it: a
-			// historical peer that has just processed one of Alice's
-			// messages can legitimately cascade through more than one of
-			// its own rounds in a single turn (e.g. producing round 7 and
-			// round 8 together once round 7's local precondition is
-			// already satisfied). Delivering a round-8-or-later message
-			// would drive Alice past round 8 into round 9's global
-			// reconstruction check within the same UpdateFromBytes call,
-			// which this deliberately minimal 2-of-20 fixture subset
-			// cannot satisfy (see the doc comment on this function).
-			if parsed, pErr := tss.ParseWireMessage(wireBytes, partyIDs[1], e.IsBroadcast); pErr == nil {
-				if roundNumberOf(parsed) >= 8 {
-					result.ReachedRound8 = true
-					break
-				}
-			}
-			ok, aErr := alice.UpdateFromBytes(wireBytes, partyIDs[1], e.IsBroadcast)
-			if aErr != nil {
-				result.DefaultRejected = true
-				result.RejectionErr = aErr.Error()
-				return result, nil
-			}
-			_ = ok
-			result.AliceProgressed = true
-		}
-		drainOut()
-		if result.ReachedRound8 {
-			break pump
-		}
-	}
-
-	if compat {
-		result.Accepted = true
-	}
-	return result, nil
-}
-
-// runHomogeneousControl drives the identical ceremony shape through round 8
-// with two current-implementation parties and no historical subprocess at
-// all, to demonstrate the default legacy path is otherwise fully functional
-// and that "reject" above is specific to the historical witness range.
-func runHomogeneousControl() (*scenarioResult, error) {
-	restore := fixedRandom("homogeneous-control")
-	defer restore()
-
-	keys, partyIDs, err := keygen.LoadKeygenTestFixtures(2)
-	if err != nil {
-		return nil, fmt.Errorf("load keygen fixtures: %w", err)
-	}
-	ec := tss.S256()
-	ctx := tss.NewPeerContext(partyIDs)
-
-	msg := new(big.Int)
-	msg.SetString(fixedMessageHex, 16)
-	msgBytes, _ := hex.DecodeString(fixedMessageHex)
-
-	outCh := make(chan tss.Message, 16)
-	endCh := make(chan common.SignatureData, 2)
-	parties := make([]tss.Party, 2)
-	for i := 0; i < 2; i++ {
-		p := tss.NewParameters(ec, ctx, partyIDs[i], 2, 1)
-		p.SetProtocolMode(tss.ProtocolModeLegacy)
-		parties[i] = signing.NewLocalParty(msg, p, keys[i], outCh, endCh, len(msgBytes))
-	}
-	for _, p := range parties {
-		if err := p.Start(); err != nil {
-			return nil, fmt.Errorf("homogeneous control start: %w", err)
-		}
-	}
-
-	result := &scenarioResult{Name: "homogeneous-control"}
-	for {
-		select {
-		case m := <-outCh:
-			// See runMixedScenario's doc comment: stop before forwarding a
-			// round-8-or-later message so neither party auto-cascades into
-			// round 9's global reconstruction check, which this 2-of-20
-			// minimal fixture subset cannot satisfy.
-			if roundNumberOf(m) >= 8 {
-				result.ReachedRound8 = true
-				break
-			}
-			dest := m.GetTo()
-			wireBytes, _, wErr := m.WireBytes()
-			if wErr != nil {
-				return nil, fmt.Errorf("homogeneous wire bytes: %w", wErr)
-			}
-			if dest == nil {
-				for _, p := range parties {
-					if p.PartyID().Index == m.GetFrom().Index {
-						continue
-					}
-					if _, uErr := p.UpdateFromBytes(wireBytes, m.GetFrom(), true); uErr != nil {
-						return nil, fmt.Errorf("homogeneous update: %w", uErr)
-					}
-				}
-			} else {
-				if _, uErr := parties[dest[0].Index].UpdateFromBytes(wireBytes, m.GetFrom(), false); uErr != nil {
-					return nil, fmt.Errorf("homogeneous update: %w", uErr)
-				}
-			}
-		case <-endCh:
-			// Unreachable in practice; see the identical case in
-			// runMixedScenario's drainOut.
-			result.Completed = true
-		}
-		if result.ReachedRound8 {
-			break
-		}
-	}
-	return result, nil
-}
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintf(os.Stderr, "usage: %s <historical-module-dir>\n", os.Args[0])
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "Usage: mixed_interop <historical-module-dir>")
+		os.Exit(1)
 	}
-	historicalDir := os.Args[1]
+	histDir := os.Args[1]
 
-	failed := false
-	report := map[string]any{}
+	results := map[string]interface{}{}
 
-	reject, err := runMixedScenario("reject", "reject", historicalDir, false)
+	for _, cfg := range []struct {
+		name    string
+		seed    string
+		histDir string
+		compat  bool
+	}{
+		{"reject", "reject-seed", histDir, false},
+		{"accept", "accept-seed", histDir, true},
+	} {
+		result, err := runMixedScenario(cfg.name, cfg.seed, cfg.histDir, cfg.compat)
+		if err != nil {
+			results[cfg.name] = map[string]string{"error": err.Error()}
+			continue
+		}
+		results[cfg.name] = result
+	}
+
+	homCtrl, err := runHomogeneousControl()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "reject scenario error: %v\n", err)
-		os.Exit(1)
+		results["homogeneous-control"] = map[string]string{"error": err.Error()}
+	} else {
+		results["homogeneous-control"] = homCtrl
 	}
-	report["reject"] = reject
-	if !reject.DefaultRejected {
-		fmt.Fprintln(os.Stderr, "FAIL: default-off current party did not reject the historical witness proof")
-		failed = true
-	}
-	if !reject.AboveTightBound {
-		fmt.Fprintln(os.Stderr, "FAIL: historical witness T1 did not exceed the default tight N+q^6 bound")
-		failed = true
+	// Validate post-conditions: durable assertions about the protocol.
+	for name, res := range results {
+		switch r := res.(type) {
+		case *scenarioResult:
+			switch name {
+			case "reject":
+				if !r.DefaultRejected {
+					fmt.Printf("FAIL: %s: default-configured current party did not reject (compat off, live Bob/BobWC witness T1=%s, tight_bound=%s, above_tight=%v)\n",
+						name, r.WitnessBobT1, r.TightBound, r.AboveTightBound)
+					os.Exit(1)
+				}
+				if r.RejectionRound != 3 {
+					fmt.Printf("FAIL: %s: rejection was not at round 3 (tss.Error.Round()=%d)\n", name, r.RejectionRound)
+					os.Exit(1)
+				}
+				if !r.RejectionCulpritIsPeer {
+					fmt.Printf("FAIL: %s: rejection did not name the historical peer as a culprit\n", name)
+					os.Exit(1)
+				}
+				if r.AliceEmittedRound3 {
+					fmt.Printf("FAIL: %s: current party emitted a round-3 message despite rejecting\n", name)
+					os.Exit(1)
+				}
+				if r.BobProofOff {
+					fmt.Printf("FAIL: %s: Bob proof accepted at tight bound (compat off)\n", name)
+					os.Exit(1)
+				}
+				if r.BobWCProofOff {
+					fmt.Printf("FAIL: %s: BobWC proof accepted at tight bound (compat off)\n", name)
+					os.Exit(1)
+				}
+				if !r.AboveTightBound {
+					fmt.Printf("FAIL: %s: live Bob witness T1 not above tight bound (this scenario requires a high witness; re-run to get a fresh draw)\n", name)
+					os.Exit(1)
+				}
+				if !r.BobProofOn {
+					fmt.Printf("FAIL: %s: Bob proof not independently accepted with compat on (witness shape not confirmed valid)\n", name)
+					os.Exit(1)
+				}
+				if !r.BobWCProofOn {
+					fmt.Printf("FAIL: %s: BobWC proof not independently accepted with compat on (witness shape not confirmed valid)\n", name)
+					os.Exit(1)
+				}
+			case "accept":
+				if !r.Accepted {
+					fmt.Printf("FAIL: %s: opt-in current party did not accept and progress past round 3\n", name)
+					os.Exit(1)
+				}
+				if !r.AliceProgressed {
+					fmt.Printf("FAIL: %s: opt-in party did not progress\n", name)
+					os.Exit(1)
+				}
+				if !r.ReachedRound8 {
+					fmt.Printf("FAIL: %s: opt-in mixed ceremony did not progress through round 8\n", name)
+					os.Exit(1)
+				}
+				// Per-proof accept assertions
+				if !r.BobProofOn {
+					fmt.Printf("FAIL: %s: Bob proof not accepted with compat on\n", name)
+					os.Exit(1)
+				}
+				if !r.BobWCProofOn {
+					fmt.Printf("FAIL: %s: BobWC proof not accepted with compat on\n", name)
+					os.Exit(1)
+				}
+			case "homogeneous-control":
+				if !r.ReachedRound8 {
+					fmt.Printf("FAIL: %s: homogeneous control did not reach round 8\n", name)
+					os.Exit(1)
+				}
+			}
+		case map[string]string:
+			fmt.Printf("FAIL: %s: scenario returned an error: %s\n", name, r["error"])
+			os.Exit(1)
+		default:
+			fmt.Printf("FAIL: %s: unexpected result type %T\n", name, res)
+			os.Exit(1)
+		}
 	}
 
-	accept, err := runMixedScenario("accept", "reject", historicalDir, true)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "accept scenario error: %v\n", err)
-		os.Exit(1)
-	}
-	report["accept"] = accept
-	if !accept.Accepted || !accept.AliceProgressed {
-		fmt.Fprintln(os.Stderr, "FAIL: opt-in current party did not accept and progress past round 3")
-		failed = true
-	}
-	if !accept.AboveTightBound {
-		fmt.Fprintln(os.Stderr, "FAIL: accept scenario's historical witness was not above the tight bound (test would be vacuous)")
-		failed = true
-	}
-	if !accept.ReachedRound8 {
-		fmt.Fprintln(os.Stderr, "FAIL: opt-in mixed ceremony did not progress through round 8")
-		failed = true
-	}
-
-	control, err := runHomogeneousControl()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "homogeneous control error: %v\n", err)
-		os.Exit(1)
-	}
-	report["homogeneous_control"] = control
-	if !control.ReachedRound8 {
-		fmt.Fprintln(os.Stderr, "FAIL: homogeneous current-only control did not reach round 8")
-		failed = true
-	}
-
-	encoded, _ := json.MarshalIndent(report, "", "  ")
-	fmt.Println(string(encoded))
-
-	if failed {
-		os.Exit(1)
-	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.Encode(map[string]interface{}{"results": results})
 }
