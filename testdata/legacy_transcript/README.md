@@ -114,23 +114,33 @@ scenarios:
   only one of the two proof paths is correctly wired (e.g. Bob accepts the
   widened bound but BobWC is left at the tight one, or vice versa), which an
   aggregate round-3 pass/fail alone cannot distinguish.
-- **accept**: the identical exchange with `SetLegacyHistoricalBobCompatibility(true)`
-  set before construction; round 3 succeeds and the ceremony provably
-  continues through round 8 (both directions), proving the current party
-  didn't just tolerate the historical proof but kept advancing the protocol
-  with the historical peer afterward. The same independent per-proof
-  Bob/BobWC verification above is asserted here too (both accepting at the
-  loose bound).
+- **accept**: a fresh exchange (a separate historical subprocess with its
+  own deterministic seed — the accept and reject runs are paired
+  per-proof, not an identical replay of one shared transcript) with
+  `SetLegacyHistoricalBobCompatibility(true)` set before construction;
+  round 3 succeeds and the ceremony provably continues through round 8 in
+  both directions (each actor's first round-8-or-later message is captured
+  as boundary evidence and dropped, never forwarded), proving the current
+  party didn't just tolerate the historical proof but kept advancing the
+  protocol with the historical peer afterward. The same independent
+  per-proof Bob/BobWC verification as in "reject" above is asserted here
+  too, in both directions: each proof must reject at the tight `N + q^6`
+  bound (compat off) AND accept at the widened historical bound (compat on)
+  — the tight-bound rejection is the evidence that the compatibility
+  switch, not a witness that would pass the tight bound too, is the
+  acceptance gate.
 - **homogeneous-control**: two current-implementation parties, no historical
   subprocess at all, complete the identical ceremony shape under the default
   configuration — proof that "reject" above is specific to the historical
   witness range and not a general legacy-mode defect. This scenario is never
   substituted for the cross-version exchanges above.
 
-All three scenarios deliberately stop once a party's own round 8 message
-appears (never delivering a round-8-or-later message onward): this
-repository's own `round3Fixture` (`ecdsa/signing/round_3_test.go`) and
-`historicalBobProofForWitnessY`
+All three scenarios deliberately stop once BOTH actors have emitted their
+own round 8 message (each first round-8-or-later message is captured as
+per-actor boundary evidence and dropped, never delivered onward; only
+lower-round pending messages keep flowing until both sides have emitted
+round 8): this repository's own `round3Fixture`
+(`ecdsa/signing/round_3_test.go`) and `historicalBobProofForWitnessY`
 (`crypto/mta/legacy_bob_historical_witness_test.go`) already establish the
 precedent of driving a 2-of-20 minimal subset of the `test/_ecdsa_fixtures`
 keygen fixtures (threshold 1, not the fixture set's real threshold 10) for
@@ -139,11 +149,13 @@ sufficient for every per-peer MtA/Schnorr check through round 8 (each is a
 property of the two parties' own consistent local computation), but round 9's
 final aggregate check (`U == T`) verifies a *global* Shamir reconstruction
 identity that only holds for a correctly-sized threshold+1 co-signer set.
-Reaching a real, live-exchanged round 8 message already proves the historical
-Bob/BobWC witness was accepted and every subsequent round 3–8
+Reaching a real, live-exchanged round 8 on both sides already proves the
+historical Bob/BobWC witness was accepted and every subsequent round 3–8
 verification/decommitment step (Bob_end, the Gamma/Schnorr proofs, and both
-decommitments) succeeded against a genuine historical binary. Driving a full,
-globally-valid signature to completion is possible but requires
+decommitments) succeeded against a genuine historical binary. Because no
+round-8-or-later message is ever delivered onward, the threshold-mismatched
+fixture can never run into round 9. Driving a full, globally-valid
+signature to completion is possible but requires
 `testThreshold+1` (11) correctly-thresholded co-signers rather than an
 arbitrary 2-of-20 subset — substantially more harness complexity for a
 property (global reconstruction validity) that is orthogonal to the specific

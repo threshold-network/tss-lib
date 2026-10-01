@@ -108,8 +108,13 @@ type scenarioResult struct {
 	// Behavioral: acceptance/progress
 	Accepted        bool `json:"accepted"`
 	AliceProgressed bool `json:"alice_progressed"`
-	ReachedRound8   bool `json:"reached_round_8"`
-	Completed       bool `json:"completed"`
+	// Per-actor round-8 boundary evidence. Each actor's first round-8-or-
+	// later message is captured as evidence and dropped (never forwarded);
+	// lower-round pending messages keep flowing until BOTH sides have
+	// emitted round 8, at which point the exchange stops.
+	AliceReachedRound8 bool `json:"alice_reached_round_8"`
+	BobReachedRound8   bool `json:"bob_reached_round_8"`
+	Completed          bool `json:"completed"`
 	// Per-proof verification: tight bound
 	WitnessBobT1    string `json:"witness_bob_t1,omitempty"`
 	WitnessBobWCT1  string `json:"witness_bob_wc_t1,omitempty"`
@@ -120,6 +125,15 @@ type scenarioResult struct {
 	BobWCProofOff bool `json:"bob_wc_proof_off"`
 	BobProofOn    bool `json:"bob_proof_on"`
 	BobWCProofOn  bool `json:"bob_wc_proof_on"`
+}
+
+// round8BothReached reports the documented termination condition: BOTH actors
+// have emitted a round-8-or-later message. Round-8-or-later messages are
+// captured and dropped, never forwarded, so the exchange stops exactly when
+// both directions have reached the round-8 boundary and the threshold-
+// mismatched fixture can never run into round 9.
+func (r *scenarioResult) round8BothReached() bool {
+	return r.AliceReachedRound8 && r.BobReachedRound8
 }
 
 const fixedMessageHex = "00f163ee51bcaeff9cdff5e0e3c1a646abd19885fffbab0b3b4236e0cf95c9f5"
@@ -215,7 +229,10 @@ func verifyPerProofIndependently(result *scenarioResult, capturedBobR2 *signing.
 
 // runMixedScenario drives one live ceremony between a current-implementation
 // Alice (party index 0, in this process) and a historical subprocess Bob
-// (party index 1), asserting the given compatibility configuration.
+// (party index 1), asserting the given compatibility configuration. Each run
+// is a fresh exchange: the current side and the pinned historical subprocess
+// each draw their own deterministic seeds, so no two runs share one random
+// stream or one identical wire transcript.
 //
 // The exchange is deliberately bounded to round 8: this repository's own
 // existing round3Fixture (ecdsa/signing/round_3_test.go) and
@@ -227,12 +244,25 @@ func verifyPerProofIndependently(result *scenarioResult, capturedBobR2 *signing.
 // through round 8 (each is a property of the two parties' own consistent
 // local computation), but round 9's final aggregate check (U == T) verifies
 // a *global* Shamir reconstruction identity that only holds for a
-// correctly-sized threshold+1 co-signer set. Reaching a real, live-exchanged
-// round 8 message already proves the historical Bob/BobWC witness was
-// accepted and every subsequent round-3..8 verification/decommitment step
-// (Bob_end, the Gamma/Schnorr proofs, and both decommitments) succeeded
-// against a genuine historical binary; deliberately stopping there avoids an
-// unrelated, expected reconstruction mismatch rather than masking a real one.
+// correctly-sized threshold+1 co-signer set.
+//
+// The round-8 boundary is tracked per actor: the current party's first
+// round-8-or-later outbound message and the historical peer's first
+// round-8-or-later event are each captured as evidence and dropped, never
+// forwarded. Only lower-round pending messages keep flowing, until BOTH
+// sides have emitted round 8; the loop then stops. Because round-8-or-
+// later messages are never delivered, the threshold-mismatched fixture can
+// never cascade into round 9's global reconstruction check. Reaching a real,
+// live-exchanged round 8 on both sides already proves the historical
+// Bob/BobWC witness was accepted and every subsequent round-3..8
+// verification/decommitment step (Bob_end, the Gamma/Schnorr proofs, and
+// both decommitments) succeeded against a genuine historical binary.
+//
+// Independently of the live ceremony, each run's captured historical Bob and
+// BobWC proofs are re-verified pairwise against the actual captured wire
+// bytes — each against both the tight N+q^6 bound (compat off) and the
+// widened historical bound (compat on) — so acceptance is paired per proof,
+// not inferred from a shared, identical replay.
 func runMixedScenario(name, seedSuffix string, historicalDir string, compat bool) (*scenarioResult, error) {
 	restore := fixedRandom("alice-" + seedSuffix)
 	defer restore()
@@ -295,11 +325,19 @@ func runMixedScenario(name, seedSuffix string, historicalDir string, compat bool
 		for {
 			select {
 			case m := <-outCh:
-				if roundNumberOf(m) == 3 {
+				rnd := roundNumberOf(m)
+				if rnd == 3 {
 					result.AliceEmittedRound3 = true
 				}
-				if roundNumberOf(m) >= 8 {
-					result.ReachedRound8 = true
+				if rnd >= 8 {
+					// Round-8-or-later output is the per-actor boundary
+					// evidence: capture it on result, drop it (never
+					// forward it to the historical peer), and keep
+					// delivering only lower-round pending messages until
+					// the other side also emits round 8.
+					result.AliceReachedRound8 = true
+				} else {
+					pendingToBob = append(pendingToBob, m)
 				}
 				if aliceCA == nil {
 					if pm, ok := m.(tss.ParsedMessage); ok {
@@ -308,7 +346,6 @@ func runMixedScenario(name, seedSuffix string, historicalDir string, compat bool
 						}
 					}
 				}
-				pendingToBob = append(pendingToBob, m)
 			case <-endCh:
 				result.Completed = true
 			default:
@@ -356,10 +393,17 @@ func runMixedScenario(name, seedSuffix string, historicalDir string, compat bool
 
 pump:
 	for len(pendingToBob) > 0 || len(pendingToAlice) > 0 {
+		// Termination rule: once BOTH actors have emitted a round-8-or-
+		// later message (each captured and dropped, never forwarded), stop.
+		// Because round-8-or-later messages are never delivered onward, the
+		// threshold-mismatched fixture can never reach round 9.
+		if result.round8BothReached() {
+			break pump
+		}
 		for _, m := range pendingToBob {
-			if result.ReachedRound8 {
-				break pump
-			}
+			// pendingToBob holds only lower-round messages: drainOut drops
+			// the current party's round-8-or-later output as per-actor
+			// boundary evidence, so nothing here reaches round 9.
 			wireBytes, _, wErr := m.WireBytes()
 			if wErr != nil {
 				return nil, fmt.Errorf("alice wire bytes: %w", wErr)
@@ -386,9 +430,6 @@ pump:
 		toDeliver := pendingToAlice
 		pendingToAlice = nil
 		for _, e := range toDeliver {
-			if result.ReachedRound8 {
-				break
-			}
 			captureWitness(e)
 			wireBytes, decErr := hex.DecodeString(e.WireHex)
 			if decErr != nil {
@@ -396,8 +437,13 @@ pump:
 			}
 			if parsed, pErr := tss.ParseWireMessage(wireBytes, partyIDs[1], e.IsBroadcast); pErr == nil {
 				if roundNumberOf(parsed) >= 8 {
-					result.ReachedRound8 = true
-					break
+					// Per-actor boundary evidence: capture the historical
+					// side's round-8-or-later message and drop it (never
+					// forward it), then keep delivering the remaining
+					// lower-round pending messages until the current side
+					// also emits round 8.
+					result.BobReachedRound8 = true
+					continue
 				}
 			}
 			ok, aErr := alice.UpdateFromBytes(wireBytes, partyIDs[1], e.IsBroadcast)
@@ -423,9 +469,6 @@ pump:
 			result.AliceProgressed = true
 		}
 		drainOut()
-		if result.ReachedRound8 {
-			break pump
-		}
 	}
 
 	// Per-proof independent verification: extract Bob's round-2 message

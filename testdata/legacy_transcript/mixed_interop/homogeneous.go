@@ -50,15 +50,26 @@ func runHomogeneousControl() (*scenarioResult, error) {
 
 pump:
 	for {
+		// Same termination rule as runMixedScenario: stop only after BOTH
+		// parties have emitted their first round-8-or-later message. Each
+		// such message is captured as per-actor evidence and dropped (never
+		// forwarded), and lower-round messages keep flowing until both
+		// sides have emitted round 8 — so this minimal 2-of-20 fixture
+		// subset can never cascade into round 9.
+		if result.round8BothReached() {
+			break pump
+		}
 		select {
 		case m := <-outCh:
-			// See runMixedScenario's doc comment: stop before forwarding a
-			// round-8-or-later message so neither party auto-cascades into
-			// round 9's global reconstruction check, which this minimal
-			// 2-of-20 fixture subset cannot satisfy.
 			if roundNumberOf(m) >= 8 {
-				result.ReachedRound8 = true
-				break pump
+				// Per-actor boundary evidence: capture which party emitted
+				// the round-8-or-later message and drop it.
+				if m.GetFrom().Index == partyIDs[0].Index {
+					result.AliceReachedRound8 = true
+				} else {
+					result.BobReachedRound8 = true
+				}
+				break
 			}
 			wireBytes, _, wErr := m.WireBytes()
 			if wErr != nil {
@@ -81,9 +92,6 @@ pump:
 			}
 		case <-endCh:
 			result.Completed = true
-		}
-		if result.ReachedRound8 {
-			break pump
 		}
 	}
 
