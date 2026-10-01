@@ -205,25 +205,18 @@ func (ct *CTModInt) ExpCT(base, exp *big.Int) *big.Int {
 // exponent (including zero) to ceil(bitLen/8) bytes. bitLen must come from a
 // public bound, never exp.BitLen(). It must be positive, and exp must be
 // nonnegative and fit within bitLen bits; violations panic without truncation
-// or reduction. The arithmetic modulus must be odd.
+// or reduction. The temporary encoding owned by this method is wiped before it
+// returns. The arithmetic modulus must be odd.
 func (ct *CTModInt) ExpCTWithBitLen(base, exp *big.Int, bitLen int) *big.Int {
 	expBytes := padExponent(exp, bitLen)
-	defer func() {
-		for i := range expBytes {
-			expBytes[i] = 0
-		}
-	}()
+	defer zeroBytes(expBytes)
 
 	paddedBase := ct.reduceToPaddedBytes(base)
 	defer ct.releasePadded(paddedBase)
 
 	baseNat := bigmod.NewNat()
 	baseNat.SetBytes(*paddedBase, ct.mod)
-
-	result := bigmod.NewNat()
-	result.Exp(baseNat, expBytes, ct.mod)
-
-	return new(big.Int).SetBytes(result.Bytes(ct.mod))
+	return ct.expCTFromPaddedBase(baseNat, expBytes)
 }
 
 // ModInverseCT computes the modular inverse in constant time using Fermat's little theorem.
