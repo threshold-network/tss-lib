@@ -179,6 +179,33 @@ and the PR #9 entry below):
   local state before emitting the corresponding outbound message. This makes
   message receipt a valid synchronization boundary for concurrent drivers;
   wire bytes and protocol arithmetic are unchanged.
+- **Exported arithmetic boundary errors (PR #37):** Bob/BobWC and Alice
+  proof constructors reject out-of-domain Paillier plaintext witnesses
+  before sampling or constant-time work. Compatibility-enabled Bob
+  verification rejects nil inputs before deriving its historical bound.
+  Paillier encryption, homomorphic multiplication, and decryption reject
+  even or degenerate moduli through their error returns in both timing modes.
+- **Owner-scoped Paillier reuse (PR #37):** constant-time contexts, the
+  fixed-width private exponent, and the decryption coefficient are reused
+  for unchanged key values. Weak-owner cleanup bounds cache lifetime;
+  value snapshots detect sequential mutation of exported key fields.
+  Public key layouts, by-value copies, JSON/Gob encodings, and honest
+  arithmetic remain unchanged.
+- **Proof-local exponent reuse (PR #37):** `ModProof` encodes its invariant
+  secret exponents once for all 80 iterations and wipes those owned bytes
+  at completion. Canonical-operand helpers avoid redundant reductions
+  only where callers establish the required bounds; generic reducing
+  helpers and the documented variable-time conversion limits remain.
+- **Bidirectional live qualification (PR #37):** the mixed-binary harness
+  requires each accept-run Bob/BobWC proof to reject at the tight bound
+  and accept at the compatibility bound. Separate actor flags require
+  both peers to emit round 8 without forwarding round-8 messages.
+  Reject and accept are fresh exchanges, not identical transcript replays.
+- **Boundary regression coverage (PR #37):** malformed arithmetic inputs,
+  concurrent and mutated-key reuse, and mixed-curve Schnorr constructor
+  rejection have consumer-visible regressions. The Go module minimum is
+  aligned with the documented Go 1.25.7 requirement; the preferred
+  development and CI toolchain remains Go 1.26.8.
 
 ### Breaking changes
 
