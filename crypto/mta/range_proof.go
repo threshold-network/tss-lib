@@ -53,6 +53,15 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 		return nil, errors.New("ProveRangeAlice constructor received nil value(s)")
 	}
 
+	// m is Alice's secret value and a Paillier plaintext, so it must sit in
+	// the intended 0 <= m < pk.N domain. Validate before any sampling or
+	// exponentiation so a malformed direct-API witness returns a constructor
+	// error in either timing mode. Honest protocol witnesses stay valid:
+	// AliceInit encrypts a, whose Paillier domain is exactly 0 <= m < N.
+	if m.Cmp(zero) == -1 || m.Cmp(pk.N) != -1 {
+		return nil, errors.New("ProveRangeAlice: witness m outside the Paillier plaintext domain")
+	}
+
 	q := ec.Params().N
 	q3 := new(big.Int).Mul(q, q)
 	q3 = new(big.Int).Mul(q, q3)
