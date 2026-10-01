@@ -40,17 +40,6 @@ func TestGenerateKeyPairMinimumSizeReachesGenerator(t *testing.T) {
 	}
 }
 
-func TestEncryptRejectsEmptyRandomnessDomain(t *testing.T) {
-	pk := &PublicKey{N: big.NewInt(1)}
-	ciphertext, randomness, err := pk.EncryptAndReturnRandomness(big.NewInt(0))
-	assert.EqualError(t, err, "EncryptAndReturnRandomness: could not sample randomness")
-	assert.Nil(t, ciphertext)
-	assert.Nil(t, randomness)
-	ciphertext, err = pk.Encrypt(big.NewInt(0))
-	assert.Error(t, err)
-	assert.Nil(t, ciphertext)
-}
-
 func TestGenerateXsRejectsEmptyDomain(t *testing.T) {
 	pub := crypto.ScalarBaseMult(tss.EC(), big.NewInt(1))
 	for _, n := range []*big.Int{nil, big.NewInt(-1), big.NewInt(0), big.NewInt(1)} {

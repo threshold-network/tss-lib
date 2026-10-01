@@ -115,6 +115,9 @@ func GenerateKeyPair(ctx context.Context, modulusBitLen int, optionalConcurrency
 // ----- //
 
 func (publicKey *PublicKey) EncryptAndReturnRandomness(m *big.Int) (c *big.Int, x *big.Int, err error) {
+	if err = checkPaillierModulus(publicKey.N); err != nil {
+		return nil, nil, err
+	}
 	if m.Cmp(zero) == -1 || m.Cmp(publicKey.N) != -1 { // m < 0 || m >= N ?
 		return nil, nil, ErrMessageTooLong
 	}
@@ -122,7 +125,11 @@ func (publicKey *PublicKey) EncryptAndReturnRandomness(m *big.Int) (c *big.Int, 
 	if x == nil {
 		return nil, nil, errors.New("EncryptAndReturnRandomness: could not sample randomness")
 	}
-	N2 := publicKey.NSquare()
+	st := publicKey.paillierPublicStateFor()
+	N2, err := st.n2Value(publicKey)
+	if err != nil {
+		return nil, nil, err
+	}
 	// 1. gamma^m mod N2
 	var Gm *big.Int
 	if common.IsConstantTimeEnabled() {
@@ -131,9 +138,15 @@ func (publicKey *PublicKey) EncryptAndReturnRandomness(m *big.Int) (c *big.Int, 
 		// factor of N2, i.e. gamma^m == 1 + m*N (mod N2). The guard above
 		// bounds 0 <= m < N, so 1+m*N < N2 already holds -- this is the
 		// exact reduced value, not merely a congruence. m is the only secret
-		// operand; MulCT computes m*N mod N2 in constant time, replacing a
-		// full-width bigmod.Exp with one fixed-width multiply. N2 is odd.
-		Gm = new(big.Int).Add(common.NewCTModInt(N2).MulCT(m, publicKey.N), one)
+		// operand; both m and N are canonical modulo N2 (0 <= m < N < N2
+		// and N < N2), so the allocation-free canonical multiply replaces a
+		// full-width bigmod.Exp. N2 is odd, and its constant-time context is
+		// reused across calls on this key.
+		ctN2, err := st.ctN2(publicKey)
+		if err != nil {
+			return nil, nil, err
+		}
+		Gm = new(big.Int).Add(ctN2.MulCTCanonical(m, publicKey.N), one)
 	} else {
 		Gm = new(big.Int).Exp(publicKey.Gamma(), m, N2)
 	}
@@ -141,6 +154,7 @@ func (publicKey *PublicKey) EncryptAndReturnRandomness(m *big.Int) (c *big.Int, 
 	xN := new(big.Int).Exp(x, publicKey.N, N2)
 	// 3. (1) * (2) mod N2
 	c = common.ModInt(N2).Mul(Gm, xN)
+	runtime.KeepAlive(publicKey)
 	return
 }
 
@@ -150,21 +164,36 @@ func (publicKey *PublicKey) Encrypt(m *big.Int) (c *big.Int, err error) {
 }
 
 func (publicKey *PublicKey) HomoMult(m, c1 *big.Int) (*big.Int, error) {
+	if err := checkPaillierModulus(publicKey.N); err != nil {
+		return nil, err
+	}
 	if m.Cmp(zero) == -1 || m.Cmp(publicKey.N) != -1 { // m < 0 || m >= N ?
 		return nil, ErrMessageTooLong
 	}
-	N2 := publicKey.NSquare()
+	st := publicKey.paillierPublicStateFor()
+	N2, err := st.n2Value(publicKey)
+	if err != nil {
+		return nil, err
+	}
 	if c1.Cmp(zero) == -1 || c1.Cmp(N2) != -1 { // c1 < 0 || c1 >= N2 ?
 		return nil, ErrMessageTooLong
 	}
 	// cipher^m mod N2
 	if common.IsConstantTimeEnabled() {
 		// SECURITY: m is the secret scalar multiplier used as the exponent; exponentiate
-		// in constant time (N2 is odd). The guard above bounds 0 <= m < N, so
-		// N.BitLen() is a proven public bound narrower than N2's default width,
-		// halving the exponent padding bigmod.Exp works over.
-		return common.NewCTModInt(N2).ExpCTWithBitLen(c1, m, publicKey.N.BitLen()), nil
+		// in constant time (N2 is odd). The guards above prove c1 is canonical
+		// modulo N2 (0 <= c1 < N2) and bound 0 <= m < N, so N.BitLen() is a
+		// proven public bound narrower than N2's default width, halving the
+		// exponent padding bigmod.Exp works over; the N2 context is reused
+		// across calls on this key.
+		ctN2, err := st.ctN2(publicKey)
+		if err != nil {
+			return nil, err
+		}
+		defer runtime.KeepAlive(publicKey)
+		return ctN2.ExpCTCanonicalWithBitLen(c1, m, publicKey.N.BitLen()), nil
 	}
+	defer runtime.KeepAlive(publicKey)
 	return common.ModInt(N2).Exp(c1, m), nil
 }
 
@@ -197,7 +226,14 @@ func (publicKey *PublicKey) Gamma() *big.Int {
 // ----- //
 
 func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
-	N2 := privateKey.NSquare()
+	if err = checkPaillierPrivateKey(privateKey); err != nil {
+		return nil, err
+	}
+	st := privateKey.paillierPrivateStateFor()
+	N2, err := st.n2Value(privateKey)
+	if err != nil {
+		return nil, err
+	}
 	if c.Cmp(zero) == -1 || c.Cmp(N2) != -1 { // c < 0 || c >= N2 ?
 		return nil, ErrMessageTooLong
 	}
@@ -207,41 +243,45 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 	}
 
 	useCT := common.IsConstantTimeEnabled()
-	var cExpLambda, gammaExpLambda *big.Int
+	var cExpLambda, inv *big.Int
 	if useCT {
 		// SECURITY: constant-time exponentiation prevents leaking the secret
-		// exponent LambdaN through execution-time variation. N2 is odd.
-		// LambdaN = lcm(p-1,q-1) < (p-1)*(q-1) < N, so N.BitLen() is a proven
-		// public bound narrower than N2's default width for cExpLambda.
-		ctModN2 := common.NewCTModInt(N2)
-		cExpLambda = ctModN2.ExpCTWithBitLen(c, privateKey.LambdaN, privateKey.N.BitLen())
-		// gamma^LambdaN mod N2 is (N+1)^LambdaN mod N2; by the same binomial
-		// identity used in EncryptAndReturnRandomness, this is exactly
-		// 1 + LambdaN*N (mod N2) for every integer LambdaN (the higher-order
-		// binomial terms vanish mod N2), so one constant-time multiply
-		// replaces a second full-width bigmod.Exp.
-		gammaExpLambda = new(big.Int).Add(ctModN2.MulCT(privateKey.LambdaN, privateKey.N), one)
+		// exponent LambdaN through execution-time variation. The guards
+		// above prove 0 <= c < N2, so c is canonical for the shared N2
+		// context; the fixed-width LambdaN encoding and the
+		// ciphertext-independent decryption coefficient are reused from
+		// this key's cached state instead of rebuilt on every call.
+		view, err := st.ctView(privateKey)
+		if err != nil {
+			return nil, err
+		}
+		// view is returned by value (no per-call heap allocation); its
+		// fields are immutable pointers into the entry's snapshot state,
+		// safe to use after ctView returns.
+		cExpLambda = view.modN2.ExpCTCanonicalWithBytes(c, view.lamExp)
+		// mu = L((N+1)^LambdaN mod N2)^(-1) mod N: ciphertext-independent,
+		// so it is computed once per unchanged key value snapshot (see
+		// ct_cache.go) instead of via a full-width modular inverse here.
+		inv = view.coeff
 	} else {
 		cExpLambda = new(big.Int).Exp(c, privateKey.LambdaN, N2)
-		gammaExpLambda = new(big.Int).Exp(privateKey.Gamma(), privateKey.LambdaN, N2)
+		gammaExpLambda := new(big.Int).Exp(privateKey.Gamma(), privateKey.LambdaN, N2)
+		Lg := L(gammaExpLambda, privateKey.N)
+		inv = new(big.Int).ModInverse(Lg, privateKey.N)
+		if inv == nil {
+			// Consistent with the constant-time path's cached init error:
+			// a non-invertible decryption coefficient is a normal error in
+			// both modes, not a nil fed into the final multiplication.
+			return nil, ErrMalformedKey
+		}
 	}
 
 	// 1. L(u) = (c^LambdaN-1 mod N2) / N
 	Lc := L(cExpLambda, privateKey.N)
-	// 2. L(u) = (Gamma^LambdaN-1 mod N2) / N
-	Lg := L(gammaExpLambda, privateKey.N)
-	// 3. (1) * modInv(2) mod N
-	var inv *big.Int
-	if useCT {
-		// LambdaN is a group exponent for the units modulo N, so raising a
-		// unit to LambdaN-1 computes its inverse. Reuse the value already
-		// needed for decryption without requiring the optional PhiN field.
-		ctModN := common.NewCTModIntWithPhi(privateKey.N, privateKey.LambdaN)
-		inv = ctModN.ModInverseCT(Lg)
-	} else {
-		inv = new(big.Int).ModInverse(Lg, privateKey.N)
-	}
+	// 2. (1) * inv mod N -- inv is the ciphertext-independent decryption
+	// coefficient.
 	m = common.ModInt(privateKey.N).Mul(Lc, inv)
+	runtime.KeepAlive(privateKey)
 	return
 }
 
