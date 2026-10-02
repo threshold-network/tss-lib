@@ -87,11 +87,12 @@ go func() {
 ```
 
 ### Signing
-Use the `signing.LocalParty` for signing and provide it with a `message` to sign. It requires the key data obtained from the keygen protocol. The signature will be sent through the `endCh` once completed.
+Use the `signing.LocalParty` for signing and provide it with a `message` to sign. It requires the key data obtained from the keygen protocol. The signature will be sent through the `endCh` (a `chan *common.SignatureData`) once completed; the receiver owns the delivered value.
 
 Please note that `t+1` signers are required to sign a message and for optimal usage no more than this should be involved. Each signer should have the same view of who the `t+1` signers are.
 
 ```go
+endCh := make(chan *common.SignatureData, 1)
 fullBytesLen := (params.EC().Params().N.BitLen() + 7) / 8
 party := signing.NewLocalParty(message, params, ourKeyData, outCh, endCh, fullBytesLen)
 go func() {

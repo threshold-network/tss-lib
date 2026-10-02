@@ -291,7 +291,7 @@ func runMixedScenario(name, seedSuffix string, historicalDir string, compat bool
 	msgBytes, _ := hex.DecodeString(fixedMessageHex)
 
 	outCh := make(chan tss.Message, 16)
-	endCh := make(chan common.SignatureData, 1)
+	endCh := make(chan *common.SignatureData, 1)
 	alice := signing.NewLocalParty(msg, params, keys[0], outCh, endCh, len(msgBytes))
 
 	peer, err := spawnHistoricalPeer(historicalDir)

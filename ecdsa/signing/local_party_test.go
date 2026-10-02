@@ -119,7 +119,7 @@ func testE2EConcurrent(t *testing.T, mode tss.ProtocolMode) {
 
 	errCh := make(chan *tss.Error, len(signPIDs))
 	outCh := make(chan tss.Message, len(signPIDs))
-	endCh := make(chan common.SignatureData, len(signPIDs))
+	endCh := make(chan *common.SignatureData, len(signPIDs))
 
 	updater := test.SharedPartyUpdater
 
@@ -238,7 +238,7 @@ func TestE2EWithHDKeyDerivation(t *testing.T) {
 
 	errCh := make(chan *tss.Error, len(signPIDs))
 	outCh := make(chan tss.Message, len(signPIDs))
-	endCh := make(chan common.SignatureData, len(signPIDs))
+	endCh := make(chan *common.SignatureData, len(signPIDs))
 
 	updater := test.SharedPartyUpdater
 
@@ -332,7 +332,7 @@ func TestSigning_Start_RequiresSessionNonce(t *testing.T) {
 
 	p2pCtx := tss.NewPeerContext(signPIDs)
 	outCh := make(chan tss.Message, len(signPIDs))
-	endCh := make(chan common.SignatureData, len(signPIDs))
+	endCh := make(chan *common.SignatureData, len(signPIDs))
 
 	params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[0], len(signPIDs), testThreshold)
 	params.SetProtocolMode(tss.ProtocolModeSecurityV2)
