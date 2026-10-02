@@ -51,6 +51,7 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #34** — shared proof-verifier resource bounds and `ModProof` context reuse.
 - **PR #36** — publish complete signing-round state before outbound messages.
 - **PR #38** — stop caching private-key Paillier decryption state; go directive CI check.
+- **PR #39** — signing delivers `*common.SignatureData` instead of a by-value protobuf message.
 
 ### ⚠️ Compatibility — read before upgrading
 
@@ -395,6 +396,19 @@ and the PR #9 entry below):
   the seed `(1, 1)` now feeds a v2 PCG instead of the legacy additive-lagged-Fibonacci
   generator.
 
+#### 9. Signing results are delivered by pointer (PR #39)
+- **What:** `signing.NewLocalParty` and `NewLocalPartyWithKDD` take
+  `end chan<- *common.SignatureData` instead of `chan<- common.SignatureData`. The
+  party sends a deep copy (`proto.Clone`) that the receiver owns.
+- **Break type:** Source/API (compile-time). Wire bytes and signatures are unchanged.
+- **Motivation:** `common.SignatureData` is a protobuf message that embeds a mutex, so
+  delivering it by value made every receiver copy a lock (`go vet` copylocks).
+- **Provenance:** `BNB fbb0ef7` (the same API), with the clone on send as a
+  `threshold-original` difference. Previously deferred as unneeded churn; adopted
+  before the first tagged release so callers absorb one breaking release, not two.
+- **Migration:** `endCh := make(chan *common.SignatureData, 1)`; the received value is
+  a `*common.SignatureData`.
+
 ### Removed
 
 #### EdDSA protocols (PR #5)
@@ -563,8 +577,6 @@ rejecting input that an honest caller would previously have produced.
 
 - Module path bumps to `/v2`, `/v3` (`BNB faf1884`, `c23246e`) — skipped to preserve
   Threshold compatibility; the module path remains `github.com/bnb-chain/tss-lib`.
-- `SignatureData` channel-to-pointer change (`BNB fbb0ef7`) — public API churn not needed
-  for hardening.
 - Dependency / random-source API churn and repository/CI/metadata housekeeping
   (`BNB b8d526d`, `8abf1d5`, `6c233c6`, `87f7e12`, `7113b68`, `d0325a1`, `dca2ac4`).
 - `crypto/mta.AliceEnd`/`AliceEndWC` Paillier-decrypt path: carries the same class of
