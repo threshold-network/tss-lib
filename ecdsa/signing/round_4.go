@@ -40,13 +40,30 @@ func (round *round4) Start() *tss.Error {
 	}
 
 	// compute the multiplicative inverse thelta mod q
-	thetaInverse = modN.ModInverse(thetaInverse)
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: constant-time modular inverse for secret theta (BNB 3709c25).
+		thetaInverse = common.GetCTModInt(round.Params().EC().Params().N).ModInverseCT(thetaInverse)
+	} else {
+		thetaInverse = modN.ModInverse(thetaInverse)
+	}
 	if thetaInverse == nil {
 		return round.WrapError(errors.New("theta inverse is nil"))
 	}
 	i := round.PartyID().Index
-	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
-	piGamma, err := schnorr.NewZKProofWithSession(contextI, round.temp.gamma, round.temp.pointGamma)
+	var piGamma *schnorr.ZKProof
+	var err error
+	if round.ProtocolMode() == tss.ProtocolModeLegacy {
+		piGamma, err = schnorr.NewZKProof(
+			round.temp.gamma,
+			round.temp.pointGamma,
+		)
+	} else {
+		piGamma, err = schnorr.NewZKProofWithSession(
+			round.proofContext(i)[0],
+			round.temp.gamma,
+			round.temp.pointGamma,
+		)
+	}
 	if err != nil {
 		return round.WrapError(errors2.Wrapf(err, "NewZKProof(gamma, bigGamma)"))
 	}

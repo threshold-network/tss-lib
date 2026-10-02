@@ -8,6 +8,7 @@ package signing
 
 import (
 	"errors"
+	"math/big"
 
 	errors2 "github.com/pkg/errors"
 
@@ -46,8 +47,14 @@ func (round *round5) Start() *tss.Error {
 		if err != nil {
 			return round.WrapError(errors.New("failed to unmarshal bigGamma proof"), Pj)
 		}
-		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
-		ok = proof.VerifyWithSession(contextJ, bigGammaJPoint)
+		if round.ProtocolMode() == tss.ProtocolModeLegacy {
+			ok = proof.Verify(bigGammaJPoint)
+		} else {
+			ok = proof.VerifyWithSession(
+				round.proofContext(j)[0],
+				bigGammaJPoint,
+			)
+		}
 		if !ok {
 			return round.WrapError(errors.New("failed to prove bigGamma"), Pj)
 		}
@@ -58,11 +65,21 @@ func (round *round5) Start() *tss.Error {
 	}
 
 	R = R.ScalarMult(round.temp.thetaInverse)
+	if R == nil {
+		return round.WrapError(errors.New("R.ScalarMult(thetaInverse) produced a nil point"))
+	}
 	N := round.Params().EC().Params().N
 	modN := common.ModInt(N)
 	rx := R.X()
 	ry := R.Y()
-	si := modN.Add(modN.Mul(round.temp.m, round.temp.k), modN.Mul(rx, round.temp.sigma))
+	var si *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: constant-time multiplication for the secret operands k and sigma (m is the public message hash; rx = R.X() is the raw x-coordinate published as the signature r component in round 10, finalize.go — see the recovery-ID convention there).
+		ctModN := common.GetCTModInt(N)
+		si = modN.Add(ctModN.MulCT(round.temp.m, round.temp.k), ctModN.MulCT(rx, round.temp.sigma))
+	} else {
+		si = modN.Add(modN.Mul(round.temp.m, round.temp.k), modN.Mul(rx, round.temp.sigma))
+	}
 
 	// clear temp.w and temp.k from memory, lint ignore
 	round.temp.w = zero
@@ -81,7 +98,6 @@ func (round *round5) Start() *tss.Error {
 	cmt := commitments.NewHashCommitment(bigVi.X(), bigVi.Y(), bigAi.X(), bigAi.Y())
 	r5msg := NewSignRound5Message(round.PartyID(), cmt.C)
 	round.temp.signRound5Messages[round.PartyID().Index] = r5msg
-	round.out <- r5msg
 
 	round.temp.li = li
 	round.temp.bigAi = bigAi
@@ -92,6 +108,7 @@ func (round *round5) Start() *tss.Error {
 	round.temp.rx = rx
 	round.temp.ry = ry
 	round.temp.bigR = R
+	round.out <- r5msg
 
 	return nil
 }

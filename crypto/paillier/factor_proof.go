@@ -57,8 +57,21 @@ func (privateKey *PrivateKey) FactorProof(N, s, t *big.Int, session ...[]byte) *
 
 	modN := common.ModInt(N)
 
-	P := modN.ExpMulExp(s, p, t, mu)
-	Q := modN.ExpMulExp(s, q, t, v)
+	var P, Q *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: p and q are the secret prime factors; their exponentiations get the
+		// constant-time path (N is the verifier's odd ring-Pedersen modulus). The t^mu /
+		// t^v blinds use random exponents and stay on math/big.
+		ctModN := common.NewCTModInt(N)
+		// The factors are bounded by our public N0, independently of the
+		// verifier's modulus N. N0 also avoids revealing either factor's width.
+		exponentBits := N0.BitLen()
+		P = modN.Mul(ctModN.ExpCTWithBitLen(s, p, exponentBits), modN.Exp(t, mu))
+		Q = modN.Mul(ctModN.ExpCTWithBitLen(s, q, exponentBits), modN.Exp(t, v))
+	} else {
+		P = modN.ExpMulExp(s, p, t, mu)
+		Q = modN.ExpMulExp(s, q, t, v)
+	}
 	A := modN.ExpMulExp(s, a, t, x)
 	B := modN.ExpMulExp(s, b, t, y)
 	T := modN.ExpMulExp(Q, a, t, r)
@@ -94,10 +107,20 @@ func (pf FactorProof) FactorVerify(pkN, N, s, t *big.Int, session ...[]byte) (bo
 	if common.AnyIsNil(pf.P, pf.Q, pf.A, pf.B, pf.T, pf.Sigma, pf.Z1, pf.Z2, pf.W1, pf.W2, pf.V) {
 		return false, fmt.Errorf("fac proof verify: nil bigint present in proof")
 	}
-	if !common.IsUsableUnknownOrderModulus(pkN, verifyMinModulusBitLen) {
+	// Width policy: reject moduli wider than the shared ceiling before any
+	// ProbablyPrime call or modulus-sized work is run against them.
+	if common.ExceedsUnknownOrderModulusCeiling(pkN) {
+		return false, fmt.Errorf("fac proof verify: Paillier modulus bit length %d exceeds maximum %d",
+			pkN.BitLen(), common.MaxUnknownOrderModulusBitLen)
+	}
+	if common.ExceedsUnknownOrderModulusCeiling(N) {
+		return false, fmt.Errorf("fac proof verify: auxiliary modulus bit length %d exceeds maximum %d",
+			N.BitLen(), common.MaxUnknownOrderModulusBitLen)
+	}
+	if !common.IsUsableUnknownOrderModulus(pkN, common.MinUnknownOrderModulusBitLen) {
 		return false, fmt.Errorf("fac proof verify: invalid Paillier modulus %x", pkN)
 	}
-	if !common.IsUsableUnknownOrderModulus(N, verifyMinModulusBitLen) {
+	if !common.IsUsableUnknownOrderModulus(N, common.MinUnknownOrderModulusBitLen) {
 		return false, fmt.Errorf("fac proof verify: invalid auxiliary modulus %x", N)
 	}
 	for name, base := range map[string]*big.Int{

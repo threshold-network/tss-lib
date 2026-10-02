@@ -31,11 +31,11 @@ type (
 
 		keys keygen.LocalPartySaveData
 		temp localTempData
-		data common.SignatureData
+		data *common.SignatureData
 
 		// outbound messaging
 		out chan<- tss.Message
-		end chan<- common.SignatureData
+		end chan<- *common.SignatureData
 	}
 
 	localMessageStore struct {
@@ -103,13 +103,15 @@ func NewLocalParty(
 	params *tss.Parameters,
 	key keygen.LocalPartySaveData,
 	out chan<- tss.Message,
-	end chan<- common.SignatureData,
+	end chan<- *common.SignatureData,
 	fullBytesLen ...int,
 ) tss.Party {
 	return NewLocalPartyWithKDD(msg, params, key, nil, out, end, fullBytesLen...)
 }
 
 // NewLocalPartyWithKDD returns a party with key derivation delta for HD support.
+// The message is copied so later caller mutations cannot change this party's
+// signing context.
 //
 // fullBytesLen fixes the byte width used to encode the message for the final
 // ECDSA verification/output path (preserving leading zero bytes). Every signer
@@ -123,10 +125,11 @@ func NewLocalPartyWithKDD(
 	key keygen.LocalPartySaveData,
 	keyDerivationDelta *big.Int,
 	out chan<- tss.Message,
-	end chan<- common.SignatureData,
+	end chan<- *common.SignatureData,
 	fullBytesLen ...int,
 ) tss.Party {
 	validatedFullBytesLen := validateFullBytesLen("NewLocalPartyWithKDD", msg, params, fullBytesLen)
+	params.FreezeProtocolMode()
 
 	partyCount := len(params.Parties().IDs())
 	p := &LocalParty{
@@ -134,7 +137,7 @@ func NewLocalPartyWithKDD(
 		params:    params,
 		keys:      keygen.BuildLocalSaveDataSubset(key, params.Parties().IDs()),
 		temp:      localTempData{},
-		data:      common.SignatureData{},
+		data:      &common.SignatureData{},
 		out:       out,
 		end:       end,
 	}
@@ -151,7 +154,9 @@ func NewLocalPartyWithKDD(
 	p.temp.signRound9Messages = make([]tss.ParsedMessage, partyCount)
 	// temp data init
 	p.temp.keyDerivationDelta = keyDerivationDelta
-	p.temp.m = msg
+	if msg != nil {
+		p.temp.m = new(big.Int).Set(msg)
+	}
 	p.temp.fullBytesLen = validatedFullBytesLen
 	p.temp.cis = make([]*big.Int, partyCount)
 	p.temp.bigWs = make([]*crypto.ECPoint, partyCount)
@@ -187,7 +192,7 @@ func validateFullBytesLen(caller string, msg *big.Int, params *tss.Parameters, f
 }
 
 func (p *LocalParty) FirstRound() tss.Round {
-	return newRound1(p.params, &p.keys, &p.data, &p.temp, p.out, p.end)
+	return newRound1(p.params, &p.keys, p.data, &p.temp, p.out, p.end)
 }
 
 func (p *LocalParty) Start() *tss.Error {

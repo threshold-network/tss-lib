@@ -1,27 +1,20 @@
 package paillier
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"testing"
-	"time"
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
+// modSetUp shares the package-level fixture loaded by setUp: the
+// pre-generated 2048-bit Paillier key pair from test/_ecdsa_fixtures.
 func modSetUp(t *testing.T) {
-	if privateKey != nil && publicKey != nil {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	var err error
-	privateKey, publicKey, err = GenerateKeyPair(ctx, testPaillierKeyLength)
-	assert.NoError(t, err)
+	setUp(t)
 }
 
 func TestModProofVerify(t *testing.T) {
@@ -298,4 +291,63 @@ func TestModSqrt(t *testing.T) {
 	assert.False(isQuadResidueModComposite(b(59), b(7), b(11)))
 
 	assert.Equal(b(37), quadResidueModComposite(b(58), b(7), b(11), b(77), b(60)))
+}
+
+// TestModulusBitLenCeilingPredicate pins the common.ExceedsUnknownOrderModulusCeiling
+// boundary directly: a modulus at exactly MaxUnknownOrderModulusBitLen bits must
+// not exceed the ceiling, and a modulus one bit wider must.
+func TestModulusBitLenCeilingPredicate(t *testing.T) {
+	atCeiling := new(big.Int).Lsh(one, uint(common.MaxUnknownOrderModulusBitLen-1))
+	if atCeiling.BitLen() != common.MaxUnknownOrderModulusBitLen {
+		t.Fatalf("test modulus is %d bits, wanted %d", atCeiling.BitLen(), common.MaxUnknownOrderModulusBitLen)
+	}
+	if common.ExceedsUnknownOrderModulusCeiling(atCeiling) {
+		t.Fatal("a modulus at exactly MaxUnknownOrderModulusBitLen must not exceed the ceiling")
+	}
+
+	pastCeiling := new(big.Int).Lsh(one, uint(common.MaxUnknownOrderModulusBitLen))
+	if pastCeiling.BitLen() != common.MaxUnknownOrderModulusBitLen+1 {
+		t.Fatalf("test modulus is %d bits, wanted %d", pastCeiling.BitLen(), common.MaxUnknownOrderModulusBitLen+1)
+	}
+	if !common.ExceedsUnknownOrderModulusCeiling(pastCeiling) {
+		t.Fatal("a modulus one bit past MaxUnknownOrderModulusBitLen must exceed the ceiling")
+	}
+}
+
+// TestModProofVerifyModulusBitLenCeilingBehavior tests the end-to-end ModVerify
+// wiring: an odd modulus just past the ceiling (passing simple parity and
+// minimum-size guards) is rejected specifically by the ceiling check, without
+// pinning formatted error text.
+func TestModProofVerifyModulusBitLenCeilingBehavior(t *testing.T) {
+	proof := minimalModProof()
+
+	// Odd modulus one bit past the ceiling: 2^65536 + 1.
+	// Clears the odd parity check and minimum bit length floor.
+	pastCeiling := new(big.Int).Lsh(one, uint(common.MaxUnknownOrderModulusBitLen))
+	pastCeiling.Add(pastCeiling, one)
+	require.Equal(t, common.MaxUnknownOrderModulusBitLen+1, pastCeiling.BitLen())
+	require.Equal(t, uint(1), pastCeiling.Bit(0), "must be odd")
+
+	ok, err := proof.ModVerify(pastCeiling)
+	assert.False(t, ok)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errModulusCeiling), "must reject with the modulus-ceiling sentinel")
+
+	// At-ceiling modulus: 2^(65536-1) (even). Passes the ceiling check, but
+	// gets rejected on later parity check — proving the ceiling check itself
+	// does not reject at-ceiling moduli.
+	atCeiling := new(big.Int).Lsh(one, uint(common.MaxUnknownOrderModulusBitLen-1))
+	ok, err = proof.ModVerify(atCeiling)
+	assert.False(t, ok)
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, errModulusCeiling), "at-ceiling modulus must not be rejected by ceiling")
+}
+
+// minimalModProof builds a ModProof that clears per-member nil checks.
+func minimalModProof() *ModProof {
+	proof := &ModProof{W: big.NewInt(2)}
+	for i := range proof.X {
+		proof.X[i], proof.Z[i] = big.NewInt(7), big.NewInt(5)
+	}
+	return proof
 }

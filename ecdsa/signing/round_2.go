@@ -12,7 +12,6 @@ import (
 
 	errorspkg "github.com/pkg/errors"
 
-	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto/mta"
 	"github.com/bnb-chain/tss-lib/tss"
 )
@@ -31,7 +30,6 @@ func (round *round2) Start() *tss.Error {
 	errChs := make(chan *tss.Error, (len(round.Parties().IDs())-1)*2)
 	wg := sync.WaitGroup{}
 	wg.Add((len(round.Parties().IDs()) - 1) * 2)
-	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 	attributeBobMidErr := func(err error, Pj *tss.PartyID) *tss.Error {
 		if errors.Is(err, mta.ErrRangeProofVerify) {
 			return round.WrapError(errorspkg.Wrap(err, "peer RangeProofAlice rejected"), Pj)
@@ -63,7 +61,7 @@ func (round *round2) Start() *tss.Error {
 				round.key.NTildej[i],
 				round.key.H1j[i],
 				round.key.H2j[i],
-				contextI)
+				round.proofContext(i)...)
 			// should be thread safe as these are pre-allocated
 			round.temp.betas[j] = beta
 			round.temp.c1jis[j] = c1ji
@@ -94,7 +92,7 @@ func (round *round2) Start() *tss.Error {
 				round.key.H1j[i],
 				round.key.H2j[i],
 				round.temp.bigWs[i],
-				contextI)
+				round.proofContext(i)...)
 			round.temp.vs[j] = v
 			round.temp.c2jis[j] = c2ji
 			round.temp.pi2jis[j] = pi2ji

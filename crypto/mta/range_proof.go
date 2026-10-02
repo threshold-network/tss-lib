@@ -18,7 +18,6 @@ import (
 
 const (
 	RangeProofAliceBytesParts = 6
-	verifyMinModulusBitLen    = 2048
 	fsDomainTagRangeAlice     = "tss-lib.threshold.mta.range-alice"
 	fsDomainTagBob            = "tss-lib.threshold.mta.bob"
 	fsDomainTagBobWC          = "tss-lib.threshold.mta.bob-wc"
@@ -54,6 +53,15 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 		return nil, errors.New("ProveRangeAlice constructor received nil value(s)")
 	}
 
+	// m is Alice's secret value and a Paillier plaintext, so it must sit in
+	// the intended 0 <= m < pk.N domain. Validate before any sampling or
+	// exponentiation so a malformed direct-API witness returns a constructor
+	// error in either timing mode. Honest protocol witnesses stay valid:
+	// AliceInit encrypts a, whose Paillier domain is exactly 0 <= m < N.
+	if m.Cmp(zero) == -1 || m.Cmp(pk.N) != -1 {
+		return nil, errors.New("ProveRangeAlice: witness m outside the Paillier plaintext domain")
+	}
+
 	q := ec.Params().N
 	q3 := new(big.Int).Mul(q, q)
 	q3 = new(big.Int).Mul(q, q3)
@@ -64,6 +72,9 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 	alpha := common.GetRandomPositiveInt(q3)
 	// 2.
 	beta := common.GetRandomPositiveRelativelyPrimeInt(pk.N)
+	if beta == nil {
+		return nil, errors.New("ProveRangeAlice: could not sample randomness")
+	}
 
 	// 3.
 	gamma := common.GetRandomPositiveInt(q3NTilde)
@@ -73,8 +84,17 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 
 	// 5.
 	modNTilde := common.ModInt(NTilde)
-	z := modNTilde.Exp(h1, m)
-	z = modNTilde.Mul(z, modNTilde.Exp(h2, rho))
+	var z *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: m is Alice's secret value used as the exponent; exponentiate in
+		// constant time (NTilde is odd). The h2^rho blind and the u/w terms use one-time
+		// randomness and stay on math/big (see common/constant_time.go).
+		// The plaintext is bounded by pk.N, independently of NTilde's width.
+		z = modNTilde.Mul(common.NewCTModInt(NTilde).ExpCTWithBitLen(h1, m, pk.N.BitLen()), modNTilde.Exp(h2, rho))
+	} else {
+		z = modNTilde.Exp(h1, m)
+		z = modNTilde.Mul(z, modNTilde.Exp(h2, rho))
+	}
 
 	// 6.
 	modNSquared := common.ModInt(pk.NSquare())
@@ -86,8 +106,7 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 	w = modNTilde.Mul(w, modNTilde.Exp(h2, gamma))
 
 	// 8-9. e'
-	eHash := common.SHA512_256i_TAGGED(fsSessionRangeAlice(Session), append(pk.AsInts(), NTilde, h1, h2, c, z, u, w)...)
-	e := common.ModReduceHash(q, eHash)
+	e := rangeProofChallenge(Session, q, pk, NTilde, h1, h2, c, z, u, w)
 
 	modN := common.ModInt(pk.N)
 	s := modN.Exp(r, e)
@@ -125,8 +144,15 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 		NTilde == nil || h1 == nil || h2 == nil || c == nil {
 		return false
 	}
-	if !common.IsUsableUnknownOrderModulus(pk.N, verifyMinModulusBitLen) ||
-		!common.IsUsableUnknownOrderModulus(NTilde, verifyMinModulusBitLen) {
+	// Width policy: reject caller-supplied moduli wider than the shared
+	// ceiling before any ProbablyPrime call or modulus-sized work is run
+	// against them.
+	if common.ExceedsUnknownOrderModulusCeiling(pk.N) ||
+		common.ExceedsUnknownOrderModulusCeiling(NTilde) {
+		return false
+	}
+	if !common.IsUsableUnknownOrderModulus(pk.N, common.MinUnknownOrderModulusBitLen) ||
+		!common.IsUsableUnknownOrderModulus(NTilde, common.MinUnknownOrderModulusBitLen) {
 		return false
 	}
 	if !common.IsCanonicalGenerator(NTilde, h1) || !common.IsCanonicalGenerator(NTilde, h2) || h1.Cmp(h2) == 0 {
@@ -196,8 +222,18 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 	}
 
 	// 1-2. e'
-	eHash := common.SHA512_256i_TAGGED(fsSessionRangeAlice(Session), append(pk.AsInts(), NTilde, h1, h2, c, pf.Z, pf.U, pf.W)...)
-	e := common.ModReduceHash(q, eHash)
+	e := rangeProofChallenge(
+		Session,
+		q,
+		pk,
+		NTilde,
+		h1,
+		h2,
+		c,
+		pf.Z,
+		pf.U,
+		pf.W,
+	)
 	if e.Sign() == 0 {
 		return false
 	}
@@ -235,8 +271,28 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 	return true
 }
 
+func rangeProofChallenge(
+	session []byte,
+	q *big.Int,
+	pk *paillier.PublicKey,
+	nTilde, h1, h2, c, z, u, w *big.Int,
+) *big.Int {
+	if session == nil {
+		// Historical GG20 transcript. The auxiliary modulus and generators
+		// were not included in the challenge input.
+		return common.HashToN(q, append(pk.AsInts(), c, z, u, w)...)
+	}
+
+	challengeHash := common.SHA512_256i_TAGGED(
+		fsSessionRangeAlice(session),
+		append(pk.AsInts(), nTilde, h1, h2, c, z, u, w)...,
+	)
+	return common.ModReduceHash(q, challengeHash)
+}
+
 func (pf *RangeProofAlice) ValidateBasic() bool {
-	return pf.Z != nil &&
+	return pf != nil &&
+		pf.Z != nil &&
 		pf.U != nil &&
 		pf.W != nil &&
 		pf.S != nil &&
@@ -245,6 +301,9 @@ func (pf *RangeProofAlice) ValidateBasic() bool {
 }
 
 func (pf *RangeProofAlice) Bytes() [RangeProofAliceBytesParts][]byte {
+	if !pf.ValidateBasic() {
+		panic(fmt.Errorf("RangeProofAlice.Bytes: invalid receiver"))
+	}
 	return [...][]byte{
 		pf.Z.Bytes(),
 		pf.U.Bytes(),

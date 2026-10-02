@@ -65,6 +65,9 @@ func PrepareForSigning(ec elliptic.Curve, i, pax int, xi *big.Int, ks []*big.Int
 			// big.Int Div is calculated as: a/b = a * modInv(b,q)
 			iota := modQ.Mul(ksc, modQ.ModInverse(new(big.Int).Sub(ksc, ksj)))
 			bigWj = bigWj.ScalarMult(iota)
+			if bigWj == nil {
+				return nil, nil, fmt.Errorf("PrepareForSigning: scalar mult produced a nil point at index %d", j)
+			}
 		}
 		bigWs[j] = bigWj
 	}

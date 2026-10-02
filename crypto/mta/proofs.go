@@ -41,6 +41,16 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 		return nil, errors.New("ProveBob() received a nil argument")
 	}
 
+	// x and y are Bob's secret MtA inputs and Paillier plaintexts, so they
+	// must sit in the intended 0 <= v < pk.N domain. Validate before any
+	// sampling or exponentiation so a malformed direct-API witness returns an
+	// error in either timing mode. Honest legacy and security-v2 witnesses
+	// stay valid: b < q < N and the y < q^5 / y < N paths both bound y below
+	// the Paillier modulus.
+	if x.Cmp(zero) == -1 || x.Cmp(pk.N) != -1 || y.Cmp(zero) == -1 || y.Cmp(pk.N) != -1 {
+		return nil, errors.New("ProveBob: witness outside the Paillier plaintext domain")
+	}
+
 	NSquared := pk.NSquare()
 
 	q := ec.Params().N
@@ -58,14 +68,33 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 	// 2.
 	rho := common.GetRandomPositiveInt(qNTilde)
 	sigma := common.GetRandomPositiveInt(qNTilde)
-	tau := common.GetRandomPositiveInt(q3NTilde)
+	var tau *big.Int
+	if Session == nil {
+		// The legacy transcript samples tau below q*N-tilde. Keep that exact
+		// distribution for byte-compatible proof generation; security-v2 uses
+		// the wider q^3*N-tilde range.
+		tau = common.GetRandomPositiveInt(qNTilde)
+	} else {
+		tau = common.GetRandomPositiveInt(q3NTilde)
+	}
 
 	// 3.
 	rhoPrm := common.GetRandomPositiveInt(q3NTilde)
 
 	// 4.
 	beta := common.GetRandomPositiveRelativelyPrimeInt(pk.N)
-	gamma := common.GetRandomPositiveInt(q7)
+	if beta == nil {
+		return nil, errors.New("ProveBob: could not sample randomness")
+	}
+	var gamma *big.Int
+	if Session == nil {
+		// Historical Bob proofs sample gamma as a unit modulo the Paillier
+		// modulus. Besides reproducing PRIOR proof bytes, this is why the legacy
+		// verifier must accept T1 above q^7.
+		gamma = common.GetRandomPositiveRelativelyPrimeInt(pk.N)
+	} else {
+		gamma = common.GetRandomPositiveInt(q7)
+	}
 
 	// 5.
 	u := crypto.NewECPointNoCurveCheck(ec, zero, zero) // initialization suppresses an IDE warning
@@ -73,18 +102,27 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 		u = crypto.ScalarBaseMult(ec, alpha)
 	}
 
-	// 6.
+	// 6, 7, 8: z and t carry the secret MtA witnesses x and y as exponents; zPrm and the
+	// h2^* terms use one-time random blinds. Harden only the secret-exponent terms.
 	modNTilde := common.ModInt(NTilde)
-	z := modNTilde.Exp(h1, x)
-	z = modNTilde.Mul(z, modNTilde.Exp(h2, rho))
-
-	// 7.
 	zPrm := modNTilde.Exp(h1, alpha)
 	zPrm = modNTilde.Mul(zPrm, modNTilde.Exp(h2, rhoPrm))
 
-	// 8.
-	t := modNTilde.Exp(h1, y)
-	t = modNTilde.Mul(t, modNTilde.Exp(h2, sigma))
+	var z, t *big.Int
+	if common.IsConstantTimeEnabled() {
+		// SECURITY: x and y are Bob's secret MtA inputs; exponentiate them in constant
+		// time (NTilde is odd). The h2^rho / h2^sigma blinds use one-time randomness and
+		// stay on math/big (see the coverage note in common/constant_time.go).
+		ctModNTilde := common.NewCTModInt(NTilde)
+		// Both inputs are Paillier plaintexts bounded by pk.N, which can be
+		// wider than NTilde. Do not derive the exponent width from NTilde.
+		exponentBits := pk.N.BitLen()
+		z = modNTilde.Mul(ctModNTilde.ExpCTWithBitLen(h1, x, exponentBits), modNTilde.Exp(h2, rho))
+		t = modNTilde.Mul(ctModNTilde.ExpCTWithBitLen(h1, y, exponentBits), modNTilde.Exp(h2, sigma))
+	} else {
+		z = modNTilde.Mul(modNTilde.Exp(h1, x), modNTilde.Exp(h2, rho))
+		t = modNTilde.Mul(modNTilde.Exp(h1, y), modNTilde.Exp(h2, sigma))
+	}
 
 	// 9.
 	modNSquared := common.ModInt(NSquared)
@@ -97,17 +135,23 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 	w = modNTilde.Mul(w, modNTilde.Exp(h2, tau))
 
 	// 11-12. e'
-	var e *big.Int
-	{ // derive the Fiat-Shamir challenge by reducing the hash mod q
-		var eHash *big.Int
-		// X is nil if called by ProveBob (Bob's proof "without check")
-		if X == nil {
-			eHash = common.SHA512_256i_TAGGED(fsSessionBob(Session), append(pk.AsInts(), NTilde, h1, h2, c1, c2, z, zPrm, t, v, w)...)
-		} else {
-			eHash = common.SHA512_256i_TAGGED(fsSessionBobWC(Session), append(pk.AsInts(), NTilde, h1, h2, X.X(), X.Y(), c1, c2, u.X(), u.Y(), z, zPrm, t, v, w)...)
-		}
-		e = common.ModReduceHash(q, eHash)
-	}
+	e := bobProofChallenge(
+		Session,
+		q,
+		pk,
+		NTilde,
+		h1,
+		h2,
+		c1,
+		c2,
+		X,
+		u,
+		z,
+		zPrm,
+		t,
+		v,
+		w,
+	)
 
 	// 13.
 	modN := common.ModInt(pk.N)
@@ -149,6 +193,10 @@ func ProveBob(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c2,
 }
 
 func ProofBobWCFromBytes(ec elliptic.Curve, bzs [][]byte) (*ProofBobWC, error) {
+	// The base decoder also accepts the shorter ProofBob encoding.
+	if !common.NonEmptyMultiBytes(bzs, ProofBobWCBytesParts) {
+		return nil, fmt.Errorf("expected %d byte parts to construct ProofBobWC", ProofBobWCBytesParts)
+	}
 	proofBob, err := ProofBobFromBytes(bzs)
 	if err != nil {
 		return nil, err
@@ -189,187 +237,28 @@ func ProofBobFromBytes(bzs [][]byte) (*ProofBob, error) {
 // ProveBobWC.Verify implements verification of Bob's proof with check "VerifyMtawc_Bob" used in the MtA protocol from GG18Spec (9) Fig. 10.
 // an absent `X` verifies a proof generated without the X consistency check X = g^x
 func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c2 *big.Int, X *crypto.ECPoint, session ...[]byte) bool {
-	Session := optionalProofSession(session)
-	if pf == nil || pf.ProofBob == nil ||
-		ec == nil || pk == nil || pk.N == nil ||
-		NTilde == nil || h1 == nil || h2 == nil || c1 == nil || c2 == nil {
-		return false
-	}
-	if X != nil {
-		if !pf.ValidateBasic() {
-			return false
-		}
-	} else if !pf.ProofBob.ValidateBasic() {
-		return false
-	}
-	if !common.IsUsableUnknownOrderModulus(pk.N, verifyMinModulusBitLen) ||
-		!common.IsUsableUnknownOrderModulus(NTilde, verifyMinModulusBitLen) {
-		return false
-	}
-	if !common.IsCanonicalGenerator(NTilde, h1) || !common.IsCanonicalGenerator(NTilde, h2) || h1.Cmp(h2) == 0 {
-		return false
-	}
-	if !common.IsCanonicalPaillierCiphertext(c1, pk.N) || !common.IsCanonicalPaillierCiphertext(c2, pk.N) {
-		return false
-	}
+	// The shared core derives the T1 bound behind its malformed-input guards,
+	// so every nil curve/key/modulus input returns false.
+	return pf.verify(ec, pk, NTilde, h1, h2, c1, c2, X, optionalProofSession(session), false)
+}
 
-	q := ec.Params().N
-	q3 := new(big.Int).Mul(q, q)
-	q3 = new(big.Int).Mul(q, q3)
-	q7 := new(big.Int).Mul(q3, q3)
-	q7 = new(big.Int).Mul(q7, q)
-	// Honest S2/T2 = e*rho + rho' with e < q, rho < q*NTilde,
-	// rho' < q^3*NTilde, hence S2/T2 < 2*q^3*NTilde.
-	q3NTilde := new(big.Int).Mul(q3, NTilde)
-	maxS2 := new(big.Int).Lsh(q3NTilde, 1)
-	maxT2 := new(big.Int).Set(maxS2)
-
-	if !common.IsInIntervalPositive(pf.Z, NTilde) {
-		return false
-	}
-	if !common.IsInIntervalPositive(pf.ZPrm, NTilde) {
-		return false
-	}
-	if !common.IsInIntervalPositive(pf.T, NTilde) {
-		return false
-	}
-	if !common.IsInIntervalPositive(pf.V, pk.NSquare()) {
-		return false
-	}
-	if !common.IsInIntervalPositive(pf.W, NTilde) {
-		return false
-	}
-	if !common.IsInIntervalPositive(pf.S, pk.N) {
-		return false
-	}
-	if new(big.Int).GCD(nil, nil, pf.Z, NTilde).Cmp(one) != 0 {
-		return false
-	}
-	if new(big.Int).GCD(nil, nil, pf.ZPrm, NTilde).Cmp(one) != 0 {
-		return false
-	}
-	if new(big.Int).GCD(nil, nil, pf.T, NTilde).Cmp(one) != 0 {
-		return false
-	}
-	if new(big.Int).GCD(nil, nil, pf.V, pk.NSquare()).Cmp(one) != 0 {
-		return false
-	}
-	if new(big.Int).GCD(nil, nil, pf.W, NTilde).Cmp(one) != 0 {
-		return false
-	}
-	gcd := big.NewInt(0)
-	if pf.S.Cmp(zero) == 0 {
-		return false
-	}
-	if gcd.GCD(nil, nil, pf.S, pk.N).Cmp(one) != 0 {
-		return false
-	}
-	if pf.S1.Cmp(q) == -1 {
-		return false
-	}
-	if pf.S2.Cmp(q) == -1 {
-		return false
-	}
-	if pf.T1.Cmp(q) == -1 {
-		return false
-	}
-	if pf.T2.Cmp(q) == -1 {
-		return false
-	}
-
-	// 3.
-	if pf.S1.Cmp(q3) > 0 {
-		return false
-	}
-	if pf.S2.Cmp(maxS2) >= 0 {
-		return false
-	}
-	if pf.T1.Cmp(q7) > 0 {
-		return false
-	}
-	if pf.T2.Cmp(maxT2) >= 0 {
-		return false
-	}
-
-	// 1-2. e'
-	var e *big.Int
-	{ // derive the Fiat-Shamir challenge by reducing the hash mod q
-		var eHash *big.Int
-		// X is nil if called on a ProveBob (Bob's proof "without check")
-		if X == nil {
-			eHash = common.SHA512_256i_TAGGED(fsSessionBob(Session), append(pk.AsInts(), NTilde, h1, h2, c1, c2, pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)
-		} else {
-			if !X.ValidateBasic() || !crypto.SameCurve(ec, X.Curve()) {
-				return false
-			}
-			if !pf.U.ValidateBasic() || !crypto.SameCurve(ec, pf.U.Curve()) {
-				return false
-			}
-			eHash = common.SHA512_256i_TAGGED(fsSessionBobWC(Session), append(pk.AsInts(), NTilde, h1, h2, X.X(), X.Y(), c1, c2, pf.U.X(), pf.U.Y(), pf.Z, pf.ZPrm, pf.T, pf.V, pf.W)...)
-		}
-		e = common.ModReduceHash(q, eHash)
-	}
-	if e.Sign() == 0 {
-		return false
-	}
-
-	var left, right *big.Int // for the following conditionals
-
-	// 4. runs only in the "with check" mode from Fig. 10
-	if X != nil {
-		s1ModQ := new(big.Int).Mod(pf.S1, ec.Params().N)
-		gS1 := crypto.ScalarBaseMult(ec, s1ModQ)
-		xE := X.ScalarMult(e)
-		if xE == nil {
-			return false
-		}
-		xEU, err := xE.Add(pf.U)
-		if err != nil || xEU == nil || gS1 == nil || !gS1.Equals(xEU) {
-			return false
-		}
-	}
-
-	{ // 5-6.
-		modNTilde := common.ModInt(NTilde)
-
-		{ // 5.
-			h1ExpS1 := modNTilde.Exp(h1, pf.S1)
-			h2ExpS2 := modNTilde.Exp(h2, pf.S2)
-			left = modNTilde.Mul(h1ExpS1, h2ExpS2)
-			zExpE := modNTilde.Exp(pf.Z, e)
-			right = modNTilde.Mul(zExpE, pf.ZPrm)
-			if left.Cmp(right) != 0 {
-				return false
-			}
-		}
-
-		{ // 6.
-			h1ExpT1 := modNTilde.Exp(h1, pf.T1)
-			h2ExpT2 := modNTilde.Exp(h2, pf.T2)
-			left = modNTilde.Mul(h1ExpT1, h2ExpT2)
-			tExpE := modNTilde.Exp(pf.T, e)
-			right = modNTilde.Mul(tExpE, pf.W)
-			if left.Cmp(right) != 0 {
-				return false
-			}
-		}
-	}
-
-	{ // 7.
-		modNSquared := common.ModInt(pk.NSquare())
-
-		c1ExpS1 := modNSquared.Exp(c1, pf.S1)
-		sExpN := modNSquared.Exp(pf.S, pk.N)
-		gammaExpT1 := modNSquared.Exp(pk.Gamma(), pf.T1)
-		left = modNSquared.Mul(c1ExpS1, sExpN)
-		left = modNSquared.Mul(left, gammaExpT1)
-		c2ExpE := modNSquared.Exp(c2, e)
-		right = modNSquared.Mul(c2ExpE, pf.V)
-		if left.Cmp(right) != 0 {
-			return false
-		}
-	}
-	return true
+// VerifyLegacy verifies a session-less legacy Bob/BobWC proof (the exact
+// 2e712689 untagged challenge). It is the explicit compatibility-aware entry
+// point used by signing round 3 for legacy parties. The shared verify core
+// owns the default tight legacy bound, N + q^6: the session-less prover
+// samples y below q^5 with T1 = e*y + gamma, e < q, gamma < N, so an honest
+// legacy response stays below q^6 + N. historicalBobCompat selects the
+// widened historical witness-range bound (q+1)*N; the shared core derives
+// it behind its malformed-input guard so nil curve/key/modulus inputs
+// return false instead of panicking.
+func (pf *ProofBobWC) VerifyLegacy(
+	ec elliptic.Curve,
+	pk *paillier.PublicKey,
+	NTilde, h1, h2, c1, c2 *big.Int,
+	X *crypto.ECPoint,
+	historicalBobCompat bool,
+) bool {
+	return pf.verify(ec, pk, NTilde, h1, h2, c1, c2, X, nil, historicalBobCompat)
 }
 
 // ProveBob.Verify implements verification of Bob's proof without check "VerifyMta_Bob" used in the MtA protocol from GG18Spec (9) Fig. 11.
@@ -379,6 +268,24 @@ func (pf *ProofBob) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1
 	}
 	pfWC := &ProofBobWC{ProofBob: pf, U: nil}
 	return pfWC.Verify(ec, pk, NTilde, h1, h2, c1, c2, nil, session...)
+}
+
+// ProveBob.VerifyLegacy is the explicit compatibility-aware session-less
+// counterpart of ProveBob.Verify: historicalBobCompat selects the widened
+// historical witness-range bound (q+1)*N, which the shared verify core
+// derives behind its malformed-input guard. The prover and every other
+// check are unchanged.
+func (pf *ProofBob) VerifyLegacy(
+	ec elliptic.Curve,
+	pk *paillier.PublicKey,
+	NTilde, h1, h2, c1, c2 *big.Int,
+	historicalBobCompat bool,
+) bool {
+	if pf == nil {
+		return false
+	}
+	pfWC := &ProofBobWC{ProofBob: pf, U: nil}
+	return pfWC.VerifyLegacy(ec, pk, NTilde, h1, h2, c1, c2, nil, historicalBobCompat)
 }
 
 func optionalProofSession(session [][]byte) []byte {
@@ -414,6 +321,9 @@ func (pf *ProofBobWC) ValidateBasic() bool {
 }
 
 func (pf *ProofBob) Bytes() [ProofBobBytesParts][]byte {
+	if !pf.ValidateBasic() {
+		panic(fmt.Errorf("ProofBob.Bytes: invalid receiver"))
+	}
 	return [...][]byte{
 		pf.Z.Bytes(),
 		pf.ZPrm.Bytes(),
@@ -429,6 +339,11 @@ func (pf *ProofBob) Bytes() [ProofBobBytesParts][]byte {
 }
 
 func (pf *ProofBobWC) Bytes() [ProofBobWCBytesParts][]byte {
+	// The optional mode without X uses a coordinate placeholder for U, so
+	// serialization requires the fields to be present without curve validation.
+	if pf == nil || !pf.ProofBob.ValidateBasic() || pf.U == nil {
+		panic(fmt.Errorf("ProofBobWC.Bytes: invalid receiver"))
+	}
 	var out [ProofBobWCBytesParts][]byte
 	bobBzs := pf.ProofBob.Bytes()
 	bobBzsSlice := bobBzs[:]

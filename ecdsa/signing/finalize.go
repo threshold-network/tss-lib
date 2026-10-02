@@ -14,6 +14,7 @@ import (
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/tss"
+	"google.golang.org/protobuf/proto"
 )
 
 func (round *finalization) Start() *tss.Error {
@@ -75,7 +76,10 @@ func (round *finalization) Start() *tss.Error {
 		return round.WrapError(fmt.Errorf("signature verification failed"))
 	}
 
-	round.end <- *round.data
+	// Send a deep copy the consumer owns. common.SignatureData is a protobuf
+	// message (it embeds a mutex), so it is delivered by pointer, never by
+	// value.
+	round.end <- proto.Clone(round.data).(*common.SignatureData)
 
 	return nil
 }
