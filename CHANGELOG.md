@@ -34,11 +34,21 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #5** — removal of EdDSA and ECDSA resharing protocols (stacked on PR #4).
 - **PR #6** — remaining BNB cryptographic hardening follow-ups (stacked on PR #5).
 - **PR #7** — signing round-9 decommitment validation and related fixes (stacked on PR #6).
-- **PR #19** — protobuf runtime and dependency housekeeping (stacked on PR #7).
 - **PR #9** — immutable per-party legacy/security-v2 transcript selection and
   exact historical legacy compatibility (stacked on PR #7).
+- **PR #11** — constant-time backport (BNB #328) rebased onto current `master`.
+- **PR #12** — decoder length and nullable-input guards.
+- **PR #13** — safe-prime worker cancellation and independent save-data subset copies.
+- **PR #14** — party updates stop after a fatal lifecycle error.
+- **PR #15** — bounded random sampling domains and Paillier challenge widths.
 - **PR #16** — ECDSA signing context binding in the security-v2 SSID (stacked on PR #9).
-- **PR #17** (+ stack #8/#10/#11, extended by #23) — constant-time cryptographic hardening (BNB #328).
+- **PR #17** — constant-time operations enabled by default, extended by PR #23
+  (supersedes PRs #8 and #10, which were closed unmerged).
+- **PR #18** — protobuf generator version check before regeneration.
+- **PR #19** — protobuf runtime and dependency housekeeping (stacked on PR #7).
+- **PR #20** — `golang.org/x/crypto` and `x/sys` upgrades; Go 1.25.7 minimum.
+- **PR #21** — btcd v0.24.2 and migration to `btcec/v2`.
+- **PR #24** — CI runs on every pull request.
 - **PR #25** — faster CI feedback plus scheduled race and cache-safety coverage.
 - **PR #26** — concurrent local-party lifecycle regression coverage.
 - **PR #27** — unequal-width constant-time arithmetic regression coverage.
@@ -49,9 +59,13 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #32** — live current/historical mixed-binary signing interoperability harness.
 - **PR #33** — signing-context, message-boundary, and round-readiness regression coverage.
 - **PR #34** — shared proof-verifier resource bounds and `ModProof` context reuse.
+- **PR #35** — changelog for the integration follow-ups.
 - **PR #36** — publish complete signing-round state before outbound messages.
 - **PR #38** — stop caching private-key Paillier decryption state; go directive CI check.
 - **PR #39** — signing delivers `*common.SignatureData` instead of a by-value protobuf message.
+- **PR #40** — changelog and README completed for the `dev` integration.
+- Review fixes `873b8ad`..`fa6ef4d` — pushed directly to `dev` during the review of the
+  `dev` -> `master` PR (#37); recorded in that PR's comments.
 
 ### ⚠️ Compatibility — read before upgrading
 
@@ -159,6 +173,22 @@ and the PR #9 entry below):
 
 ### Integration follow-ups
 
+- **Dependency upgrades (PRs #20 and #21):** `golang.org/x/crypto` v0.52.0,
+  `golang.org/x/sys` v0.45.0, and btcd v0.24.2 with `btcec/v2` v2.2.0 and
+  `btcutil` v1.1.5, at or above the fixed versions of the Dependabot advisories open at
+  the time. Compressed public-key parsing, the registered `secp256k1` curve name, and
+  coordinate-based JSON/Gob persistence are unchanged; see Breaking Change 10 for the
+  concrete curve type.
+- **Decoder and lifecycle guards (PRs #12, #13, #14):** decoders check lengths and
+  nullable fields before indexed reads or dereferences; a commitment payload is
+  required. Safe-prime workers observe cancellation while delivering results.
+  `BuildLocalSaveDataSubset` gives each subset its own copies of `Xi` and `ShareID`.
+  After the first fatal preparation or round error, a party stores no further messages
+  and does not advance; input-validation and storage rejections stay recoverable.
+  Keygen checks the commitment part count before hashing and point decoding.
+- **Bounded sampling (PR #15):** empty prime and unit sampling domains and structurally
+  unsupported Paillier key sizes are rejected; `GenerateXs` masks candidates to the
+  modulus width before rejection. 2048-bit challenge output is unchanged.
 - **Bounded and panic-free proof input handling (PRs #28 and #34):**
   malformed proof encodings return errors instead of reaching arity or
   nil-value panics. Every exported unknown-order proof verifier rejects
@@ -186,15 +216,15 @@ and the PR #9 entry below):
   before sampling or constant-time work. Compatibility-enabled Bob
   verification rejects nil inputs before deriving its historical bound.
   Paillier encryption, homomorphic multiplication, and decryption reject
-  even or degenerate moduli through their error returns in both timing modes.
-- **Owner-scoped Paillier public-key reuse (review fixes `873b8ad`..`fa6ef4d`):**
-  the N^2 constant-time context is reused for unchanged public key values.
-  Weak-owner cleanup bounds cache lifetime; value snapshots detect
-  sequential mutation of the exported modulus. Public key layouts, by-value
-  copies, JSON/Gob encodings, and honest arithmetic remain unchanged. The
-  review fixes also cached private-key decryption state; PR #38 removed it
-  because it gave no measured `Decrypt` speedup and kept unzeroed copies of
-  secret `LambdaN`-derived values in package-global state.
+  even or degenerate moduli (`paillier.ErrInvalidModulus`) and malformed private keys
+  (`paillier.ErrMalformedKey`) through their error returns in both timing modes.
+- **Paillier public-key context reuse (review fixes `873b8ad`..`fa6ef4d`; PR #38):**
+  the N^2 constant-time context is cached per public key and reused while the key's
+  value is unchanged. Entries are keyed by a weak pointer, so they are dropped when the
+  key is garbage-collected, and a value snapshot detects later mutation of the exported
+  modulus. Public key layouts, by-value copies, and JSON/Gob encodings are unchanged.
+  Private-key decryption state is not cached: PR #38 removed that cache because it gave
+  no measured `Decrypt` speedup and kept unzeroed copies of `LambdaN`-derived secrets.
 - **Proof-local exponent reuse (review fixes `873b8ad`..`fa6ef4d`):** `ModProof` encodes its invariant
   secret exponents once for all 80 iterations and wipes those owned bytes
   at completion. Canonical-operand helpers avoid redundant reductions
@@ -324,14 +354,6 @@ and the PR #9 entry below):
 - **Migration:** Ensure ceremonies use ≥2 distinct parties, a threshold in `[1, partyCount)`,
   and non-colliding keys (normal configurations already satisfy this).
 
-> Source/compile breaks in this set: `ecdsa/signing.PrepareForSigning` gained an `error` return
-> (Breaking Change 6, PR #6), and PR #5's protocol removal deleted the exported
-> `tss.ReSharingParameters` / `tss.NewReSharingParameters`, `crypto.ECPoint.EightInvEight`, and
-> `ecdsa/resharing.NewDGRound1Message` API (see Removed). Otherwise every session /
-> `fullBytesLen` parameter was added as a trailing variadic argument, so all remaining call
-> sites compile unchanged; those breaks are runtime/wire. Verified by diffing exported
-> signatures between base and HEAD.
-
 #### 8. Constant-time cryptographic operations enabled by default
 - **What:** Secret-exponent modular exponentiation and modular inverse (Paillier
   Decrypt/Encrypt/HomoMult, the Paillier mod- and factor-proofs, the DLN proof, the
@@ -340,14 +362,14 @@ and the PR #9 entry below):
   constant-time path (`common.NewCTModInt`, `.ExpCT`/`.MulCT`/`.ModInverseCT`) instead of
   `math/big`, closing the timing side-channel described in
   [golang/go#20654](https://github.com/golang/go/issues/20654) for the operations listed above.
-  (A known, separately-tracked gap remains in `crypto/mta`'s Paillier-decrypt path — see the
-  COVERAGE comment in `common/constant_time.go`.) Unlike upstream, where
+  (The response timing of `crypto/mta`'s Paillier-decrypt path is not normalized — see the
+  known residual gap below and the COVERAGE comment in `common/constant_time.go`.) Unlike upstream, where
   `EnableConstantTimeOps` is opt-in and nothing in-tree ever calls it, this fork enables it
   unconditionally by defaulting `constantTimeEnabled` to `1` in `common/constant_time.go` —
   every consumer gets the fix with no code change required. Coverage also broadened from
   secret-exponent-only to secret-operand operations: `MulCT` sites (k·gamma, k·w, m·k,
   rx·sigma, c·x, c·s, c·l) protect both multiplicands, not just the exponent.
-- **Sites extended by this PR (PR #23), for audit traceability against BNB #328:**
+- **Sites extended by PR #23, for audit traceability against BNB #328:**
   | File | Function | CT op | Secret operand |
   |------|----------|-------|----------------|
   | `crypto/schnorr/schnorr_proof.go` | `NewZKProofWithSession` | `MulCT(c, x)` → `t = a + c·x` | `x` (discrete log) |
@@ -355,12 +377,13 @@ and the PR #9 entry below):
   | `ecdsa/signing/round_3.go` | `round3.Start` | `MulCT(k, gamma)`, `MulCT(k, w)` → `thelta`, `sigma` | `k`, `gamma`, `w` |
   | `ecdsa/signing/round_4.go` | `round4.Start` | `ModInverseCT(theta)` → `thetaInverse` | `theta` |
   | `ecdsa/signing/round_5.go` | `round5.Start` | `MulCT(m, k)`, `MulCT(rx, sigma)` → `si` | `k`, `sigma`, `rx` (`m` public message hash; `rx` remains secret until round 10) |
-- **Known residual gap (read before relying on "constant-time enabled"):** the
-  `crypto/mta.AliceEnd`/`AliceEndWC` Paillier-decrypt path — which runs in signing rounds
-  2-3 of this same protocol — remains variable-time `math/big`. Upstream protects it with a
-  ~200ms sleep-based normalizer that this fork deliberately did not port (latency cost); the
-  gap is pre-existing, tracked separately, and disclosed in the COVERAGE comment in
-  `common/constant_time.go`. Enabling CT by default does NOT close that path.
+- **Known residual gap (read before relying on "constant-time enabled"):** in
+  `crypto/mta.AliceEnd`/`AliceEndWC` (signing rounds 2-3), the Paillier exponentiation
+  inside `Decrypt` uses the constant-time path, but the surrounding `math/big`
+  conversion, `L(u)` division, and reduction are variable-time, and response time is not
+  normalized. Upstream adds a ~200ms sleep-based normalizer that this fork deliberately
+  did not port (latency cost); the gap is disclosed in the COVERAGE comment in
+  `common/constant_time.go`.
 - **Break type:** Performance only. Same mathematical result on every path (see the
   constant-time equivalence tests added alongside each hardened package); no wire, source,
   or runtime-input behavior changes. A microbenchmark
@@ -377,6 +400,9 @@ and the PR #9 entry below):
   Both are CPU-only regressions on the signing hot path, bounded and documented; the CPU-cost
   concern that motivated the original deferral did not materialize for `MulCT`, and the
   `ModInverseCT` cost is the explicit price of the constant-time guarantee.
+  End to end, 2048-bit Paillier `Decrypt` takes about 70 ms on the constant-time path
+  versus about 33 ms on `math/big` (about 2.1x, after PR #31), and a 10-member keep-core
+  signing ceremony measured about 1.3x slower than with the pre-hardening tss-lib.
 - **Motivation:** `math/big` is explicitly not constant-time; a secret-dependent modexp or
   modinverse can leak key material through timing. Shipping this opt-in-only (as upstream
   does) means the fix does nothing until every downstream caller remembers to enable it —
@@ -408,6 +434,50 @@ and the PR #9 entry below):
   before the first tagged release so callers absorb one breaking release, not two.
 - **Migration:** `endCh := make(chan *common.SignatureData, 1)`; the received value is
   a `*common.SignatureData`.
+
+#### 10. `tss.S256()` returns a different concrete curve type (PR #21)
+- **What:** `tss.S256()` still returns an `elliptic.Curve` named `secp256k1`, but its
+  concrete type is now btcec/v2's alias of Decred `secp256k1/v4.KoblitzCurve` instead of
+  the legacy `btcec.KoblitzCurve`.
+- **Break type:** Source/runtime for callers that type-assert the curve, import legacy
+  `btcec`, or compare curve objects (for example `reflect.DeepEqual` on
+  `ecdsa.PublicKey`, which compares the `Curve` field). Point coordinates, compressed key
+  parsing, and JSON/Gob encodings are unchanged.
+- **Motivation:** The btcd version previously required has published advisories; the
+  fixed releases removed the legacy `btcec` package.
+- **Provenance:** `threshold-original`, PR #21.
+- **Migration:** Use the `elliptic.Curve` interface. Callers holding keys from another
+  secp256k1 implementation should compare keys by coordinates or encoded bytes, or rebuild
+  them on one curve object.
+
+#### 11. Keygen message decoders return errors (PR #28)
+- **What:** `KGRound2Message1.UnmarshalFactorProof`, `UnmarshalFactorProofTilde`, and
+  `KGRound3Message.UnmarshalProofInts` return `(value, error)` instead of a bare value.
+- **Break type:** Source/compile for direct callers; in-tree rounds are updated.
+- **Motivation:** A malformed peer encoding now produces an attributable error instead of
+  a panic or a nil value used later.
+- **Provenance:** `threshold-original`, PR #28.
+- **Migration:** Handle the returned `error`.
+
+#### 12. Go 1.25.7 minimum (PR #20)
+- **What:** `go.mod` declares `go 1.25.7` with `toolchain go1.26.8`.
+- **Break type:** Build. Builders with `GOTOOLCHAIN=local` and an older Go (including
+  official `golang:1.24` images, which default to `GOTOOLCHAIN=local`) fail to build
+  dependents.
+- **Motivation:** Aligns with keep-core's toolchain and the upgraded `golang.org/x`
+  dependencies.
+- **Provenance:** `threshold-original`, PR #20; minimum restored to 1.25.7 by `fa6ef4d`.
+- **Migration:** Build with Go 1.25.7 or newer, or set `GOTOOLCHAIN=auto`.
+
+> Source/compile breaks in this set: `ecdsa/signing.PrepareForSigning` gained an `error`
+> return (Breaking Change 6), the signing end channel carries `*common.SignatureData`
+> (Breaking Change 9), and three keygen message decoders return errors (Breaking Change 11).
+> PR #5's protocol removal deleted the exported `tss.ReSharingParameters` /
+> `tss.NewReSharingParameters`, `crypto.ECPoint.EightInvEight`, and
+> `ecdsa/resharing.NewDGRound1Message` API (see Removed). Every session / `fullBytesLen`
+> parameter was added as a trailing variadic argument, so other call sites compile
+> unchanged; those breaks are runtime/wire. Verified by diffing `go doc` exported
+> signatures between `master` and `dev`.
 
 ### Removed
 
@@ -564,6 +634,22 @@ rejecting input that an honest caller would previously have produced.
   `ModInverseCT` — constant-time modular arithmetic backed by `filippo.io/bigmod`, enabled
   unconditionally by this fork's default (`constantTimeEnabled = 1` in
   `common/constant_time.go`). _Provenance: `BNB #328`, PR #17, PR #23_.
+- `tss.ProtocolMode` with `ProtocolModeLegacy` / `ProtocolModeSecurityV2`, and
+  `Parameters.SetProtocolMode`, `ProtocolMode`, `FreezeProtocolMode`,
+  `SetLegacyHistoricalBobCompatibility`, `LegacyHistoricalBobCompatibility` — explicit
+  per-party transcript selection and the rollout-only compatibility opt-in. _PR #9._
+- `mta.AliceEndLegacy`, `AliceEndWCLegacy`, `ProofBob.VerifyLegacy`,
+  `ProofBobWC.VerifyLegacy` — session-less legacy verification with the optional
+  historical witness bound. _PR #9._
+- `common.GetCTModInt` (cached constant-time context per modulus, PR #23);
+  `CTModInt.ExpCTWithBitLen` (PR #17); `CTModInt.ExpCTWithBytes`,
+  `ExpCTCanonicalWithBitLen`, `ExpCTCanonicalWithBytes`, `MulCTCanonical` (review fixes
+  `873b8ad`..`fa6ef4d`).
+- `common.MinUnknownOrderModulusBitLen` (2048), `MaxUnknownOrderModulusBitLen` (65536),
+  and `ExceedsUnknownOrderModulusCeiling` — the shared unknown-order modulus width
+  policy. _PR #34._
+- `paillier.ErrInvalidModulus` and `paillier.ErrMalformedKey` — sentinel errors for
+  invalid Paillier keys (review fixes `873b8ad`..`fa6ef4d`).
 
 ### Notes
 
@@ -579,11 +665,11 @@ rejecting input that an honest caller would previously have produced.
   Threshold compatibility; the module path remains `github.com/bnb-chain/tss-lib`.
 - Dependency / random-source API churn and repository/CI/metadata housekeeping
   (`BNB b8d526d`, `8abf1d5`, `6c233c6`, `87f7e12`, `7113b68`, `d0325a1`, `dca2ac4`).
-- `crypto/mta.AliceEnd`/`AliceEndWC` Paillier-decrypt path: carries the same class of
-  timing leak as golang/go#20654. Upstream protects this with a sleep-based normalizer
-  (`NewTimingProtection`, ~200ms target + jitter) that was deliberately not added here —
-  it would inject a fixed ~200ms delay into every MtA share round. Tracked as a known,
-  intentionally-deferred gap, not an oversight (see COVERAGE comment in
+- Response-time normalization for `crypto/mta.AliceEnd`/`AliceEndWC` Paillier decryption.
+  Upstream wraps it in a sleep-based normalizer (`NewTimingProtection`, ~200ms target +
+  jitter); it was deliberately not added because it would delay every MtA share round by
+  about 200ms. The decryption exponentiation itself is constant-time; the surrounding
+  `math/big` arithmetic is not (see Breaking Change 8 and the COVERAGE comment in
   `common/constant_time.go`).
 
 ### Residual risks
