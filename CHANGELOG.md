@@ -63,6 +63,7 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #36** — publish complete signing-round state before outbound messages.
 - **PR #38** — stop caching private-key Paillier decryption state; go directive CI check.
 - **PR #39** — signing delivers `*common.SignatureData` instead of a by-value protobuf message.
+- **PR #40** — changelog and README completed for the `dev` integration.
 - Review fixes `873b8ad`..`fa6ef4d` — pushed directly to `dev` during the review of the
   `dev` -> `master` PR (#37); recorded in that PR's comments.
 
