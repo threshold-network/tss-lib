@@ -50,6 +50,7 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #33** — signing-context, message-boundary, and round-readiness regression coverage.
 - **PR #34** — shared proof-verifier resource bounds and `ModProof` context reuse.
 - **PR #36** — publish complete signing-round state before outbound messages.
+- **PR #38** — stop caching private-key Paillier decryption state; go directive CI check.
 
 ### ⚠️ Compatibility — read before upgrading
 
@@ -189,7 +190,10 @@ and the PR #9 entry below):
   the N^2 constant-time context is reused for unchanged public key values.
   Weak-owner cleanup bounds cache lifetime; value snapshots detect
   sequential mutation of the exported modulus. Public key layouts, by-value
-  copies, JSON/Gob encodings, and honest arithmetic remain unchanged.
+  copies, JSON/Gob encodings, and honest arithmetic remain unchanged. The
+  review fixes also cached private-key decryption state; PR #38 removed it
+  because it gave no measured `Decrypt` speedup and kept unzeroed copies of
+  secret `LambdaN`-derived values in package-global state.
 - **Proof-local exponent reuse (review fixes `873b8ad`..`fa6ef4d`):** `ModProof` encodes its invariant
   secret exponents once for all 80 iterations and wipes those owned bytes
   at completion. Canonical-operand helpers avoid redundant reductions
