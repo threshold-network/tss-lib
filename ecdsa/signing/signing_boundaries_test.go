@@ -29,7 +29,7 @@ import (
 // securityV2CeremonyAbortFixture constructs N parties from keygen fixtures with
 // the given message and width overrides per party. Returns parties, their out
 // channels, and end channels.
-func securityV2CeremonyAbortFixture(t *testing.T, n int, overrides func(i int) (*big.Int, int)) ([]*LocalParty, []chan tss.Message, []chan common.SignatureData) {
+func securityV2CeremonyAbortFixture(t *testing.T, n int, overrides func(i int) (*big.Int, int)) ([]*LocalParty, []chan tss.Message, []chan *common.SignatureData) {
 	t.Helper()
 
 	keys, signPIDs, err := keygen.LoadKeygenTestFixtures(n)
@@ -40,7 +40,7 @@ func securityV2CeremonyAbortFixture(t *testing.T, n int, overrides func(i int) (
 	p2pCtx := tss.NewPeerContext(signPIDs)
 	parties := make([]*LocalParty, n)
 	outChs := make([]chan tss.Message, n)
-	endChs := make([]chan common.SignatureData, n)
+	endChs := make([]chan *common.SignatureData, n)
 
 	ceremonyNonce := big.NewInt(1)
 	for i := 0; i < n; i++ {
@@ -53,7 +53,7 @@ func securityV2CeremonyAbortFixture(t *testing.T, n int, overrides func(i int) (
 		// and, if the SSID check regresses and round 2 unexpectedly succeeds, a
 		// full round-2 emission (n-1 messages) without blocking a Start() call.
 		outCh := make(chan tss.Message, 2*n)
-		endCh := make(chan common.SignatureData, 1)
+		endCh := make(chan *common.SignatureData, 1)
 		outChs[i] = outCh
 		endChs[i] = endCh
 
@@ -152,7 +152,7 @@ func collectRound1MessagesForTargets(
 // select's race between a ready channel and an already-canceled context). A
 // final nonblocking check per channel, with no competing canceled context,
 // guards against a signature buffered exactly at the window boundary.
-func assertNoSignatureWithinWindow(t *testing.T, endChs []chan common.SignatureData, window time.Duration) {
+func assertNoSignatureWithinWindow(t *testing.T, endChs []chan *common.SignatureData, window time.Duration) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), window)
 	defer cancel()
@@ -161,7 +161,7 @@ func assertNoSignatureWithinWindow(t *testing.T, endChs []chan common.SignatureD
 	var wg sync.WaitGroup
 	for i, endCh := range endChs {
 		wg.Add(1)
-		go func(i int, endCh chan common.SignatureData) {
+		go func(i int, endCh chan *common.SignatureData) {
 			defer wg.Done()
 			select {
 			case <-endCh:
@@ -305,7 +305,7 @@ func TestSigningStartMessageRangeGate(t *testing.T) {
 
 	t.Run("rejectsMessageEqualToCurveOrder", func(t *testing.T) {
 		out := make(chan tss.Message, 2)
-		end := make(chan common.SignatureData, 1)
+		end := make(chan *common.SignatureData, 1)
 		msg := new(big.Int).Set(q)
 
 		P := NewLocalParty(msg, params, keys[0], out, end, 32).(*LocalParty)
@@ -318,7 +318,7 @@ func TestSigningStartMessageRangeGate(t *testing.T) {
 
 	t.Run("acceptsMessageEqualToOrderMinusOne", func(t *testing.T) {
 		out := make(chan tss.Message, 2)
-		end := make(chan common.SignatureData, 1)
+		end := make(chan *common.SignatureData, 1)
 		msg := new(big.Int).Sub(q, big.NewInt(1))
 
 		P := NewLocalParty(msg, params, keys[0], out, end, 32).(*LocalParty)

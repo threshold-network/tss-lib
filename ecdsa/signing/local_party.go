@@ -31,11 +31,11 @@ type (
 
 		keys keygen.LocalPartySaveData
 		temp localTempData
-		data common.SignatureData
+		data *common.SignatureData
 
 		// outbound messaging
 		out chan<- tss.Message
-		end chan<- common.SignatureData
+		end chan<- *common.SignatureData
 	}
 
 	localMessageStore struct {
@@ -103,7 +103,7 @@ func NewLocalParty(
 	params *tss.Parameters,
 	key keygen.LocalPartySaveData,
 	out chan<- tss.Message,
-	end chan<- common.SignatureData,
+	end chan<- *common.SignatureData,
 	fullBytesLen ...int,
 ) tss.Party {
 	return NewLocalPartyWithKDD(msg, params, key, nil, out, end, fullBytesLen...)
@@ -125,7 +125,7 @@ func NewLocalPartyWithKDD(
 	key keygen.LocalPartySaveData,
 	keyDerivationDelta *big.Int,
 	out chan<- tss.Message,
-	end chan<- common.SignatureData,
+	end chan<- *common.SignatureData,
 	fullBytesLen ...int,
 ) tss.Party {
 	validatedFullBytesLen := validateFullBytesLen("NewLocalPartyWithKDD", msg, params, fullBytesLen)
@@ -137,7 +137,7 @@ func NewLocalPartyWithKDD(
 		params:    params,
 		keys:      keygen.BuildLocalSaveDataSubset(key, params.Parties().IDs()),
 		temp:      localTempData{},
-		data:      common.SignatureData{},
+		data:      &common.SignatureData{},
 		out:       out,
 		end:       end,
 	}
@@ -192,7 +192,7 @@ func validateFullBytesLen(caller string, msg *big.Int, params *tss.Parameters, f
 }
 
 func (p *LocalParty) FirstRound() tss.Round {
-	return newRound1(p.params, &p.keys, &p.data, &p.temp, p.out, p.end)
+	return newRound1(p.params, &p.keys, p.data, &p.temp, p.out, p.end)
 }
 
 func (p *LocalParty) Start() *tss.Error {

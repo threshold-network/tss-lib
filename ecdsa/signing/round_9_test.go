@@ -75,7 +75,7 @@ func newRound9ForTest(t *testing.T) (*round9, tss.SortedPartyIDs) {
 	temp.signRound8Messages = make([]tss.ParsedMessage, len(pIDs))
 	temp.signRound9Messages = make([]tss.ParsedMessage, len(pIDs))
 	out := make(chan tss.Message, len(pIDs))
-	end := make(chan common.SignatureData, len(pIDs))
+	end := make(chan *common.SignatureData, len(pIDs))
 
 	g := crypto.ScalarBaseMult(params.EC(), big.NewInt(1))
 	temp.Ui = g
@@ -190,7 +190,7 @@ func TestSigning_Start_RejectsInvalidMessage(t *testing.T) {
 	for _, msg := range []*big.Int{nil, big.NewInt(-42)} {
 		p2pCtx := tss.NewPeerContext(signPIDs)
 		outCh := make(chan tss.Message, len(signPIDs))
-		endCh := make(chan common.SignatureData, len(signPIDs))
+		endCh := make(chan *common.SignatureData, len(signPIDs))
 
 		params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[0], len(signPIDs), testThreshold)
 		params.SetProtocolMode(tss.ProtocolModeSecurityV2)

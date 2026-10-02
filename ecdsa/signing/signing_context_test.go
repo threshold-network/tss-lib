@@ -29,7 +29,7 @@ func newSigningContextTestParty(t *testing.T, index int, mode tss.ProtocolMode, 
 		params.SetSessionNonce(nonce)
 	}
 	out := make(chan tss.Message, len(partyIDs))
-	end := make(chan common.SignatureData, 1)
+	end := make(chan *common.SignatureData, 1)
 	return NewLocalParty(message, params, keys[index], out, end, width).(*LocalParty)
 }
 

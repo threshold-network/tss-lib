@@ -31,7 +31,7 @@ func runHomogeneousControl() (*scenarioResult, error) {
 
 	ctx := tss.NewPeerContext(partyIDs)
 	outCh := make(chan tss.Message, 32)
-	endCh := make(chan common.SignatureData, 2)
+	endCh := make(chan *common.SignatureData, 2)
 
 	parties := make([]tss.Party, 2)
 	for i := range parties {
