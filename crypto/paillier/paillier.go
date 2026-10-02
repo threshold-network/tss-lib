@@ -229,11 +229,7 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 	if err = checkPaillierPrivateKey(privateKey); err != nil {
 		return nil, err
 	}
-	st := privateKey.paillierPrivateStateFor()
-	N2, err := st.n2Value(privateKey)
-	if err != nil {
-		return nil, err
-	}
+	N2 := privateKey.NSquare()
 	if c.Cmp(zero) == -1 || c.Cmp(N2) != -1 { // c < 0 || c >= N2 ?
 		return nil, ErrMessageTooLong
 	}
@@ -242,46 +238,40 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 		return nil, ErrMessageMalFormed
 	}
 
-	useCT := common.IsConstantTimeEnabled()
+	// Decryption state is rebuilt on every call rather than cached per key:
+	// a per-key cache measured no Decrypt speedup (the LambdaN
+	// exponentiation dominates) while retaining secret-derived copies of
+	// LambdaN in package-global state. ExpCTWithBitLen wipes its padded
+	// exponent encoding before returning.
 	var cExpLambda, inv *big.Int
-	if useCT {
+	if common.IsConstantTimeEnabled() {
 		// SECURITY: constant-time exponentiation prevents leaking the secret
-		// exponent LambdaN through execution-time variation. The guards
-		// above prove 0 <= c < N2, so c is canonical for the shared N2
-		// context; the fixed-width LambdaN encoding and the
-		// ciphertext-independent decryption coefficient are reused from
-		// this key's cached state instead of rebuilt on every call.
-		view, err := st.ctView(privateKey)
-		if err != nil {
-			return nil, err
-		}
-		// view is returned by value (no per-call heap allocation); its
-		// fields are immutable pointers into the entry's snapshot state,
-		// safe to use after ctView returns.
-		cExpLambda = view.modN2.ExpCTCanonicalWithBytes(c, view.lamExp)
-		// mu = L((N+1)^LambdaN mod N2)^(-1) mod N: ciphertext-independent,
-		// so it is computed once per unchanged key value snapshot (see
-		// ct_cache.go) instead of via a full-width modular inverse here.
-		inv = view.coeff
+		// exponent LambdaN through execution-time variation. N2 is odd
+		// (checked above). LambdaN = lcm(p-1,q-1) < N, so N.BitLen() is a
+		// proven public bound narrower than N2's default width.
+		ctModN2 := common.NewCTModInt(N2)
+		cExpLambda = ctModN2.ExpCTWithBitLen(c, privateKey.LambdaN, privateKey.N.BitLen())
+		// (N+1)^LambdaN mod N2 is exactly 1 + LambdaN*N (mod N2) by the
+		// binomial identity, so L((N+1)^LambdaN mod N2) is LambdaN mod N.
+		// LambdaN is a group exponent for the units modulo N, so raising a
+		// unit to LambdaN-1 computes its inverse.
+		lg := new(big.Int).Mod(privateKey.LambdaN, privateKey.N)
+		inv = common.NewCTModIntWithPhi(privateKey.N, privateKey.LambdaN).ModInverseCT(lg)
 	} else {
 		cExpLambda = new(big.Int).Exp(c, privateKey.LambdaN, N2)
 		gammaExpLambda := new(big.Int).Exp(privateKey.Gamma(), privateKey.LambdaN, N2)
-		Lg := L(gammaExpLambda, privateKey.N)
-		inv = new(big.Int).ModInverse(Lg, privateKey.N)
-		if inv == nil {
-			// Consistent with the constant-time path's cached init error:
-			// a non-invertible decryption coefficient is a normal error in
-			// both modes, not a nil fed into the final multiplication.
-			return nil, ErrMalformedKey
-		}
+		inv = new(big.Int).ModInverse(L(gammaExpLambda, privateKey.N), privateKey.N)
+	}
+	if inv == nil {
+		// A non-invertible decryption coefficient means malformed key
+		// material; both modes return the same error.
+		return nil, ErrMalformedKey
 	}
 
 	// 1. L(u) = (c^LambdaN-1 mod N2) / N
 	Lc := L(cExpLambda, privateKey.N)
-	// 2. (1) * inv mod N -- inv is the ciphertext-independent decryption
-	// coefficient.
+	// 2. (1) * inv mod N
 	m = common.ModInt(privateKey.N).Mul(Lc, inv)
-	runtime.KeepAlive(privateKey)
 	return
 }
 
