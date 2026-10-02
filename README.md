@@ -79,6 +79,7 @@ for _, id := range parties {
 Use the `keygen.LocalParty` for the keygen protocol. The save data you receive through the `endCh` upon completion of the protocol should be persisted to secure storage.
 
 ```go
+endCh := make(chan keygen.LocalPartySaveData, 1)
 party := keygen.NewLocalParty(params, outCh, endCh, preParams) // Omit the last arg to compute the pre-params in round 1
 go func() {
     err := party.Start()
@@ -188,20 +189,22 @@ are:
 
 ```sh
 ./testdata/legacy_transcript/verify.sh
-go test ./crypto/schnorr ./ecdsa/signing ./ecdsa/keygen -count=20
-go test ./... -count=1
+./testdata/legacy_transcript/verify_mixed_interop.sh
+go test ./crypto/schnorr ./ecdsa/signing -count=20 -timeout=60m
+go test ./... -count=1 -timeout=60m
 ```
 
-On slower builders, preserve the package list and repeat count while extending
-only Go's harness timeout, for example `-timeout=30m`. The default ten-minute
-timeout can expire while the keygen package is still generating safe primes.
+The keygen package alone takes over ten minutes per run because it generates
+safe primes, so it runs once in the full suite rather than in the repeated set.
+Slower builders may need a longer `-timeout`; keep the package list and repeat
+count unchanged.
 
 Additionally, there should be a mechanism in your transport to allow for "reliable broadcasts", meaning parties can broadcast a message to other parties such that it's guaranteed that each one receives the same message. There are several examples of algorithms online that do this by sharing and comparing hashes of received messages.
 
 Timeouts and errors should be handled by your application. The method `WaitingFor` may be called on a `Party` to get the set of other parties that it is still waiting for messages from. You may also get the set of culprit parties that caused an error from a `*tss.Error`.
 
 ## Security Audit
-A full review of this library was carried out by Kudelski Security and their final report was made available in October, 2019. A copy of this report [`audit-binance-tss-lib-final-20191018.pdf`](https://github.com/bnb-chain/tss-lib/releases/download/v1.0.0/audit-binance-tss-lib-final-20191018.pdf) may be found in the v1.0.0 release notes of this repository.
+A full review of this library was carried out by Kudelski Security and their final report was made available in October, 2019. A copy of this report [`audit-binance-tss-lib-final-20191018.pdf`](https://github.com/bnb-chain/tss-lib/releases/download/v1.0.0/audit-binance-tss-lib-final-20191018.pdf) may be found in the v1.0.0 release notes of this repository. That audit predates this fork's changes; the hardening listed in `CHANGELOG.md` has not had an independent audit.
 
 ## References
 \[1\] https://eprint.iacr.org/2019/114.pdf
