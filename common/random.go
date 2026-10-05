@@ -35,6 +35,8 @@ func MustGetRandomInt(bits int) *big.Int {
 	return n
 }
 
+// GetRandomPositiveInt returns a random integer in [1, lessThan).
+// It returns nil when lessThan is nil or not greater than 1.
 func GetRandomPositiveInt(lessThan *big.Int) *big.Int {
 	if lessThan == nil || lessThan.Cmp(one) <= 0 {
 		return nil
@@ -77,6 +79,8 @@ func GetRandomInt(limit *big.Int) *big.Int {
 	return i
 }
 
+// GetRandomPrimeInt returns a random prime with exactly `bits` bits.
+// It returns nil when bits is less than 2.
 func GetRandomPrimeInt(bits int) *big.Int {
 	if bits < 2 {
 		return nil
@@ -97,6 +101,7 @@ func GetRandomPrimeInt(bits int) *big.Int {
 
 // Generate a random element in the group of all the elements in Z/nZ that
 // has a multiplicative inverse.
+// Returns nil when n is nil or not greater than 1.
 func GetRandomPositiveRelativelyPrimeInt(n *big.Int) *big.Int {
 	if n == nil || n.Cmp(one) <= 0 {
 		return nil
@@ -120,10 +125,12 @@ func IsNumberInMultiplicativeGroup(n, v *big.Int) bool {
 		gcd.GCD(nil, nil, v, n).Cmp(one) == 0
 }
 
-//	Return a random generator of RQn with high probability.
-//	THIS METHOD ONLY WORKS IF N IS THE PRODUCT OF TWO SAFE PRIMES!
+// Return a random generator of RQn with high probability.
+// THIS METHOD ONLY WORKS IF N IS THE PRODUCT OF TWO SAFE PRIMES!
 //
 // https://github.com/didiercrunch/paillier/blob/d03e8850a8e4c53d04e8016a2ce8762af3278b71/utils.go#L39
+//
+// Returns nil when n is nil or not greater than 1.
 func GetRandomGeneratorOfTheQuadraticResidue(n *big.Int) *big.Int {
 	f := GetRandomPositiveRelativelyPrimeInt(n)
 	if f == nil {
