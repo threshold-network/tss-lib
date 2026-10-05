@@ -105,7 +105,7 @@ func NewExtendedKeyFromString(key string, curve elliptic.Curve) (*ExtendedKey, e
 
 	var pubKey ecdsa.PublicKey
 
-	if _, ok := curve.(*btcec.KoblitzCurve); ok {
+	if crypto.SameCurve(curve, btcec.S256()) {
 		// Ensure the public key parses correctly and is actually on the
 		// secp256k1 curve.
 		pk, err := btcec.ParsePubKey(keyData)
@@ -116,6 +116,11 @@ func NewExtendedKeyFromString(key string, curve elliptic.Curve) (*ExtendedKey, e
 		pubKey.Curve = curve
 	} else {
 		px, py := elliptic.Unmarshal(curve, keyData)
+		// elliptic.Unmarshal reports an undecodable point as nil
+		// coordinates; fail closed instead of returning a key with nil X/Y.
+		if px == nil || py == nil {
+			return nil, errors.New("invalid extended key: cannot decode public key")
+		}
 		pubKey = ecdsa.PublicKey{
 			Curve: curve,
 			X:     px,
