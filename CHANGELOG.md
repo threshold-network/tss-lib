@@ -254,7 +254,7 @@ rollout step (see Breaking Changes 1 and 2 and the PR #9 entry below):
   rejection have consumer-visible regressions. The Go module minimum is
   aligned with the documented Go 1.25.7 requirement; the preferred
   development and CI toolchain remains Go 1.26.8.
-- **Caller-observable behavior follow-ups:** `paillier.PublicKey.HomoMultWithBitLen(m, c1, bitLen)` is
+- **Caller-observable behavior follow-ups (PR #41):** `paillier.PublicKey.HomoMultWithBitLen(m, c1, bitLen)` is
   added, and `HomoMult(m, c1)` is equivalent to `HomoMultWithBitLen(m, c1, publicKey.N.BitLen())`;
   an out-of-domain message or exponent (`bitLen` below 1, above the modulus width, or
   a message wider than `bitLen` bits) returns `paillier.ErrMessageTooLong` in both timing
@@ -726,7 +726,7 @@ rejecting input that an honest caller would previously have produced.
   with an explicit public exponent bound; `HomoMult(m, c1)` is equivalent to it at the
   modulus-width bound. In constant-time mode the exponent is padded to `bitLen`, in
   `math/big` mode `bitLen` only gates validation; out-of-domain messages return
-  `paillier.ErrMessageTooLong`.
+  `paillier.ErrMessageTooLong`. _Provenance: `threshold-original`, PR #41._
 
 ### Notes
 
