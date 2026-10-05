@@ -13,8 +13,9 @@
 #     the Paillier modulus N, per the historical BobMid/BobMidWC) produces a
 #     round-2 proof whose T1 exceeds the default tight N+q^6 bound;
 #   - a default-configured current party's round 3 fails closed against it;
-#   - a current party with SetLegacyHistoricalBobCompatibility(true) accepts
-#     the identical exchange and provably progresses (through round 8; see
+#   - a current party with SetLegacyHistoricalBobCompatibility(true) accepts a
+#     fresh paired exchange (own seed; not a replay of the reject run) and
+#     provably progresses (through round 8; see
 #     testdata/legacy_transcript/mixed_interop/main.go's doc comment for why
 #     full signature completion is out of scope for this specific check);
 #   - a homogeneous (current-only) control completes the same shape, so the

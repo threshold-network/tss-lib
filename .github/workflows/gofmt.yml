@@ -2,7 +2,7 @@ name: Go-fmt
 on:
   push:
     branches:
-      # Post-merge signal only: dev and master (D9). release/* push runs are
+      # Post-merge signal only: dev and master. release/* push runs are
       # dropped; merges into dev are covered by the PR check that allowed the
       # merge, and master push keeps the post-merge signal.
       - dev
@@ -16,7 +16,7 @@ on:
 permissions:
   contents: read
 
-# R2: cancel superseded PR runs. Only pull_request events cancel in-progress;
+# Cancel superseded PR runs. Only pull_request events cancel in-progress;
 # push/dispatch runs use their own run-scoped group, so a push can never cancel
 # another push (orchestrator concurrency guidance).
 concurrency:

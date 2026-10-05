@@ -2,7 +2,7 @@ name: Go Test
 on:
   push:
     branches:
-      # Post-merge signal only: dev and master (D9). release/* push runs are
+      # Post-merge signal only: dev and master. release/* push runs are
       # dropped; merges into dev are covered by the PR check that allowed the
       # merge, and master push keeps the post-merge signal.
       - dev
@@ -16,7 +16,7 @@ on:
 permissions:
   contents: read
 
-# R2: cancel superseded PR runs. Only pull_request events cancel in-progress;
+# Cancel superseded PR runs. Only pull_request events cancel in-progress;
 # push/dispatch runs use their own run-scoped group, so a push can never cancel
 # another push (orchestrator concurrency guidance).
 concurrency:
@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # R4: cheap early gate - fails a broken PR in ~1 min instead of ~10. go vet is
+  # Cheap early gate - fails a broken PR in ~1 min instead of ~10. go vet is
   # the repo's only vet entry point (Makefile has no vet target), so run it
   # here. The gofmt gate lives in the dedicated gofmt workflow ("Go fmt
   # project"); it is not re-run here.
@@ -57,7 +57,7 @@ jobs:
     - name: Vet
       run: go vet ./...
 
-  # R4: unit-level keygen slice (~30 s, no ceremony). Runs in parallel with the
+  # Unit-level keygen slice (~30 s, no ceremony). Runs in parallel with the
   # full suite so a broken keygen change fails early. The full-suite job below
   # still covers every test, so nothing is skipped.
   keygen-units:
@@ -101,3 +101,57 @@ jobs:
 
     - name: Verify bidirectional legacy transcript vectors
       run: ./testdata/legacy_transcript/verify.sh
+
+  # Live mixed-binary harness and its own tests. verify_mixed_interop.sh spins
+  # up the pinned historical binary as a subprocess, so the pin (and its
+  # modules) must be fetchable; the same dependency is pulled by verify.sh
+  # above, so this job adds no new fetch surface.
+  mixed-binary-interop:
+    name: Mixed-binary interop
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.26.8'
+        cache: true
+
+    - name: Vet harness
+      run: |
+        go vet ./testdata/legacy_transcript/oracle/
+        go vet ./testdata/legacy_transcript/mixed_interop/
+
+    - name: Run harness unit tests
+      run: go test ./testdata/legacy_transcript/mixed_interop/
+
+    - name: Run mixed-binary interop
+      run: ./testdata/legacy_transcript/verify_mixed_interop.sh
+
+  # The documented Go minimum (README and the go.mod `go` directive) is
+  # normally only text-checked. Building and vetting with the minimum
+  # toolchain catches code that silently uses a newer API. GOTOOLCHAIN=local
+  # prevents the toolchain directive from auto-upgrading past 1.25.7.
+  go-minimum-build:
+    name: Go minimum build
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+    steps:
+
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25.7'
+        cache: true
+
+    - name: Build and vet at the minimum toolchain
+      run: |
+        go build ./...
+        go vet ./...
