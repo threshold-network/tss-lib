@@ -82,3 +82,38 @@ func TestModProofCTContextExponentReuseEquivalence(t *testing.T) {
 		assert.Zero(t, zOn.Cmp(zRef), "CT context z (reused encoded invN) must match the math/big reference")
 	}
 }
+
+// TestModProofCTContextExponentWipe pins the advertised secret-wipe of the
+// context's owned exponent encodings: a constant-time construction encodes
+// the four secret-derived exponents (psP, psQ, rootExp, invN) into
+// non-zero fixed-width byte strings, and wipeExponentEncodings zeroes every
+// byte of all four in place. A regression that leaves secret exponent bytes
+// resident after proof generation (or that reassigns the slices instead of
+// zeroing them) fails the assertions below.
+func TestModProofCTContextExponentWipe(t *testing.T) {
+	p, q, N, phiN, invN := modProofContextInputs(t)
+	ctx := newModProofCTContext(p, q, N, phiN, invN, true)
+
+	// Before the wipe each owned encoding must equal the fixed-width
+	// encoding of its exponent (i.e. be non-zero, not a freshly zeroed
+	// array) and keep the modulus byte width.
+	want := [][]byte{
+		fixedWidthExponentBytes(ctx.psP, p),
+		fixedWidthExponentBytes(ctx.psQ, q),
+		fixedWidthExponentBytes(ctx.rootExp, N),
+		fixedWidthExponentBytes(invN, N),
+	}
+	got := [][]byte{ctx.psPExp, ctx.psQExp, ctx.rootExpExp, ctx.invNExp}
+	for i := range got {
+		assert.Equal(t, want[i], got[i], "owned encoding %d must hold its exponent before the wipe", i)
+	}
+
+	ctx.wipeExponentEncodings()
+
+	// After the wipe every byte of every owned encoding is zero, and the
+	// arrays keep their original length (zeroed in place, not reassigned).
+	for i := range got {
+		zero := make([]byte, len(want[i]))
+		assert.Equal(t, zero, got[i], "owned encoding %d must be fully zeroed after the wipe", i)
+	}
+}

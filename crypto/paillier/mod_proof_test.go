@@ -276,21 +276,38 @@ func TestModSqrt(t *testing.T) {
 	// 37^2 = 1369 = 60 mod 77
 
 	// 60^2 = 3600 = 58 mod 77
-	// 37^4 = 58 mod 77
+	// 37^4 = 58 mod 77. The context's QR predicate and fourth root must
+	// agree with the math/big reference in both the plain and the
+	// constant-time context; the context's mode is fixed at construction.
+	p, q, N := b(7), b(11), b(77)
+	phiN := new(big.Int).Mul(new(big.Int).Sub(p, one), new(big.Int).Sub(q, one))
+	invN := new(big.Int).ModInverse(N, phiN)
+	require.NotNil(t, invN, "the 7*11 modulus must admit N^(-1) mod phiN")
 
-	// 59 = 3 (mod 7) which is not a residue
-	// 59 = 4 (mod 11)
+	ctxOff := newModProofCTContext(p, q, N, phiN, invN, false)
 
-	assert.True(isQuadResidueModPrime(b(58), b(7)))
-	assert.True(isQuadResidueModPrime(b(58), b(11)))
+	assert.True(ctxOff.isQuadResidueModPrime(b(58), p, nil, ctxOff.psP, nil))
+	assert.True(ctxOff.isQuadResidueModPrime(b(58), q, nil, ctxOff.psQ, nil))
 
-	assert.False(isQuadResidueModPrime(b(59), b(7)))
-	assert.True(isQuadResidueModPrime(b(59), b(11)))
+	assert.False(ctxOff.isQuadResidueModPrime(b(59), p, nil, ctxOff.psP, nil))
+	assert.True(ctxOff.isQuadResidueModPrime(b(59), q, nil, ctxOff.psQ, nil))
 
-	assert.True(isQuadResidueModComposite(b(58), b(7), b(11)))
-	assert.False(isQuadResidueModComposite(b(59), b(7), b(11)))
+	assert.True(ctxOff.isQuadResidueModComposite(b(58), b(7), b(11)))
+	assert.False(ctxOff.isQuadResidueModComposite(b(59), b(7), b(11)))
 
-	assert.Equal(b(37), quadResidueModComposite(b(58), b(7), b(11), b(77), b(60)))
+	assert.Equal(b(37), ctxOff.fourthRoot(b(58), b(77)))
+	ctxOn := newModProofCTContext(p, q, N, phiN, invN, true)
+
+	assert.True(ctxOn.isQuadResidueModPrime(b(58), p, ctxOn.ctP, ctxOn.psP, ctxOn.psPExp))
+	assert.True(ctxOn.isQuadResidueModPrime(b(58), q, ctxOn.ctQ, ctxOn.psQ, ctxOn.psQExp))
+
+	assert.False(ctxOn.isQuadResidueModPrime(b(59), p, ctxOn.ctP, ctxOn.psP, ctxOn.psPExp))
+	assert.True(ctxOn.isQuadResidueModPrime(b(59), q, ctxOn.ctQ, ctxOn.psQ, ctxOn.psQExp))
+
+	assert.True(ctxOn.isQuadResidueModComposite(b(58), b(7), b(11)))
+	assert.False(ctxOn.isQuadResidueModComposite(b(59), b(7), b(11)))
+
+	assert.Equal(b(37), ctxOn.fourthRoot(b(58), b(77)))
 }
 
 // TestModulusBitLenCeilingPredicate pins the common.ExceedsUnknownOrderModulusCeiling

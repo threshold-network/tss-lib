@@ -392,45 +392,49 @@ func TestModProofCTVerifies(t *testing.T) {
 	assert.True(t, res, "CT ModProof must verify")
 }
 
-// TestModProofHelpersCTEquivalence: the QR helpers are deterministic; CT and non-CT
-// must agree (boolean predicates and the byte-identical fourth root) on real-key inputs.
-func TestModProofHelpersCTEquivalence(t *testing.T) {
-	setPaillierCTTestMode(t, false)
+// TestModProofContextsCTEquivalence: the QR predicates and the fourth root
+// of the modProofCTContext are deterministic; the constant-time and the
+// plain context must agree on real-key inputs (boolean predicates and the
+// byte-identical fourth root).
+func TestModProofContextsCTEquivalence(t *testing.T) {
 	facSetUp(t)
 
 	p, q := privateKey.GetPQ()
 	N := publicKey.N
 	phiN := privateKey.PhiN
+	invN := new(big.Int).ModInverse(N, phiN)
+	require.NotNil(t, invN, "the fixture key must admit N^(-1) mod phiN")
+
+	ctxOff := newModProofCTContext(p, q, N, phiN, invN, false)
+	ctxOn := newModProofCTContext(p, q, N, phiN, invN, true)
 
 	// x = r^2 mod N is a quadratic residue mod N (exercises the true branch).
 	r := common.GetRandomPositiveRelativelyPrimeInt(N)
 	x := new(big.Int).Mod(new(big.Int).Mul(r, r), N)
 
 	// nr is a known quadratic NON-residue mod p (exercises the false branch of
-	// isQuadResidueModPrime); located using the standard (non-CT) predicate.
+	// the context's QR predicate); located using the math/big reference.
 	nr := big.NewInt(2)
-	for isQuadResidueModPrime(nr, p) {
+	for new(big.Int).Exp(nr, ctxOff.psP, p).Cmp(one) == 0 {
 		nr.Add(nr, big.NewInt(1))
 	}
 
-	qrPOff := isQuadResidueModPrime(x, p)
-	nrPOff := isQuadResidueModPrime(nr, p)
-	qrCompOff := isQuadResidueModComposite(x, p, q)
-	rootOff := quadResidueModComposite(x, p, q, N, phiN)
+	qrPOff := ctxOff.isQuadResidueModPrime(x, p, nil, ctxOff.psP, nil)
+	nrPOff := ctxOff.isQuadResidueModPrime(nr, p, nil, ctxOff.psP, nil)
+	qrCompOff := ctxOff.isQuadResidueModComposite(x, p, q)
+	rootOff := ctxOff.fourthRoot(x, N)
 
-	setPaillierCTTestMode(t, true)
-	assert.True(t, common.IsConstantTimeEnabled(), "CT must be engaged (else this test is vacuous)")
-	qrPOn := isQuadResidueModPrime(x, p)
-	nrPOn := isQuadResidueModPrime(nr, p)
-	qrCompOn := isQuadResidueModComposite(x, p, q)
-	rootOn := quadResidueModComposite(x, p, q, N, phiN)
+	qrPOn := ctxOn.isQuadResidueModPrime(x, p, ctxOn.ctP, ctxOn.psP, ctxOn.psPExp)
+	nrPOn := ctxOn.isQuadResidueModPrime(nr, p, ctxOn.ctP, ctxOn.psP, ctxOn.psPExp)
+	qrCompOn := ctxOn.isQuadResidueModComposite(x, p, q)
+	rootOn := ctxOn.fourthRoot(x, N)
 
 	assert.True(t, qrPOff, "x=r^2 must be a residue mod p")
 	assert.False(t, nrPOff, "nr must be a non-residue mod p")
-	assert.Equal(t, qrPOff, qrPOn, "isQuadResidueModPrime must agree (residue)")
-	assert.Equal(t, nrPOff, nrPOn, "isQuadResidueModPrime must agree (non-residue)")
+	assert.Equal(t, qrPOff, qrPOn, "the QR predicate must agree (residue)")
+	assert.Equal(t, nrPOff, nrPOn, "the QR predicate must agree (non-residue)")
 	assert.Equal(t, qrCompOff, qrCompOn, "isQuadResidueModComposite must agree")
-	assert.Zero(t, rootOff.Cmp(rootOn), "quadResidueModComposite must be byte-identical")
+	assert.Zero(t, rootOff.Cmp(rootOn), "fourthRoot must be byte-identical")
 }
 
 // TestModProofCTEquivalence: ModProof is randomised only through w; replaying

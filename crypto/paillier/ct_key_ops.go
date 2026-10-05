@@ -27,10 +27,8 @@ var (
 	// ErrMalformedKey is returned when the private key material is not a
 	// usable decryption trapdoor: LambdaN is missing, non-positive, wider
 	// than the modulus bit-bound the fixed-width constant-time exponent
-	// encoding requires, or the decryption coefficient
-	// L((N+1)^LambdaN mod N^2) has no inverse modulo N. The error carries no
-	// key values and is returned consistently by both the constant-time and
-	// variable-time paths.
+	// encoding requires, or the decryption coefficient (LambdaN mod N) is
+	// not invertible modulo N. The error carries no key values.
 	ErrMalformedKey = errors.New("paillier: malformed private key material")
 )
 

@@ -154,7 +154,6 @@ func (publicKey *PublicKey) EncryptAndReturnRandomness(m *big.Int) (c *big.Int, 
 	xN := new(big.Int).Exp(x, publicKey.N, N2)
 	// 3. (1) * (2) mod N2
 	c = common.ModInt(N2).Mul(Gm, xN)
-	runtime.KeepAlive(publicKey)
 	return
 }
 
@@ -163,11 +162,24 @@ func (publicKey *PublicKey) Encrypt(m *big.Int) (c *big.Int, err error) {
 	return
 }
 
-func (publicKey *PublicKey) HomoMult(m, c1 *big.Int) (*big.Int, error) {
+// HomoMultWithBitLen returns c1^m mod N^2, an encryption of m times c1's
+// plaintext. m is a secret scalar in the MtA protocol, so the exponent is
+// evaluated in constant time; bitLen is a public upper bound on m's bit
+// length that the caller guarantees, never m's own size. In constant-time
+// mode the exponent is padded to exactly bitLen. It returns
+// ErrMessageTooLong when bitLen < 1, bitLen > N.BitLen(), m < 0, m >= N,
+// m.BitLen() > bitLen, or c1 is outside [0, N^2).
+func (publicKey *PublicKey) HomoMultWithBitLen(m, c1 *big.Int, bitLen int) (*big.Int, error) {
 	if err := checkPaillierModulus(publicKey.N); err != nil {
 		return nil, err
 	}
+	if bitLen < 1 || bitLen > publicKey.N.BitLen() {
+		return nil, ErrMessageTooLong
+	}
 	if m.Cmp(zero) == -1 || m.Cmp(publicKey.N) != -1 { // m < 0 || m >= N ?
+		return nil, ErrMessageTooLong
+	}
+	if m.BitLen() > bitLen {
 		return nil, ErrMessageTooLong
 	}
 	st := publicKey.paillierPublicStateFor()
@@ -180,25 +192,39 @@ func (publicKey *PublicKey) HomoMult(m, c1 *big.Int) (*big.Int, error) {
 	}
 	// cipher^m mod N2
 	if common.IsConstantTimeEnabled() {
-		// SECURITY: m is the secret scalar multiplier used as the exponent; exponentiate
-		// in constant time (N2 is odd). The guards above prove c1 is canonical
-		// modulo N2 (0 <= c1 < N2) and bound 0 <= m < N, so N.BitLen() is a
-		// proven public bound narrower than N2's default width, halving the
-		// exponent padding bigmod.Exp works over; the N2 context is reused
+		// SECURITY: m is the secret scalar multiplier used as the exponent;
+		// exponentiate in constant time (N2 is odd). The guards above prove
+		// c1 is canonical modulo N2 (0 <= c1 < N2) and bound m to the
+		// caller's public bitLen, so the exponent is padded to bitLen
+		// rather than the full modulus width; the N2 context is reused
 		// across calls on this key.
 		ctN2, err := st.ctN2(publicKey)
 		if err != nil {
 			return nil, err
 		}
-		defer runtime.KeepAlive(publicKey)
-		return ctN2.ExpCTCanonicalWithBitLen(c1, m, publicKey.N.BitLen()), nil
+		return ctN2.ExpCTCanonicalWithBitLen(c1, m, bitLen), nil
 	}
-	defer runtime.KeepAlive(publicKey)
 	return common.ModInt(N2).Exp(c1, m), nil
 }
 
+// HomoMult is HomoMultWithBitLen with bitLen = N.BitLen(), the public
+// bound implied by m < N. The modulus is checked first, so a nil or
+// degenerate N returns ErrInvalidModulus before N.BitLen() is read.
+func (publicKey *PublicKey) HomoMult(m, c1 *big.Int) (*big.Int, error) {
+	if err := checkPaillierModulus(publicKey.N); err != nil {
+		return nil, err
+	}
+	return publicKey.HomoMultWithBitLen(m, c1, publicKey.N.BitLen())
+}
+
 func (publicKey *PublicKey) HomoAdd(c1, c2 *big.Int) (*big.Int, error) {
-	N2 := publicKey.NSquare()
+	if err := checkPaillierModulus(publicKey.N); err != nil {
+		return nil, err
+	}
+	N2, err := publicKey.paillierPublicStateFor().n2Value(publicKey)
+	if err != nil {
+		return nil, err
+	}
 	if c1.Cmp(zero) == -1 || c1.Cmp(N2) != -1 { // c1 < 0 || c1 >= N2 ?
 		return nil, ErrMessageTooLong
 	}
@@ -263,8 +289,8 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 		inv = new(big.Int).ModInverse(L(gammaExpLambda, privateKey.N), privateKey.N)
 	}
 	if inv == nil {
-		// A non-invertible decryption coefficient means malformed key
-		// material; both modes return the same error.
+		// A non-invertible decryption coefficient (LambdaN mod N not
+		// invertible) means malformed key material.
 		return nil, ErrMalformedKey
 	}
 
@@ -281,7 +307,8 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 // An efficient non-interactive statistical zero-knowledge proof system for quasi-safe prime products.
 // In: In Proc. of the 5th ACM Conference on Computer and Communications Security (CCS-98. Citeseer (1998)
 //
-// This only implements the stage 1 proof that N is square-free from 3.1
+// This only implements the stage 1 proof that N is square-free from 3.1.
+//
 // It panics if the private key modulus cannot supply challenges.
 func (privateKey *PrivateKey) Proof(k *big.Int, ecdsaPub *crypto2.ECPoint) Proof {
 	var pi Proof
