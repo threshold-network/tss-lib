@@ -300,41 +300,70 @@ func TestSigningStartMessageRangeGate(t *testing.T) {
 	keys, pIDs, err := keygen.LoadKeygenTestFixtures(2)
 	require.NoError(t, err)
 
-	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], 2, 1)
-	params.SetProtocolMode(tss.ProtocolModeLegacy)
-
-	t.Run("rejectsMessageEqualToCurveOrder", func(t *testing.T) {
-		out := make(chan tss.Message, 2)
-		end := make(chan *common.SignatureData, 1)
-		msg := new(big.Int).Set(q)
-
-		P := NewLocalParty(msg, params, keys[0], out, end, 32).(*LocalParty)
-		err := P.Start()
-		require.NotNil(t, err, "Start must reject m == curve order")
-
-		// No messages should have been emitted (gate is before any emission)
-		assert.Empty(t, out, "no round-1 messages emitted on rejection")
-	})
-
-	t.Run("acceptsMessageEqualToOrderMinusOne", func(t *testing.T) {
-		out := make(chan tss.Message, 2)
-		end := make(chan *common.SignatureData, 1)
-		msg := new(big.Int).Sub(q, big.NewInt(1))
-
-		P := NewLocalParty(msg, params, keys[0], out, end, 32).(*LocalParty)
-		err := P.Start()
-		require.Nil(t, err, "Start must accept m == q-1 through the range gate")
-
-		// Round-1 messages must be emitted: 1 directed + 1 broadcast = 2
-		msgs := make([]tss.Message, 0, 2)
-		for range 2 {
-			select {
-			case m := <-out:
-				msgs = append(msgs, m)
+	for _, tc := range []struct {
+		name string
+		mode tss.ProtocolMode
+	}{
+		{"legacy", tss.ProtocolModeLegacy},
+		{"securityV2", tss.ProtocolModeSecurityV2},
+	} {
+		t.Run(tc.name+"/rejectsMessageEqualToCurveOrder", func(t *testing.T) {
+			params := tss.NewParameters(tss.S256(), tss.NewPeerContext(pIDs), pIDs[0], 2, 1)
+			params.SetProtocolMode(tc.mode)
+			if tc.mode == tss.ProtocolModeSecurityV2 {
+				params.SetSessionNonce(big.NewInt(1))
 			}
+			out := make(chan tss.Message, 2)
+			end := make(chan *common.SignatureData, 1)
+			msg := new(big.Int).Set(q)
+
+			P := NewLocalParty(msg, params, keys[0], out, end, 32).(*LocalParty)
+			err := P.Start()
+			require.NotNil(t, err, "Start must reject m == curve order")
+
+			// No messages should have been emitted (gate is before any emission)
+			assert.Empty(t, out, "no round-1 messages emitted on rejection")
+		})
+
+		t.Run(tc.name+"/acceptsMessageEqualToOrderMinusOne", func(t *testing.T) {
+			requireSigningCeremonyAccepts(t, tc.mode, new(big.Int).Sub(q, big.NewInt(1)))
+		})
+
+	}
+
+	// The range gate is mode-independent, but the SSID is a
+	// security-v2-only concept: two parties with the same nonce and
+	// identical inputs except the message must derive different SSIDs
+	// when they differ only in the adjacent messages q-1 vs q-2.
+	t.Run("securityV2SSIDsForAdjacentMessagesDiffer", func(t *testing.T) {
+		p2pCtx := tss.NewPeerContext(pIDs)
+		nonce := big.NewInt(7)
+		build := func(msg *big.Int) *LocalParty {
+			params := tss.NewParameters(tss.S256(), p2pCtx, pIDs[0], 2, 1)
+			params.SetProtocolMode(tss.ProtocolModeSecurityV2)
+			params.SetSessionNonce(nonce)
+			out := make(chan tss.Message, 2)
+			end := make(chan *common.SignatureData, 1)
+			return NewLocalParty(msg, params, keys[0], out, end, 32).(*LocalParty)
 		}
-		assert.Len(t, msgs, 2, "expected 2 round-1 messages (directed + broadcast)")
+		upper := build(new(big.Int).Sub(q, big.NewInt(1)))
+		lower := build(new(big.Int).Sub(q, big.NewInt(2)))
+		require.Nil(t, upper.Start())
+		require.Nil(t, lower.Start())
+		require.NotEmpty(t, upper.temp.ssid, "security-v2 Start must derive an SSID")
+		require.NotEmpty(t, lower.temp.ssid, "security-v2 Start must derive an SSID")
+		assert.NotEqual(t, upper.temp.ssid, lower.temp.ssid,
+			"adjacent messages with the same nonce must derive different SSIDs")
 	})
+}
+
+// requireSigningCeremonyAccepts runs a full completing signing ceremony with
+// the given message in the given protocol mode (an 11-party threshold-10
+// ceremony via testE2EConcurrent) and verifies the delivered signature data
+// with the standard assertions.
+func requireSigningCeremonyAccepts(t *testing.T, mode tss.ProtocolMode, msg *big.Int) {
+	t.Helper()
+	testE2EConcurrent(t, mode, msg, 32)
 }
 
 // ----- Deterministic out-of-order readiness accumulation for round.ok -----

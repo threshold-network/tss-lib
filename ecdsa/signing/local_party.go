@@ -98,6 +98,14 @@ type (
 	}
 )
 
+// NewLocalParty returns a local signing party for the GG20 protocol.
+//
+// Panics: fullBytesLen is required (variadic argument), must be positive, no
+// larger than the curve order byte length, and at least ceil(msg.BitLen()/8);
+// params must have an explicit protocol mode selected (legacy or security-v2)
+// via SetProtocolMode before this call; and legacy mode must not have a
+// session nonce set. Any of these panics at the call site rather than later
+// inside a protocol goroutine.
 func NewLocalParty(
 	msg *big.Int,
 	params *tss.Parameters,
@@ -110,15 +118,18 @@ func NewLocalParty(
 }
 
 // NewLocalPartyWithKDD returns a party with key derivation delta for HD support.
-// The message is copied so later caller mutations cannot change this party's
-// signing context.
+// The message and the keyDerivationDelta are copied so later caller mutations
+// cannot change this party's signing context.
+// Panics: fullBytesLen is required (variadic argument), must be positive, no
+// larger than the curve order byte length, and at least ceil(msg.BitLen()/8);
+// params must have an explicit protocol mode selected (legacy or security-v2)
+// via SetProtocolMode before this call; and legacy mode must not have a
+// session nonce set. Any of these panics at the call site rather than later
+// inside a protocol goroutine.
 //
 // fullBytesLen fixes the byte width used to encode the message for the final
 // ECDSA verification/output path (preserving leading zero bytes). Every signer
-// in a ceremony must pass the same value. It must be positive, no larger than
-// the curve order byte length, and at least ceil(msg.BitLen()/8); violating
-// these constraints is a caller bug and the constructor panics at the call site
-// rather than later inside a protocol goroutine.
+// in a ceremony must pass the same value.
 func NewLocalPartyWithKDD(
 	msg *big.Int,
 	params *tss.Parameters,
@@ -153,7 +164,13 @@ func NewLocalPartyWithKDD(
 	p.temp.signRound8Messages = make([]tss.ParsedMessage, partyCount)
 	p.temp.signRound9Messages = make([]tss.ParsedMessage, partyCount)
 	// temp data init
-	p.temp.keyDerivationDelta = keyDerivationDelta
+	// Copy the delta so caller mutation of the shared *big.Int cannot change
+	// this party's signing context between construction and Start.
+	if keyDerivationDelta != nil {
+		p.temp.keyDerivationDelta = new(big.Int).Set(keyDerivationDelta)
+	} else {
+		p.temp.keyDerivationDelta = nil
+	}
 	if msg != nil {
 		p.temp.m = new(big.Int).Set(msg)
 	}
