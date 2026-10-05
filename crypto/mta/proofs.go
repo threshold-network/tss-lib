@@ -20,6 +20,12 @@ import (
 const (
 	ProofBobBytesParts   = 10
 	ProofBobWCBytesParts = 12
+
+	// randomSamplerBitCap mirrors the random sampler cap in common/random.go:
+	// the sampler panics on limits wider than this, so the provers reject
+	// such moduli up front instead of letting the panic escape the
+	// exported API.
+	randomSamplerBitCap = 5000
 )
 
 type (
@@ -40,20 +46,40 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 	if ec == nil || pk == nil || NTilde == nil || h1 == nil || h2 == nil || c1 == nil || c2 == nil || x == nil || y == nil || r == nil {
 		return nil, errors.New("ProveBob() received a nil argument")
 	}
+	if pk.N == nil || pk.N.Cmp(one) <= 0 {
+		return nil, errors.New("ProveBob: invalid Paillier modulus N")
+	}
+	// Reject degenerate or over-wide moduli before any sampling or
+	// exponentiation runs against them: an even NTilde makes the
+	// constant-time modular context panic, and a limit wider than the
+	// sampler's cap panics the random samplers below.
+	if NTilde.Cmp(one) <= 0 || NTilde.Bit(0) == 0 {
+		return nil, errors.New("ProveBob: invalid auxiliary modulus N-tilde")
+	}
+	if NTilde.BitLen() > randomSamplerBitCap || pk.N.BitLen() > randomSamplerBitCap {
+		return nil, errors.New("ProveBob: modulus width exceeds the random sampler cap")
+	}
+	if X != nil && !X.ValidateBasic() {
+		return nil, errors.New("ProveBob: invalid with-check point X")
+	}
 
-	// x and y are Bob's secret MtA inputs and Paillier plaintexts, so they
-	// must sit in the intended 0 <= v < pk.N domain. Validate before any
-	// sampling or exponentiation so a malformed direct-API witness returns an
-	// error in either timing mode. Honest legacy and security-v2 witnesses
-	// stay valid: b < q < N and the y < q^5 / y < N paths both bound y below
-	// the Paillier modulus.
-	if x.Cmp(zero) == -1 || x.Cmp(pk.N) != -1 || y.Cmp(zero) == -1 || y.Cmp(pk.N) != -1 {
+	q := ec.Params().N
+
+	// x and y are Bob's secret MtA inputs. x is the MtA scalar, 0 <= x < q,
+	// and y stays in the Paillier plaintext domain 0 <= y < pk.N:
+	// historical-shaped witnesses up to N-1 must remain provable, so no
+	// narrower bound applies to y. Validate before any sampling or
+	// exponentiation so a malformed direct-API witness returns an error in
+	// either timing mode.
+	if x.Cmp(zero) == -1 || x.Cmp(q) != -1 {
+		return nil, errors.New("ProveBob: witness x outside the curve-order domain")
+	}
+	if y.Cmp(zero) == -1 || y.Cmp(pk.N) != -1 {
 		return nil, errors.New("ProveBob: witness outside the Paillier plaintext domain")
 	}
 
 	NSquared := pk.NSquare()
 
-	q := ec.Params().N
 	q3 := new(big.Int).Mul(q, q)
 	q3 = new(big.Int).Mul(q, q3)
 	q7 := new(big.Int).Mul(q3, q3)
@@ -77,9 +103,15 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 	} else {
 		tau = common.GetRandomPositiveInt(q3NTilde)
 	}
+	if alpha == nil || rho == nil || sigma == nil || tau == nil {
+		return nil, errors.New("ProveBob: could not sample randomness")
+	}
 
 	// 3.
 	rhoPrm := common.GetRandomPositiveInt(q3NTilde)
+	if rhoPrm == nil {
+		return nil, errors.New("ProveBob: could not sample randomness")
+	}
 
 	// 4.
 	beta := common.GetRandomPositiveRelativelyPrimeInt(pk.N)
@@ -88,12 +120,15 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 	}
 	var gamma *big.Int
 	if Session == nil {
-		// Historical Bob proofs sample gamma as a unit modulo the Paillier
-		// modulus. Besides reproducing PRIOR proof bytes, this is why the legacy
-		// verifier must accept T1 above q^7.
+		// The historical 2e712689 prover samples gamma as a unit modulo the
+		// Paillier modulus. Besides reproducing that prover's proof bytes,
+		// this is why the legacy verifier must accept T1 above q^7.
 		gamma = common.GetRandomPositiveRelativelyPrimeInt(pk.N)
 	} else {
 		gamma = common.GetRandomPositiveInt(q7)
+	}
+	if gamma == nil {
+		return nil, errors.New("ProveBob: could not sample randomness")
 	}
 
 	// 5.
@@ -114,11 +149,13 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 		// time (NTilde is odd). The h2^rho / h2^sigma blinds use one-time randomness and
 		// stay on math/big (see the coverage note in common/constant_time.go).
 		ctModNTilde := common.NewCTModInt(NTilde)
-		// Both inputs are Paillier plaintexts bounded by pk.N, which can be
-		// wider than NTilde. Do not derive the exponent width from NTilde.
-		exponentBits := pk.N.BitLen()
-		z = modNTilde.Mul(ctModNTilde.ExpCTWithBitLen(h1, x, exponentBits), modNTilde.Exp(h2, rho))
-		t = modNTilde.Mul(ctModNTilde.ExpCTWithBitLen(h1, y, exponentBits), modNTilde.Exp(h2, sigma))
+		// x is a curve-order scalar, narrower than both the auxiliary
+		// modulus and the Paillier modulus: pad its exponent width to q so
+		// the constant-time path does not run the wider modulus width.
+		// y stays in the Paillier plaintext domain 0 <= y < pk.N, so its
+		// exponent pads to pk.N.BitLen().
+		z = modNTilde.Mul(ctModNTilde.ExpCTWithBitLen(h1, x, q.BitLen()), modNTilde.Exp(h2, rho))
+		t = modNTilde.Mul(ctModNTilde.ExpCTWithBitLen(h1, y, pk.N.BitLen()), modNTilde.Exp(h2, sigma))
 	} else {
 		z = modNTilde.Mul(modNTilde.Exp(h1, x), modNTilde.Exp(h2, rho))
 		t = modNTilde.Mul(modNTilde.Exp(h1, y), modNTilde.Exp(h2, sigma))
@@ -243,14 +280,16 @@ func (pf *ProofBobWC) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, 
 }
 
 // VerifyLegacy verifies a session-less legacy Bob/BobWC proof (the exact
-// 2e712689 untagged challenge). It is the explicit compatibility-aware entry
-// point used by signing round 3 for legacy parties. The shared verify core
-// owns the default tight legacy bound, N + q^6: the session-less prover
-// samples y below q^5 with T1 = e*y + gamma, e < q, gamma < N, so an honest
-// legacy response stays below q^6 + N. historicalBobCompat selects the
-// widened historical witness-range bound (q+1)*N; the shared core derives
-// it behind its malformed-input guard so nil curve/key/modulus inputs
-// return false instead of panicking.
+// 2e712689 untagged challenge). It is the compatibility-aware entry point
+// explicitly used by signing round 3 for legacy parties. The shared verify
+// core owns the default strict legacy bound, N + q^6: this branch's
+// legacy-mode (session-less) prover samples y below q^5, T1 = e*y + gamma,
+// e < q, gamma < N, so an honest response from that prover stays below
+// q^6 + N. The 2e712689 historical prover samples y below N instead, so
+// its T1 reaches the widened historical witness-range bound (q+1)*N,
+// which historicalBobCompat admits; the shared core derives this behind
+// its malformed-input guard, so nil curve/key/modulus inputs return
+// false instead of panicking.
 func (pf *ProofBobWC) VerifyLegacy(
 	ec elliptic.Curve,
 	pk *paillier.PublicKey,

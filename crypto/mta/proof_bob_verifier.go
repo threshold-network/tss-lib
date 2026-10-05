@@ -41,21 +41,10 @@ func (pf *ProofBobWC) verify(
 	} else if !pf.ProofBob.ValidateBasic() {
 		return false
 	}
-	// Width policy: reject caller-supplied moduli wider than the shared
-	// ceiling before IsUsableUnknownOrderModulus's ProbablyPrime call or any
-	// modulus-sized work is run against them.
-	if common.ExceedsUnknownOrderModulusCeiling(pk.N) ||
-		common.ExceedsUnknownOrderModulusCeiling(NTilde) {
-		return false
-	}
-	if !common.IsUsableUnknownOrderModulus(pk.N, common.MinUnknownOrderModulusBitLen) ||
-		!common.IsUsableUnknownOrderModulus(NTilde, common.MinUnknownOrderModulusBitLen) {
-		return false
-	}
-	if !common.IsCanonicalGenerator(NTilde, h1) || !common.IsCanonicalGenerator(NTilde, h2) || h1.Cmp(h2) == 0 {
-		return false
-	}
-	if !common.IsCanonicalPaillierCiphertext(c1, pk.N) || !common.IsCanonicalPaillierCiphertext(c2, pk.N) {
+	// Shared modulus/generator/ciphertext preamble: width ceiling before
+	// IsUsableUnknownOrderModulus's ProbablyPrime call, then canonical
+	// generators, then canonical ciphertexts. Preserves exact check order.
+	if !validateVerifierParams(pk, NTilde, h1, h2, c1, c2) {
 		return false
 	}
 
@@ -83,14 +72,17 @@ func (pf *ProofBobWC) verify(
 		// preserves that behavior exactly.
 		maxT1 = new(big.Int).Add(q7, big.NewInt(1))
 	default:
-		// The historical prover sampled gamma in [1, pk.N), while the
-		// security-v2 prover samples it below q^7. Since T1 = e*y + gamma
-		// with e < q and the MtA blinding value y < q^5, an honest legacy
-		// response is below pk.N + q^6.
-		// Applying the security-v2 q^7 cap to a PRIOR proof rejects almost
-		// every legitimate 2048-bit gamma and breaks mixed-binary legacy
-		// signing. Keep a finite legacy-specific cap so adversarial exponents
-		// remain bounded without rewriting the historical acceptance range.
+		// This branch's legacy-mode (session-less) prover samples the
+		// blinding value y below q^5 and gamma as a unit below pk.N, so an
+		// honest T1 = e*y + gamma with e < q is below pk.N + q^6: the
+		// default strict bound admits exactly that prover's responses.
+		// The 2e712689 historical prover instead samples y below pk.N, so
+		// its T1 reaches (q+1)*N and requires the historicalBobCompat
+		// widened bound; applying the strict cap to the historical
+		// 2e712689 prover's proofs rejects nearly all legitimate 2048-bit
+		// y values and breaks mixed-binary legacy signing. Keep a finite
+		// legacy-specific cap so adversarial exponents remain bounded,
+		// without rewriting the historical acceptance range.
 		q6 := new(big.Int).Mul(q3, q3)
 		maxT1 = new(big.Int).Add(pk.N, q6)
 	}
@@ -326,4 +318,38 @@ func bobProofChallenge(
 		)...,
 	)
 	return common.ModReduceHash(q, challengeHash)
+}
+
+// validateVerifierParams is the shared modulus/generator/ciphertext preamble
+// of this package's unknown-order verifiers. It preserves the exact check
+// order: width ceiling before IsUsableUnknownOrderModulus's ProbablyPrime
+// call, then canonical generators, then canonical ciphertext checks.
+// All moduli and generators must be non-nil.
+func validateVerifierParams(
+	pk *paillier.PublicKey,
+	NTilde, h1, h2 *big.Int,
+	ciphertexts ...*big.Int,
+) bool {
+	// Width policy: reject caller-supplied moduli wider than the shared
+	// ceiling before IsUsableUnknownOrderModulus's ProbablyPrime call or
+	// any modulus-sized work is performed against them.
+	if common.ExceedsUnknownOrderModulusCeiling(pk.N) ||
+		common.ExceedsUnknownOrderModulusCeiling(NTilde) {
+		return false
+	}
+	if !common.IsUsableUnknownOrderModulus(pk.N, common.MinUnknownOrderModulusBitLen) ||
+		!common.IsUsableUnknownOrderModulus(NTilde, common.MinUnknownOrderModulusBitLen) {
+		return false
+	}
+	if !common.IsCanonicalGenerator(NTilde, h1) ||
+		!common.IsCanonicalGenerator(NTilde, h2) ||
+		h1.Cmp(h2) == 0 {
+		return false
+	}
+	for _, c := range ciphertexts {
+		if !common.IsCanonicalPaillierCiphertext(c, pk.N) {
+			return false
+		}
+	}
+	return true
 }

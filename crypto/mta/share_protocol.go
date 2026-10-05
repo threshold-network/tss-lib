@@ -47,6 +47,13 @@ func BobMid(
 		return
 	}
 	q := ec.Params().N
+	// b is the MtA scalar this party contributes; it must be a curve-order
+	// scalar, which is also the public width the bounded homomorphic variant
+	// below is only safe with.
+	if b == nil || b.Cmp(zero) == -1 || b.Cmp(q) != -1 {
+		err = errors.New("BobMid: b outside the curve-order domain")
+		return
+	}
 	q5 := new(big.Int).Mul(q, q)
 	q5 = new(big.Int).Mul(q5, q5)
 	q5 = new(big.Int).Mul(q5, q)
@@ -55,7 +62,10 @@ func BobMid(
 	if err != nil {
 		return
 	}
-	cB, err = pkA.HomoMult(b, cA)
+	// b < q is a public bound narrower than the Paillier modulus: use the
+	// bounded variant so the constant-time exponentiation pads to that width
+	// instead of the wider modulus width.
+	cB, err = pkA.HomoMultWithBitLen(b, cA, q.BitLen())
 	if err != nil {
 		return
 	}
@@ -81,6 +91,13 @@ func BobMidWC(
 		return
 	}
 	q := ec.Params().N
+	// b is the MtA scalar this party contributes; it must be a curve-order
+	// scalar, which is also the public width the bounded homomorphic variant
+	// below is only safe with.
+	if b == nil || b.Cmp(zero) == -1 || b.Cmp(q) != -1 {
+		err = errors.New("BobMidWC: b outside the curve-order domain")
+		return
+	}
 	q5 := new(big.Int).Mul(q, q)
 	q5 = new(big.Int).Mul(q5, q5)
 	q5 = new(big.Int).Mul(q5, q)
@@ -89,7 +106,10 @@ func BobMidWC(
 	if err != nil {
 		return
 	}
-	cB, err = pkA.HomoMult(b, cA)
+	// b < q is a public bound narrower than the Paillier modulus: use the
+	// bounded variant so the constant-time exponentiation pads to that width
+	// instead of the wider modulus width.
+	cB, err = pkA.HomoMultWithBitLen(b, cA, q.BitLen())
 	if err != nil {
 		return
 	}
@@ -100,6 +120,22 @@ func BobMidWC(
 	beta = common.ModInt(q).Sub(zero, betaPrm)
 	piB, err = ProveBobWC(ec, pkA, NTildeA, h1A, h2A, cA, cB, b, betaPrm, cRand, B, session...)
 	return
+}
+
+// decryptShare is the shared tail of every AliceEnd entry point: decrypt cB
+// with the local Paillier secret key and reduce the plaintext to the curve
+// order. The entry points differ only in which Bob proof they check first.
+func decryptShare(
+	ec elliptic.Curve,
+	sk *paillier.PrivateKey,
+	cB *big.Int,
+) (*big.Int, error) {
+	alphaPrm, err := sk.Decrypt(cB)
+	if err != nil {
+		return nil, err
+	}
+	q := ec.Params().N
+	return new(big.Int).Mod(alphaPrm, q), nil
 }
 
 func AliceEnd(
@@ -113,12 +149,7 @@ func AliceEnd(
 	if !pf.Verify(ec, pkA, NTildeA, h1A, h2A, cA, cB, session...) {
 		return nil, errors.New("ProofBob.Verify() returned false")
 	}
-	alphaPrm, err := sk.Decrypt(cB)
-	if err != nil {
-		return nil, err
-	}
-	q := ec.Params().N
-	return new(big.Int).Mod(alphaPrm, q), nil
+	return decryptShare(ec, sk, cB)
 }
 
 func AliceEndWC(
@@ -133,19 +164,15 @@ func AliceEndWC(
 	if !pf.Verify(ec, pkA, NTildeA, h1A, h2A, cA, cB, B, session...) {
 		return nil, errors.New("ProofBobWC.Verify() returned false")
 	}
-	alphaPrm, err := sk.Decrypt(cB)
-	if err != nil {
-		return nil, err
-	}
-	q := ec.Params().N
-	return new(big.Int).Mod(alphaPrm, q), nil
+	return decryptShare(ec, sk, cB)
 }
 
 // AliceEndLegacy verifies a session-less legacy Bob proof using the legacy
-// T1 bound, then decrypts cB. historicalBobCompat widens the T1 bound to the
-// historical (2e712689) witness range via VerifyLegacy's (q+1)*N override;
-// keeps the tight N + q^6 bound. This is the signing round-3 entry point for
-// legacy parties; AliceEnd is unchanged for standalone callers.
+// T1 bound, then decrypts cB. When historicalBobCompat is true the T1 bound
+// is widened to the historical (2e712689) witness range (q+1)*N via
+// VerifyLegacy; when false the tight N + q^6 bound applies. This is the
+// signing round-3 entry point for legacy parties; AliceEnd is unchanged for
+// standalone callers.
 func AliceEndLegacy(
 	ec elliptic.Curve,
 	pkA *paillier.PublicKey,
@@ -157,12 +184,7 @@ func AliceEndLegacy(
 	if !pf.VerifyLegacy(ec, pkA, NTildeA, h1A, h2A, cA, cB, historicalBobCompat) {
 		return nil, errors.New("ProofBob.VerifyLegacy() returned false")
 	}
-	alphaPrm, err := sk.Decrypt(cB)
-	if err != nil {
-		return nil, err
-	}
-	q := ec.Params().N
-	return new(big.Int).Mod(alphaPrm, q), nil
+	return decryptShare(ec, sk, cB)
 }
 
 // AliceEndWCLegacy is the with-check counterpart of AliceEndLegacy.
@@ -178,10 +200,5 @@ func AliceEndWCLegacy(
 	if !pf.VerifyLegacy(ec, pkA, NTildeA, h1A, h2A, cA, cB, B, historicalBobCompat) {
 		return nil, errors.New("ProofBobWC.VerifyLegacy() returned false")
 	}
-	alphaPrm, err := sk.Decrypt(cB)
-	if err != nil {
-		return nil, err
-	}
-	q := ec.Params().N
-	return new(big.Int).Mod(alphaPrm, q), nil
+	return decryptShare(ec, sk, cB)
 }
