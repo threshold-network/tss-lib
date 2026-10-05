@@ -59,6 +59,15 @@ type (
 )
 
 // Exported, used in `tss` client
+//
+// Panics:
+//   - if the protocol mode was never selected:
+//     "tss: protocol mode must be selected before local party construction"
+//   - if the mode is legacy but a session nonce was set:
+//     "tss: legacy protocol mode must not set a session nonce"
+//
+// The panic happens synchronously at the caller's call site; the constructor
+// refuses to build a party whose transcript selection is not explicit.
 func NewLocalParty(
 	params *tss.Parameters,
 	out chan<- tss.Message,

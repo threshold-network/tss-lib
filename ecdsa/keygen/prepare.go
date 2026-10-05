@@ -126,7 +126,16 @@ consumer:
 	modPQ := common.ModInt(new(big.Int).Mul(p, q))
 	f1 := common.GetRandomPositiveRelativelyPrimeInt(NTildei)
 	alpha := common.GetRandomPositiveRelativelyPrimeInt(NTildei)
-	beta := modPQ.ModInverse(alpha)
+	// beta = alpha^-1 mod (p*q) is the secret ring-Pedersen trapdoor pair;
+	// compute it in constant time when CT ops are enabled (modulus p*q is
+	// odd, phi = (p-1)*(q-1) is the group exponent).
+	var beta *big.Int
+	if common.IsConstantTimeEnabled() {
+		phiPQ := new(big.Int).Mul(new(big.Int).Sub(p, big.NewInt(1)), new(big.Int).Sub(q, big.NewInt(1)))
+		beta = common.NewCTModIntWithPhi(new(big.Int).Mul(p, q), phiPQ).ModInverseCT(alpha)
+	} else {
+		beta = modPQ.ModInverse(alpha)
+	}
 	h1i := modNTildeI.Mul(f1, f1)
 	var h2i *big.Int
 	if common.IsConstantTimeEnabled() {
