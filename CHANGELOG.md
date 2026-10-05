@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This fork follows the upstream [`bnb-chain/tss-lib`](https://github.com/bnb-chain/tss-lib)
 SemVer line for provenance but has not yet published its own tagged release; all changes
 below are therefore listed under `[Unreleased]`.
+The module path has no `/vN` suffix (the upstream `/v2` path bump was not ported;
+see Not ported / deferred), so a Go-consumable release tag must stay on the `v0.x`
+or `v1.x` line — for example `v1.4.0-threshold.1` — because the `go` command
+rejects `v2`-and-later tags for this module path.
 
 Provenance notation. Each entry carries two kinds of reference:
 - **Upstream source** — `BNB #NNN` / `BNB <sha>` is the upstream pull request or commit the
@@ -87,9 +91,13 @@ run fails cryptographic verification, and there is no negotiation, downgrade,
 fallback, or retry between modes. Once every peer is upgraded, the rollout-only
 compatibility opt-in is disabled and the fleet is coordinated onto
 `ProtocolModeSecurityV2` with a shared per-ceremony session ID.
+Keygen (DKG) interop with the pre-upgrade binary is qualified only by the
+primitive-level oracle vectors (DLN, ModProof, FactorProof), not by a live
+mixed-version keygen run; there is no mixed-version DKG exercise.
 
-Four caller obligations are enforced at runtime (see Breaking Changes 1 and 2
-and the PR #9 entry below):
+Three of the four caller obligations below are enforced at runtime — two by
+constructor panic, one by a `Start()` error — and the fourth is an operational
+rollout step (see Breaking Changes 1 and 2 and the PR #9 entry below):
 1. Select exactly one protocol mode before constructing a local party.
 2. In security-v2, set a unique per-ceremony session nonce; in legacy, leave it unset.
 3. Pass a positive `fullBytesLen` to every signing constructor.
@@ -108,11 +116,12 @@ and the PR #9 entry below):
   an ambiguous empty value can never select a transcript. DLN, range,
   Bob/BobWC, ModProof, and FactorProof keep their existing optional-session
   shape: no argument is legacy; one non-empty argument is security-v2.
-  Legacy Bob/BobWC proof generation also restores PRIOR's exact `tau` and
-  relatively-prime Paillier `gamma` sampling ranges, and its verifier retains
-  PRIOR's honest response range: legacy samples `gamma` below `N`, whereas
-  security-v2 samples it below `q^7`; applying the latter bound to historical
-  proofs rejects valid mixed-version signing transcripts.
+  Legacy Bob/BobWC proof generation also restores the historical `2e712689`
+  implementation's exact `tau` and relatively-prime Paillier `gamma` sampling
+  ranges, and its verifier retains that implementation's honest response range:
+  legacy samples `gamma` below `N`, whereas security-v2 samples it below `q^7`;
+  applying the latter bound to historical proofs rejects valid mixed-version
+  signing transcripts.
 - **Break type:** Runtime/source-compatible configuration obligation. A local
   party constructed without selecting a mode fails closed. A mode cannot be
   changed after construction, security-v2 requires a session nonce, and legacy
@@ -126,8 +135,9 @@ and the PR #9 entry below):
   records fixed public points, legacy/security-v2 challenges, proof scalars,
   deterministic round-4/round-6 wire messages, source identities/digests, and
   a SHA-256 sidecar. `testdata/legacy_transcript` adds independent bidirectional
-  PRIOR/R1 oracles and raw vectors for DLN, range, Bob/BobWC, ModProof, and
-  FactorProof, including the serialized protocol messages that carry them.
+  oracles for the historical `2e712689` implementation and this fork's legacy
+  path, plus raw vectors for DLN, range, Bob/BobWC, ModProof, and FactorProof,
+  including the serialized protocol messages that carry them.
   Cross-verification uses the historical formulas or the module pinned to
   `2e712689`; it does not infer compatibility from two parties running the new
   implementation.
@@ -139,10 +149,10 @@ and the PR #9 entry below):
   round 3, from the default tight `N + q^6` to the exclusive historical
   witness-range bound `(q+1)*N` (derived from the historical `2e712689`
   `BobMid`/`BobMidWC` sampling `T1 = e*y + gamma` with `e < q`, `y < N`,
-  `gamma < N`). It is `false` by default, is only legal with
-  `ProtocolModeLegacy`, and is frozen for the party's lifetime by
-  `FreezeProtocolMode`; it panics if selected while the mode is unset or
-  security-v2. With the toggle off, the default legacy verifier remains
+  `gamma < N`). It is `false` by default, and any call — with `true` or `false` —
+  panics unless `ProtocolModeLegacy` has already been selected; the value is
+  frozen for the party's lifetime by `FreezeProtocolMode` (or local-party
+  construction). With the toggle off, the default legacy verifier remains
   tight and the standalone `ProofBob.Verify`/`ProofBobWC.Verify`/
   `AliceEnd`/`AliceEndWC` public APIs are unchanged.
 - **Risk:** Enabling it accepts pre-upgrade `2e712689` Bob/BobWC proofs
@@ -155,11 +165,11 @@ and the PR #9 entry below):
   default remains the hardened tight bound, and security-v2 is unaffected.
 - **Break type:** None (additive, opt-in). Callers that never set it keep
   the tightened legacy behavior.
-- **Provenance:** `threshold-original`, PR #9: P1 `9-F1` of the pre-merge
+- **Provenance:** `threshold-original`, PR #9: the pre-merge
   review identified that the default legacy bound was derived from this
-  branch's own `y < q^5` prover, rejecting honest historical `y < N` proofs
-  and aborting mixed-version legacy signing at
-  `AliceEnd`/`AliceEndWC`.
+  branch's legacy-mode prover, whose `betaPrm` sampler feeds `y` below
+  `q^5`, so it rejects honest historical `y < N` proofs and aborts
+  mixed-version legacy signing at `AliceEnd`/`AliceEndWC`.
 
 #### PR #16. ECDSA signing context binding in the security-v2 SSID (wire incompatibility)
 - **What:** The security-v2 signing SSID now binds both the message integer and its
@@ -196,10 +206,14 @@ and the PR #9 entry below):
   work. `ModProof` also reuses its fixed constant-time contexts and exponents
   across all 80 iterations without changing proof bytes.
 - **Constant-time Paillier performance (PR #31):** encryption uses the
-  `Gamma = N+1` identity through constant-time multiplication, bounded
-  exponents use the public `N.BitLen()` width, and pooled scratch buffers no
-  longer allocate boxed slice headers on each return. Proof bytes and public
-  APIs are unchanged.
+  `Gamma = N+1` identity through constant-time multiplication, bounded exponents
+  are padded to their public bound (the Paillier modulus width for `HomoMult`;
+  the curve-order width `q.BitLen()` for the `x`, `m`, and `b` exponents of the
+  Bob and Alice provers, while `ProofBob`/`ProofBobWC` keep `y` padded to the
+  Paillier modulus width — see the caller-observable
+  behavior follow-up bullet below), and pooled scratch buffers no longer
+  allocate boxed slice headers on each return. Proof bytes and public APIs are
+  unchanged.
 - **Rollout assurance (PRs #27, #29, #32, #33):** regression, fuzz, and live
   mixed-binary checks cover constant-time width handling, proof and wire
   decoding, both historical Bob/BobWC rejection paths, context mismatch
@@ -240,6 +254,30 @@ and the PR #9 entry below):
   rejection have consumer-visible regressions. The Go module minimum is
   aligned with the documented Go 1.25.7 requirement; the preferred
   development and CI toolchain remains Go 1.26.8.
+- **Caller-observable behavior follow-ups:** `paillier.PublicKey.HomoMultWithBitLen(m, c1, bitLen)` is
+  added, and `HomoMult(m, c1)` is equivalent to `HomoMultWithBitLen(m, c1, publicKey.N.BitLen())`;
+  an out-of-domain message or exponent (`bitLen` below 1, above the modulus width, or
+  a message wider than `bitLen` bits) returns `paillier.ErrMessageTooLong` in both timing
+  modes. MtA prover witness domains tighten: `BobMid`/`BobMidWC` reject a witness `b`
+  outside `[0, q)` and exponentiate it to the bound `q.BitLen()`; `ProveRangeAlice`
+  accepts a witness `m` in `[0, q)`; and `ProofBob`/`ProofBobWC` accept `x` in
+  `[0, q)` with its exponent padded to `q.BitLen()`, while `y` keeps its original
+  Paillier plaintext domain `[0, pk.N)` and its `pk.N.BitLen()` exponent padding
+  (unlike `x`, `m`, and `b`, `y` was not narrowed to the curve order). The
+  constant-time exponent widths that narrow from the Paillier modulus width to the
+  curve-order `q.BitLen()` are the `x`, `m`, and `b` exponents only; proof bytes for
+  in-domain witnesses are
+  unchanged. The MtA provers return errors instead of panicking on degenerate
+  `pk`/`N`/`NTilde`/`X` inputs, `paillier.HomoAdd` now validates the key modulus
+  (`paillier.ErrInvalidModulus`) before use, `common.IsUsableUnknownOrderModulus`
+  rejects moduli wider than `common.MaxUnknownOrderModulusBitLen` before the
+  primality test, `ckd.NewExtendedKeyFromString` picks its parser by curve
+  parameters (`crypto.SameCurve`) and returns an error for keys it cannot parse,
+  the keygen ring-Pedersen `beta = alpha^-1 mod pq` uses a constant-time inverse
+  when constant-time operations are enabled, and the signing constructors copy
+  `keyDerivationDelta` so later caller mutations cannot change the party's key.
+  CI adds the `Mixed-binary interop` and `Go minimum build` jobs and a
+  HEAD-prover → historical-verifier leg to `verify.sh`.
 
 ### Breaking changes
 
@@ -305,27 +343,36 @@ and the PR #9 entry below):
   security-v2 for work anchored at or after it. All parties in one ceremony use
   the same mode. Historical proofs remain re-verifiable through the legacy API.
 
-#### 4. Tagged Fiat-Shamir for Paillier ModProof / FactorProof (active on the protocol path)
+#### 4. Tagged Fiat-Shamir for Paillier ModProof / FactorProof (active in security-v2)
 - **What:** `ModProof`/`ModVerify` and `FactorProof`/`FactorVerify`
   (`crypto/paillier/mod_proof.go`, `factor_proof.go`) gain an optional session tag. When a
-  session tag **is** supplied they use tagged hashing (`common.HashToNTagged`, sized to the
-  modulus to avoid challenge bias) and are **not** wire-compatible with pre-upgrade peers.
-  With **no** session tag the challenge bytes are unchanged (backward-compatible default).
-- **Break type:** Wire/protocol **only when a session tag is supplied**.
+  session tag **is** supplied, the challenges are derived from
+  `common.SHA512_256i_TAGGED`: the `ModProof` path samples each challenge uniformly in
+  `[0, N)` by expand-then-reject (`sampleYModN` under the `fsSessionModProof` tag,
+  chaining the previously-derived challenges `y[:i]` into each hash input, which is what
+  avoids the challenge bias of a bare modular reduction), and the `FactorProof` path
+  takes a 256-bit challenge by design (`SHA512_256i_TAGGED` under the
+  `fsSessionFactorProof` tag, reduced mod `2^256`). The session-tagged path is **not**
+  wire-compatible with pre-upgrade peers. With **no** session tag the challenge bytes
+  are unchanged (backward-compatible default).
+- **Break type:** Wire/protocol **only when a session tag is supplied** (in security-v2;
+  legacy parties pass no tag and keep their historical challenges).
 - **Motivation:** Domain separation for the Paillier proofs without weakening Threshold's
   existing `N`/`NTilde` `ModProof`/`FactorProof` remediation. Threshold's stronger coverage
   was retained; no BNB no-proof escape hatches were introduced.
-- **Provenance:** `BNB #252`, `BNB #257`; the in-tree round code now passes session tags,
-  so in practice this is active on the protocol path.
+- **Provenance:** `BNB #252`, `BNB #257`; in-tree round code passes session tags in
+  security-v2 only, so the tagged path is active on the security-v2 protocol path.
 - **Migration:** Covered by the coordinated upgrade in Breaking Change 1/3.
 
 #### 5. Per-proof-system Fiat-Shamir domain tags (PR #6)
 - **What:** DLN, Schnorr, MtA, and Paillier challenges now prepend a per-proof-system domain
   tag (e.g. `dlnproof|`, `zk|`, `zkv|`, via `fsDomainTag*` / `fsSession*`) to the session
-  before tagged hashing. This further changes every proof transcript relative to Breaking
-  Change 3.
-- **Break type:** Wire/protocol — compounds Breaking Change 3; still a single coordinated
-  upgrade (a PR #6 node and a PR #2–#5 node will not cross-verify).
+  before tagged hashing. This further changes every security-v2 proof transcript relative
+  to Breaking Change 3; legacy (no-session) challenges keep the historical untagged
+  construction.
+- **Break type:** Wire/protocol (security-v2 only; legacy keeps the historical untagged
+  challenges) — compounds Breaking Change 3; still a single coordinated upgrade (a PR #6
+  node and a PR #2–#5 node will not cross-verify).
 - **Motivation:** Distinct domain separation per proof system, so a challenge from one proof
   type can never be reused in another.
 - **Provenance:** `BNB #252` / `BNB #256` domain-tag design; PR #6.
@@ -376,7 +423,7 @@ and the PR #9 entry below):
   | `crypto/schnorr/schnorr_proof.go` | `NewZKVProofWithSession` | `MulCT(c, s)`, `MulCT(c, l)` → `t = a + c·s`, `u = b + c·l` | `s`, `l` |
   | `ecdsa/signing/round_3.go` | `round3.Start` | `MulCT(k, gamma)`, `MulCT(k, w)` → `thelta`, `sigma` | `k`, `gamma`, `w` |
   | `ecdsa/signing/round_4.go` | `round4.Start` | `ModInverseCT(theta)` → `thetaInverse` | `theta` |
-  | `ecdsa/signing/round_5.go` | `round5.Start` | `MulCT(m, k)`, `MulCT(rx, sigma)` → `si` | `k`, `sigma`, `rx` (`m` public message hash; `rx` remains secret until round 10) |
+  | `ecdsa/signing/round_5.go` | `round5.Start` | `MulCT(m, k)`, `MulCT(rx, sigma)` → `si` | `k`, `sigma` (`m` is the public message hash; `rx = R.X()` is derived from public values by round 5, so its mod-N reduction is not a secret-dependent operation) |
 - **Known residual gap (read before relying on "constant-time enabled"):** in
   `crypto/mta.AliceEnd`/`AliceEndWC` (signing rounds 2-3), the Paillier exponentiation
   inside `Decrypt` uses the constant-time path, but the surrounding `math/big`
@@ -384,6 +431,17 @@ and the PR #9 entry below):
   normalized. Upstream adds a ~200ms sleep-based normalizer that this fork deliberately
   did not port (latency cost); the gap is disclosed in the COVERAGE comment in
   `common/constant_time.go`.
+  Two further gaps are outside the bigmod path even where the operation
+  itself is constant-time: the one-time per-proof MtA blind exponents
+  (`alpha`, `rho`, `rhoPrm`, `sigma`, `gamma`, `tau`, and the `beta^N` term
+  in `crypto/mta`) stay on `math/big` — they are fresh per proof, but each
+  masks a secret witness in a published response (for example S1 = e*x +
+  alpha in the Bob proof), so a timing leak of a blind can leak the witness;
+  leaving them on `math/big` is a documented pragmatic deferral, not a
+  safety claim — and EC scalar
+  multiplications on `tss.S256()` use the btcec/v2 (Decred) variable-time
+  routines. Neither is claimed covered by this PR; both are in scope for the
+  pre-mainnet side-channel review.
 - **Break type:** Performance only. Same mathematical result on every path (see the
   constant-time equivalence tests added alongside each hardened package); no wire, source,
   or runtime-input behavior changes. A microbenchmark
@@ -449,6 +507,10 @@ and the PR #9 entry below):
 - **Migration:** Use the `elliptic.Curve` interface. Callers holding keys from another
   secp256k1 implementation should compare keys by coordinates or encoded bytes, or rebuild
   them on one curve object.
+- **Also in this change:** `ckd.NewExtendedKeyFromString` picks its public-key
+  parser by curve parameters (`crypto.SameCurve` against `btcec.S256`) instead of
+  the concrete-type assertion, and returns an error for curves that cannot
+  parse the key data instead of a nil-coordinate key.
 
 #### 11. Keygen message decoders return errors (PR #28)
 - **What:** `KGRound2Message1.UnmarshalFactorProof`, `UnmarshalFactorProofTilde`, and
@@ -477,7 +539,9 @@ and the PR #9 entry below):
 > `ecdsa/resharing.NewDGRound1Message` API (see Removed). Every session / `fullBytesLen`
 > parameter was added as a trailing variadic argument, so other call sites compile
 > unchanged; those breaks are runtime/wire. Verified by diffing `go doc` exported
-> signatures between `master` and `dev`.
+> signatures between the threshold base `2e712689` and `dev`. Breaking Changes 10
+> and 12 are type-identity and toolchain breaks, not signature changes, and sit
+> outside that diff.
 
 ### Removed
 
@@ -590,7 +654,8 @@ rejecting input that an honest caller would previously have produced.
 - **Review follow-up correctness fixes (PR #6):** Schnorr verification accepts unregistered
   generic curves; `common.GetRandomInt`'s zero-inclusive range is corrected; message wire
   bytes are made deterministic; large-modulus `sampleYModN` block indexing is fixed; and
-  canonical-generator checks were added in `crypto/commitments` and `crypto/paillier`.
+  canonical-generator checks were added in `crypto/paillier`, and
+  `crypto/commitments` validates decommitment payloads for part count and nil parts.
   _Provenance: `BNB #332` + `threshold-original`, PR #6._
 - **ECDSA signing round-9 decommitment curve-point validation (PR #7):** decommitted
   `Uj`/`Tj` coordinates are now validated as canonical curve points (`crypto.NewECPoint`)
@@ -613,14 +678,21 @@ rejecting input that an honest caller would previously have produced.
 
 ### Added
 
-- `common.SHA512_256i_TAGGED` and `common.HashToNTagged` — length-delimited, domain-
-  separated tagged hashing primitives. _Provenance: `BNB #257`._
+- `common.SHA512_256i_TAGGED` and `common.HashToNTagged` — length-delimited,
+  domain-separated tagged hashing primitives. `common.HashToNTagged` is exported
+  but not yet used by the in-tree Paillier proofs, which derive their
+  session-tagged challenges via `common.SHA512_256i_TAGGED` plus
+  expand-then-reject sampling or a 256-bit modular reduction. _Provenance: `BNB #257`._
 - `tss.Parameters.SessionNonce`, `SetSessionNonce`, `SetSessionNonceBytes` — session-nonce
   API. `SetSessionNonce` rejects non-positive nonces; `SetSessionNonceBytes` requires a
   session ID of at least 16 bytes. _Provenance: `BNB fc38979`._
-- `common.IsInInterval`, `common.AppendUint64ToBytesSlice`,
-  `common.AppendBigIntToBytesSlice` (the last currently unused), and `tss.SameCurve` —
-  helpers backing the hardened range checks and session/transcript context construction.
+- `common.IsInInterval`, `common.AppendUint64ToBytesSlice` (used for per-party
+  transcript context), `common.AppendBigIntToBytesSlice`, and `tss.SameCurve` —
+  helpers backing the hardened range checks and session/transcript context
+  construction. `common.IsInInterval`, `common.AppendBigIntToBytesSlice`, and
+  `tss.SameCurve` are currently unused by library code (production range checks
+  use `common.IsInIntervalPositive`, and production curve checks use
+  `crypto.SameCurve`); the exported symbols are kept to avoid breaking consumers.
 - `schnorr.NewZKProofWithSession`, `NewZKVProofWithSession`, `VerifyWithSession` — session-
   aware Schnorr proof overloads. The original signatures retain their source
   shape and call the historical `HashToN` challenge directly; the
@@ -650,6 +722,11 @@ rejecting input that an honest caller would previously have produced.
   policy. _PR #34._
 - `paillier.ErrInvalidModulus` and `paillier.ErrMalformedKey` — sentinel errors for
   invalid Paillier keys (review fixes `873b8ad`..`fa6ef4d`).
+- `paillier.PublicKey.HomoMultWithBitLen(m, c1, bitLen)` — homomorphic multiplication
+  with an explicit public exponent bound; `HomoMult(m, c1)` is equivalent to it at the
+  modulus-width bound. In constant-time mode the exponent is padded to `bitLen`, in
+  `math/big` mode `bitLen` only gates validation; out-of-domain messages return
+  `paillier.ErrMessageTooLong`.
 
 ### Notes
 

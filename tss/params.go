@@ -32,8 +32,8 @@ type (
 		safePrimeGenTimeout time.Duration
 		// sessionNonce provides per-session SSID uniqueness for security-v2
 		// GG20 proof binding. Security-v2 keygen and signing require callers
-		// to coordinate a shared positive nonce before Start; legacy mode must
-		// leave it unset.
+		// to coordinate a shared positive nonce before constructing the local
+		// party; legacy mode must leave it unset.
 		sessionNonce *big.Int
 		// legacyHistoricalBobCompat widens only the legacy-mode Bob/BobWC T1
 		// verifier bound so pre-upgrade peer proofs (y < N witness range)
@@ -194,7 +194,9 @@ func (params *Parameters) SetProtocolMode(mode ProtocolMode) {
 }
 
 // FreezeProtocolMode validates and freezes the transcript configuration.
-// ECDSA local-party constructors call it before retaining params.
+// ECDSA local-party constructors call it before retaining params. It panics
+// if no protocol mode was selected, or if a legacy-mode party has a session
+// nonce set. A second call returns without revalidating.
 func (params *Parameters) FreezeProtocolMode() {
 	if params.protocolModeFrozen {
 		return
@@ -224,7 +226,7 @@ func (params *Parameters) SessionNonce() *big.Int {
 // protocol run must agree on. It must be called before constructing the local
 // party. Legacy parties must not set a nonce.
 //
-// Keygen and signing fail closed if no nonce is set. The previous zero
+// Security-v2 keygen and signing fail closed if no nonce is set. The previous zero
 // (keygen) and SHA512_256(messageBytes) (signing) fallbacks caused two
 // ceremonies with otherwise-identical inputs to derive the same SSID, breaking
 // the session-binding property that the proofs rely on. The caller must supply
