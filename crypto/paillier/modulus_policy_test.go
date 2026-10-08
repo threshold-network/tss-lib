@@ -7,6 +7,7 @@
 package paillier
 
 import (
+	"crypto/rand"
 	"fmt"
 	"math/big"
 	"strings"
@@ -206,6 +207,131 @@ func TestProofVerifyModulusPolicySwaps(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, tc.accepted, res,
 				"swapped modulus %s: verify result mismatch", tc.name)
+		})
+	}
+}
+
+// blumKeyBelowFloor returns a Paillier key with a 1024-bit modulus N = p*q,
+// where p and q are 512-bit primes congruent to 3 mod 4. Honest Proof and
+// ModProof outputs for this key satisfy every verification equation, so
+// only the 2048-bit width floor can reject them.
+func blumKeyBelowFloor(t *testing.T) *PrivateKey {
+	t.Helper()
+	blumPrime := func() *big.Int {
+		for {
+			p, err := rand.Prime(rand.Reader, 512)
+			require.NoError(t, err)
+			if p.Bit(1) == 1 { // p = 3 mod 4
+				return p
+			}
+		}
+	}
+	p, q := blumPrime(), blumPrime()
+	for p.Cmp(q) == 0 {
+		q = blumPrime()
+	}
+	N := new(big.Int).Mul(p, q)
+	pMinus1, qMinus1 := new(big.Int).Sub(p, one), new(big.Int).Sub(q, one)
+	phiN := new(big.Int).Mul(pMinus1, qMinus1)
+	gcd := new(big.Int).GCD(nil, nil, pMinus1, qMinus1)
+	lambdaN := new(big.Int).Div(phiN, gcd)
+	require.Less(t, N.BitLen(), common.MinUnknownOrderModulusBitLen)
+	return &PrivateKey{PublicKey: PublicKey{N: N}, LambdaN: lambdaN, PhiN: phiN}
+}
+
+// TestProofVerifyCallsModulusPolicy pins that Proof.Verify calls the
+// modulus policy. The proof is an honest proof for a 1024-bit key, so its
+// equations hold; only the width floor rejects it.
+func TestProofVerifyCallsModulusPolicy(t *testing.T) {
+	key := blumKeyBelowFloor(t)
+	k := big.NewInt(1)
+	ui := common.GetRandomPositiveInt(tss.EC().Params().N)
+	ecdsaPub := crypto.ScalarBaseMult(tss.EC(), ui)
+
+	proof := key.Proof(k, ecdsaPub)
+	res, err := proof.Verify(key.N, k, ecdsaPub)
+	assert.NoError(t, err)
+	assert.False(t, res, "a modulus below the width floor must be rejected")
+}
+
+// mersennePrime2203 is 2^2203 - 1, a known Mersenne prime: odd and inside
+// the width bounds, so only the composite check rejects it.
+func mersennePrime2203() *big.Int {
+	return new(big.Int).Sub(new(big.Int).Lsh(one, 2203), one)
+}
+
+// TestModVerifyModulusPolicySwaps pins the shared modulus policy on
+// ModVerify. Policy rejections must carry the "invalid modulus" error; a
+// width-valid modulus must get past the policy and fail a later check.
+func TestModVerifyModulusPolicySwaps(t *testing.T) {
+	modSetUp(t)
+	fixtureProof := privateKey.ModProof()
+	smallKey := blumKeyBelowFloor(t)
+	require.True(t, mersennePrime2203().ProbablyPrime(20))
+
+	const policyErr = "invalid modulus"
+	cases := []struct {
+		name      string
+		proof     *ModProof
+		N         *big.Int
+		accepted  bool
+		errSubstr string
+	}{
+		{name: "fixture_modulus_accepted", proof: fixtureProof, N: publicKey.N, accepted: true},
+		{
+			// Honest proof: every equation holds, only the floor rejects.
+			name:      "honest_1024bit_proof_rejected_by_floor",
+			proof:     smallKey.ModProof(),
+			N:         smallKey.N,
+			errSubstr: policyErr,
+		},
+		{
+			name:      "2047bit_odd_composite_rejected",
+			proof:     fixtureProof,
+			N:         oddCompositeAtBits(common.MinUnknownOrderModulusBitLen - 1),
+			errSubstr: policyErr,
+		},
+		{
+			name:  "2048bit_odd_composite_width_valid",
+			proof: fixtureProof,
+			N:     oddCompositeAtBits(common.MinUnknownOrderModulusBitLen),
+		},
+		{
+			name:      "65537bit_odd_composite_rejected",
+			proof:     fixtureProof,
+			N:         oddCompositeAtBits(common.MaxUnknownOrderModulusBitLen + 1),
+			errSubstr: policyErr,
+		},
+		{
+			name:      "even_rejected",
+			proof:     fixtureProof,
+			N:         evenAtBits(common.MinUnknownOrderModulusBitLen),
+			errSubstr: policyErr,
+		},
+		{
+			name:      "prime_rejected",
+			proof:     fixtureProof,
+			N:         mersennePrime2203(),
+			errSubstr: policyErr,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := tc.proof.ModVerify(tc.N)
+			if tc.accepted {
+				assert.NoError(t, err)
+				assert.True(t, res)
+				return
+			}
+			require.Error(t, err)
+			assert.False(t, res)
+			if tc.errSubstr != "" {
+				assert.Contains(t, err.Error(), tc.errSubstr)
+				return
+			}
+			assert.NotContains(t, err.Error(), policyErr,
+				"a width-valid composite must get past the modulus policy")
 		})
 	}
 }

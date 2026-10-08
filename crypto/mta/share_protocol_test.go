@@ -196,11 +196,11 @@ func TestShareProtocolWC(t *testing.T) {
 
 	badS2 := cloneProofBobWC(pfB)
 	badS2.S2 = new(big.Int).Set(tooLargeBlind)
-	assert.False(t, badS2.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "overwide S2 must fail before exponentiation")
+	assert.False(t, badS2.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "S2 above the 2*q^3*NTilde bound must be rejected")
 
 	badT2 := cloneProofBobWC(pfB)
 	badT2.T2 = new(big.Int).Set(tooLargeBlind)
-	assert.False(t, badT2.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "overwide T2 must fail before exponentiation")
+	assert.False(t, badT2.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "T2 above the 2*q^3*NTilde bound must be rejected")
 
 	badV := cloneProofBobWC(pfB)
 	badV.V = big.NewInt(0)

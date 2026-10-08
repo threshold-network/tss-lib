@@ -97,9 +97,10 @@ func verifyDeliveredSignatureData(t *testing.T, delivered []*common.SignatureDat
 	internal := make([]signatureDataSnapshot, len(parties))
 	for i, P := range parties {
 		internal[i] = snapshotSignatureData(P.data)
+		require.NotEmpty(t, internal[i].signature, "party %d must hold its signature data", i)
 	}
 
-	for i, sd := range delivered {
+	for _, sd := range delivered {
 		// R and S must each be exactly fullBytesLen bytes of equal width
 		assert.Equal(t, fullBytesLen, len(sd.R), "R must be fullBytesLen bytes")
 		assert.Equal(t, fullBytesLen, len(sd.S), "S must be fullBytesLen bytes")
@@ -130,18 +131,22 @@ func verifyDeliveredSignatureData(t *testing.T, delivered []*common.SignatureDat
 		require.NoError(t, recErr, "pubkey recovery must succeed")
 		assert.True(t, recovered.X().Cmp(pkX) == 0, "recovered X must match")
 		assert.True(t, recovered.Y().Cmp(pkY) == 0, "recovered Y must match")
-		// The delivered value must be a deep copy: mutating every delivered
-		// field must leave every field of the party's internal data
-		// unchanged.
-		sd.Signature[0] ^= 0xff
-		sd.SignatureRecovery[0] ^= 0xff
-		sd.R[0] ^= 0xff
-		sd.S[0] ^= 0xff
-		if len(sd.M) > 0 {
-			sd.M[0] ^= 0xff
+	}
+
+	// The delivered values must be deep copies. Mutate every field of every
+	// delivered value first, then compare every party's internal data with
+	// its snapshot, so a delivered value that aliases any party's data is
+	// caught whatever its position in delivered.
+	for _, sd := range delivered {
+		for _, b := range [][]byte{sd.Signature, sd.SignatureRecovery, sd.R, sd.S, sd.M} {
+			if len(b) > 0 {
+				b[0] ^= 0xff
+			}
 		}
-		assert.Equal(t, internal[i], snapshotSignatureData(parties[i].data),
-			"mutating the delivered signature must not affect the party's internal data")
+	}
+	for i, P := range parties {
+		assert.Equal(t, internal[i], snapshotSignatureData(P.data),
+			"mutating the delivered signatures must not affect party %d's internal data", i)
 	}
 }
 
@@ -210,8 +215,7 @@ func TestRound5AndRound7StoreBeforeEmit(t *testing.T) {
 	// Drive the ceremony by routing each party's out-channel messages to
 	// its peers via fresh goroutines. Stop once both parties have emitted
 	// their round-5 and round-7 messages; a 2-party (threshold-1) subset
-	// cannot complete the ceremony, so a round-9 error is expected and
-	// treated as a normal stop signal.
+	// cannot complete the ceremony and fails later, in round 9.
 	updater := test.SharedPartyUpdater
 	route := func(sender int, m tss.Message) {
 		dest := m.GetTo()
@@ -221,16 +225,37 @@ func TestRound5AndRound7StoreBeforeEmit(t *testing.T) {
 			go updater(parties[dest[0].Index], m, errCh)
 		}
 	}
+	// The parties keep running after the checks below finish. Keep draining
+	// their channels for a while so blocked sends can complete and no
+	// party or routing goroutine is left blocked forever.
+	t.Cleanup(func() {
+		go func() {
+			idle := time.NewTimer(30 * time.Second)
+			defer idle.Stop()
+			for {
+				select {
+				case <-outChs[0]:
+				case <-outChs[1]:
+				case <-errCh:
+				case <-idle.C:
+					return
+				}
+				idle.Reset(30 * time.Second)
+			}
+		}()
+	})
+
 	deadline := time.After(2 * time.Minute)
 	for {
 		if sawR5[0] && sawR5[1] && sawR7[0] && sawR7[1] {
 			break
 		}
 		select {
-		case <-errCh:
-			// Round-9 "U doesn't equal T" is expected with a 2-party
-			// subset; the round-5/7 checks are already complete.
-			break
+		case err := <-errCh:
+			// A 2-party subset fails in round 9, which needs both round-7
+			// messages; the loop stops as soon as both are seen, so any
+			// error here came too early.
+			t.Fatalf("party error before both round-5 and round-7 emissions were observed: %v", err)
 		case <-deadline:
 			t.Fatalf("did not observe round-5 and round-7 emissions within timeout")
 		case m := <-outChs[0]:
@@ -243,24 +268,6 @@ func TestRound5AndRound7StoreBeforeEmit(t *testing.T) {
 	}
 	require.True(t, sawR5[0] && sawR5[1], "both parties must have emitted a round-5 message")
 	require.True(t, sawR7[0] && sawR7[1], "both parties must have emitted a round-7 message")
-}
-
-// TestE2EConcurrentConstantTimeDisabled verifies that constant-time
-// operations are an optional hardening rather than a correctness
-// requirement: with the constant-time ops disabled (the variable-time
-// math/big path), a full security-v2 signing ceremony still completes and
-// every delivered signature verifies.
-func TestE2EConcurrentConstantTimeDisabled(t *testing.T) {
-	prev := common.IsConstantTimeEnabled()
-	common.DisableConstantTimeOps()
-	t.Cleanup(func() {
-		if prev {
-			common.EnableConstantTimeOps()
-		} else {
-			common.DisableConstantTimeOps()
-		}
-	})
-	testE2EConcurrent(t, tss.ProtocolModeSecurityV2, big.NewInt(42), 32)
 }
 
 // TestSigningSessionFailsClosedMixedMode verifies that a ceremony mixing
@@ -347,7 +354,7 @@ func TestSigningSessionFailsClosedMixedMode(t *testing.T) {
 }
 
 // TestConstructorPanicsWithNoMode verifies that NewLocalParty panics when
-// no protocol mode is set on params before construction (M075 signing part).
+// no protocol mode is set on params before construction.
 func TestConstructorPanicsWithNoMode(t *testing.T) {
 	keys, signPIDs, err := keygen.LoadKeygenTestFixtures(2)
 	require.NoError(t, err)
@@ -365,7 +372,7 @@ func TestConstructorPanicsWithNoMode(t *testing.T) {
 }
 
 // TestConstructorPanicsWithLegacyPlusNonce verifies that NewLocalParty
-// panics when legacy mode is combined with a session nonce (M075 signing part).
+// panics when legacy mode is combined with a session nonce.
 func TestConstructorPanicsWithLegacyPlusNonce(t *testing.T) {
 	keys, signPIDs, err := keygen.LoadKeygenTestFixtures(2)
 	require.NoError(t, err)
@@ -383,8 +390,7 @@ func TestConstructorPanicsWithLegacyPlusNonce(t *testing.T) {
 }
 
 // TestConstructorSettersPanicAfterConstruction verifies that the setter
-// methods panic when called after the party has been constructed (M075
-// signing part).
+// methods panic when called after the party has been constructed.
 func TestConstructorSettersPanicAfterConstruction(t *testing.T) {
 	keys, signPIDs, err := keygen.LoadKeygenTestFixtures(2)
 	require.NoError(t, err)
@@ -415,4 +421,22 @@ func TestConstructorSettersPanicAfterConstruction(t *testing.T) {
 			P.params.SetLegacyHistoricalBobCompatibility(true)
 		},
 		"SetLegacyHistoricalBobCompatibility must panic after construction")
+}
+
+// TestNewLocalPartyWithKDDCopiesDelta pins that the constructor copies the
+// key derivation delta: a caller that later mutates its *big.Int must not
+// change the party's signing context.
+func TestNewLocalPartyWithKDDCopiesDelta(t *testing.T) {
+	keys, signPIDs, err := keygen.LoadKeygenTestFixtures(2)
+	require.NoError(t, err)
+
+	params := tss.NewParameters(tss.S256(), tss.NewPeerContext(signPIDs), signPIDs[0], 2, 1)
+	params.SetProtocolMode(tss.ProtocolModeLegacy)
+	delta := big.NewInt(12345)
+	P := NewLocalPartyWithKDD(big.NewInt(1), params, keys[0], delta, nil, nil, 32).(*LocalParty)
+
+	delta.SetInt64(999)
+	require.NotNil(t, P.temp.keyDerivationDelta)
+	assert.Zero(t, P.temp.keyDerivationDelta.Cmp(big.NewInt(12345)),
+		"mutating the caller's delta must not change the party's copy")
 }

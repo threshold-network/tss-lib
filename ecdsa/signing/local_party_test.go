@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/ipfs/go-log"
@@ -88,6 +89,10 @@ func newStoreMessageTestParty(t *testing.T) (*LocalParty, tss.SortedPartyIDs) {
 	return lp, pIDs
 }
 
+// TestE2EConcurrent runs a full signing ceremony in each protocol mode with
+// constant-time operations on and off. Constant-time operations are a
+// hardening, not a correctness requirement, so every combination must
+// complete and deliver a valid signature.
 func TestE2EConcurrent(t *testing.T) {
 	msgData, err := hex.DecodeString("00f163ee51bcaeff9cdff5e0e3c1a646abd19885fffbab0b3b4236e0cf95c9f5")
 	if err != nil {
@@ -101,10 +106,33 @@ func TestE2EConcurrent(t *testing.T) {
 		{"legacy", tss.ProtocolModeLegacy},
 		{"security-v2", tss.ProtocolModeSecurityV2},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			testE2EConcurrent(t, testCase.mode, msgInt, len(msgData))
-		})
+		for _, ct := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/CT=%t", testCase.name, ct), func(t *testing.T) {
+				setSigningCTMode(t, ct)
+				testE2EConcurrent(t, testCase.mode, msgInt, len(msgData))
+			})
+		}
 	}
+}
+
+// setSigningCTMode sets the process-wide constant-time mode for one test and
+// restores the previous mode when the test ends.
+func setSigningCTMode(t *testing.T, enabled bool) {
+	t.Helper()
+	previous := common.IsConstantTimeEnabled()
+	t.Cleanup(func() {
+		if previous {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+	})
+	if enabled {
+		common.EnableConstantTimeOps()
+	} else {
+		common.DisableConstantTimeOps()
+	}
+	assert.Equal(t, enabled, common.IsConstantTimeEnabled())
 }
 
 // testE2EConcurrent runs a signing ceremony for the given message and encoding width.
@@ -148,10 +176,14 @@ func testE2EConcurrent(t *testing.T, mode tss.ProtocolMode, msg *big.Int, fullBy
 
 	delivered := make([]*common.SignatureData, 0, len(signPIDs))
 	var ended int32
+	deadline := time.After(10 * time.Minute)
 signing:
 	for {
 		fmt.Printf("ACTIVE GOROUTINES: %d\n", runtime.NumGoroutine())
 		select {
+		case <-deadline:
+			t.Fatalf("signing ceremony did not finish within the deadline; %d of %d parties ended", atomic.LoadInt32(&ended), len(signPIDs))
+
 		case err := <-errCh:
 			common.Logger.Errorf("Error: %s", err)
 			assert.FailNow(t, err.Error())

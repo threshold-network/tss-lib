@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/bnb-chain/tss-lib/common"
 )
 
@@ -34,7 +36,7 @@ func TestLegacyChallengeMatchesHistoricalTranscript(t *testing.T) {
 }
 
 func TestDLNProofRejectsEmptySessionTag(t *testing.T) {
-	assertPanics(t, func() {
+	assert.PanicsWithValue(t, "dlnproof: session tag must be non-empty", func() {
 		_ = NewDLNProof(nil, nil, nil, nil, nil, nil, []byte{})
 	})
 }
@@ -59,26 +61,6 @@ func TestDLNProofVerifyRejectsNilInputs(t *testing.T) {
 	}
 }
 
-func assertNotPanics(t *testing.T, f func()) {
-	t.Helper()
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("unexpected panic: %v", r)
-		}
-	}()
-	f()
-}
-
-func assertPanics(t *testing.T, f func()) {
-	t.Helper()
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic")
-		}
-	}()
-	f()
-}
-
 // dlnVerifyFixture holds a 2048-bit ring-Pedersen instance and a valid DLN proof
 // of the witness alpha, built once per test binary so the expensive 1024-bit
 // safe-prime generation runs at most once.
@@ -86,7 +68,9 @@ type dlnVerifyFixture struct {
 	proof  *Proof
 	h1, h2 *big.Int
 	N      *big.Int
-	factor *big.Int // a prime divisor of N (not in its multiplicative group)
+	alpha  *big.Int // the witness: h2 = h1^alpha mod N
+	p, q   *big.Int // Germain primes with N = (2p+1)(2q+1); ord(h1) divides p*q
+	factor *big.Int // the safe prime 2p+1, a divisor of N and so not a unit mod N
 }
 
 var (
@@ -133,7 +117,16 @@ func buildDLNVerifyFixture() (*dlnVerifyFixture, error) {
 	if N.BitLen() != common.MinUnknownOrderModulusBitLen {
 		return nil, errors.New("fixture modulus is not the minimum width")
 	}
-	return &dlnVerifyFixture{proof: proof, h1: h1, h2: h2, N: N, factor: sgps[0].Prime()}, nil
+	return &dlnVerifyFixture{
+		proof:  proof,
+		h1:     h1,
+		h2:     h2,
+		N:      N,
+		alpha:  alpha,
+		p:      sgps[0].Prime(),
+		q:      sgps[1].Prime(),
+		factor: np,
+	}, nil
 }
 
 // TestDLNProofVerifyValidFixture is the positive control for the reject
@@ -165,7 +158,7 @@ func TestDLNProofVerifyRejectsOverwideT(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			proof := *fx.proof
 			proof.T[0] = tc.T
-			assertNotPanics(t, func() {
+			assert.NotPanics(t, func() {
 				if proof.Verify(fx.h1, fx.h2, fx.N) {
 					t.Fatalf("Verify must reject T[0] = %v outside (1, N)", tc.T)
 				}
@@ -174,9 +167,30 @@ func TestDLNProofVerifyRejectsOverwideT(t *testing.T) {
 	}
 }
 
+// TestDLNProofVerifyRejectsEquationValidOverwideT isolates the T range
+// check. h1 is a square mod N, so its order divides p*q, and T[0] + 5*p*q
+// gives the same h1^T[0]. N = 4pq + 2p + 2q + 1 < 5pq, so the shifted T[0]
+// is at least N. T is not part of the challenge, so every verification
+// equation still holds and only the range check can reject the proof.
+func TestDLNProofVerifyRejectsEquationValidOverwideT(t *testing.T) {
+	fx := newDLNVerifyFixture(t)
+	modN := common.ModInt(fx.N)
+
+	shift := new(big.Int).Mul(fx.p, fx.q)
+	shift.Mul(shift, big.NewInt(5))
+	proof := *fx.proof
+	proof.T[0] = new(big.Int).Add(fx.proof.T[0], shift)
+
+	assert.GreaterOrEqual(t, proof.T[0].Cmp(fx.N), 0, "shifted T[0] must be at least N")
+	assert.Zero(t, modN.Exp(fx.h1, proof.T[0]).Cmp(modN.Exp(fx.h1, fx.proof.T[0])),
+		"the shift must keep h1^T[0], so the equation still holds")
+	assert.False(t, proof.Verify(fx.h1, fx.h2, fx.N),
+		"Verify must reject T[0] >= N even when the equation holds")
+}
+
 // TestDLNProofVerifyRejectsOverwideAlpha rejects Alpha[0] values that are
-// not canonical generators of the modulus. "non-unit" is a prime factor of
-// N, which is outside the multiplicative group mod N.
+// not canonical generators of the modulus. "non-unit" is the safe prime
+// 2p+1, a divisor of N, so it is outside the multiplicative group mod N.
 func TestDLNProofVerifyRejectsOverwideAlpha(t *testing.T) {
 	fx := newDLNVerifyFixture(t)
 
@@ -192,7 +206,7 @@ func TestDLNProofVerifyRejectsOverwideAlpha(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			proof := *fx.proof
 			proof.Alpha[0] = tc.Alpha
-			assertNotPanics(t, func() {
+			assert.NotPanics(t, func() {
 				if proof.Verify(fx.h1, fx.h2, fx.N) {
 					t.Fatalf("Verify must reject Alpha[0] = %v outside the canonical generators", tc.Alpha)
 				}
@@ -201,21 +215,62 @@ func TestDLNProofVerifyRejectsOverwideAlpha(t *testing.T) {
 	}
 }
 
+// TestDLNProofVerifyRejectsEquationValidNonCanonicalAlpha isolates the
+// Alpha canonical-generator check. The proof is built by the honest
+// prover steps, except that N is added to Alpha[0] before the challenge is
+// computed. The verifier reduces Alpha[0] mod N in the equation, so the
+// equation still holds and the challenge matches. Only the
+// canonical-generator check on Alpha can reject this proof.
+func TestDLNProofVerifyRejectsEquationValidNonCanonicalAlpha(t *testing.T) {
+	fx := newDLNVerifyFixture(t)
+
+	// Control: the same steps without the offset give a proof that
+	// verifies, so the reject below comes from the offset alone.
+	control := proveDLNWithAlpha0Offset(fx, big.NewInt(0))
+	assert.True(t, control.Verify(fx.h1, fx.h2, fx.N), "control proof must verify")
+
+	proof := proveDLNWithAlpha0Offset(fx, fx.N)
+	assert.False(t, common.IsCanonicalGenerator(fx.N, proof.Alpha[0]), "Alpha[0] must not be canonical")
+	assert.False(t, proof.Verify(fx.h1, fx.h2, fx.N),
+		"Verify must reject a non-canonical Alpha[0] even when the equation holds")
+}
+
+// proveDLNWithAlpha0Offset runs the math/big prover steps of NewDLNProof on
+// the fixture witness, but adds offset to Alpha[0] before the challenge is
+// computed.
+func proveDLNWithAlpha0Offset(fx *dlnVerifyFixture, offset *big.Int) *Proof {
+	pq := new(big.Int).Mul(fx.p, fx.q)
+	modN, modPQ := common.ModInt(fx.N), common.ModInt(pq)
+	var a, alpha, t [Iterations]*big.Int
+	for i := range alpha {
+		a[i] = common.GetRandomPositiveInt(pq)
+		alpha[i] = modN.Exp(fx.h1, a[i])
+	}
+	alpha[0] = new(big.Int).Add(alpha[0], offset)
+	c := proofChallenge(nil, append([]*big.Int{fx.h1, fx.h2, fx.N}, alpha[:]...)...)
+	for i := range t {
+		t[i] = modPQ.Add(a[i], modPQ.Mul(big.NewInt(int64(c.Bit(i))), fx.alpha))
+	}
+	return &Proof{Alpha: alpha, T: t}
+}
+
 // TestDLNProofVerifyRejectsInvalidGenerators rejects degenerate generator
 // pairs (h1 == h2) and the unit h1 = 1, on a valid 2048-bit domain.
 func TestDLNProofVerifyRejectsInvalidGenerators(t *testing.T) {
 	fx := newDLNVerifyFixture(t)
 
+	// h2 = h1^1, so the honest prover with witness x = 1 gives a proof
+	// whose equations all hold for the pair (h1, h1). Only the h1 == h2
+	// check can reject it.
 	t.Run("h1 equals h2", func(t *testing.T) {
-		assertNotPanics(t, func() {
-			if fx.proof.Verify(fx.h2, fx.h2, fx.N) {
-				t.Fatal("Verify must reject h1 == h2")
-			}
+		proof := NewDLNProof(fx.h1, fx.h1, big.NewInt(1), fx.p, fx.q, fx.N)
+		assert.NotPanics(t, func() {
+			assert.False(t, proof.Verify(fx.h1, fx.h1, fx.N), "Verify must reject h1 == h2")
 		})
 	})
 
 	t.Run("h1 is one", func(t *testing.T) {
-		assertNotPanics(t, func() {
+		assert.NotPanics(t, func() {
 			if fx.proof.Verify(big.NewInt(1), fx.h2, fx.N) {
 				t.Fatal("Verify must reject h1 = 1, which is not a canonical generator")
 			}
@@ -245,7 +300,7 @@ func TestDLNProofVerifyModulusPolicy(t *testing.T) {
 		{"even rejects by parity", evenAtFloor, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assertNotPanics(t, func() {
+			assert.NotPanics(t, func() {
 				if got := fx.proof.Verify(fx.h1, fx.h2, tc.N); got != tc.want {
 					t.Fatalf("Verify with %d-bit modulus = %v, want %v", tc.N.BitLen(), got, tc.want)
 				}

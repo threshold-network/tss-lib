@@ -180,7 +180,7 @@ func TestRangeProofAliceRejectsMalformedInputs(t *testing.T) {
 	tooLargeS2.Add(tooLargeS2, big.NewInt(1))
 	badS2 := *proof
 	badS2.S2 = tooLargeS2
-	assert.False(t, badS2.Verify(tss.EC(), pk, NTildei, h1i, h2i, c), "overwide S2 must fail before exponentiation")
+	assert.False(t, badS2.Verify(tss.EC(), pk, NTildei, h1i, h2i, c), "S2 above the 2*q^3*NTilde bound must be rejected")
 
 	badZ := *proof
 	badZ.Z = big.NewInt(1)

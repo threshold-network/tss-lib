@@ -22,15 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// notPanics runs fn and fails the test on panic. The expected error of a
-// guard case already proves the bad value was rejected; a panic instead of
-// the error proves the guard was bypassed (the pre-guard CT-context
-// construction panicked on the out-of-domain input).
-func notPanics(t *testing.T, fn func()) {
-	t.Helper()
-	assert.NotPanics(t, func() { fn() })
-}
-
 // modeName labels an operation-mode flag in subtest names.
 func modeName(ct bool) string {
 	if ct {
@@ -261,7 +252,10 @@ func TestRangeGuardsRejectOutOfDomainInputs(t *testing.T) {
 		setPaillierCTTestMode(t, ct)
 		for _, tc := range cases {
 			t.Run(tc.name+"/"+modeName(ct), func(t *testing.T) {
-				notPanics(t, func() {
+				// A panic instead of the expected error means the guard
+				// was bypassed and the constant-time code saw the
+				// out-of-domain input.
+				assert.NotPanics(t, func() {
 					err := tc.run()
 					if tc.want == nil {
 						require.NoError(t, err, "ct=%v", ct)

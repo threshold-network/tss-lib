@@ -1,6 +1,7 @@
 package paillier
 
 import (
+	"crypto/rand"
 	"fmt"
 	"math/big"
 	"strings"
@@ -164,10 +165,14 @@ func TestModProofVerify_ForgedProof(t *testing.T) {
 	assert.False(t, res, "proof verify result must be false")
 }
 
+// TestModProofVerify_AttackMod checks a forged proof for a modulus with
+// many prime factors: N = P * Q_1 * ... * Q_7. The forged w is 1 mod P and
+// 0 mod every Q_i, so it shares a factor with N. P is a large prime chosen
+// so that N is at least 2048 bits; this way the width floor does not reject
+// N first and the proof reaches the Jacobi check on w.
 func TestModProofVerify_AttackMod(t *testing.T) {
 	session := []byte("mod-proof-attack-session")
 
-	P := mustSetString("11956161572522965463")
 	Q := []*big.Int{
 		mustSetString("2495927741"),
 		mustSetString("3726287311"),
@@ -177,18 +182,33 @@ func TestModProofVerify_AttackMod(t *testing.T) {
 		mustSetString("2316427879"),
 		mustSetString("3704490329"),
 	}
-
-	N := new(big.Int).Set(P)
+	bigQ := new(big.Int).Set(one)
 	for _, q := range Q {
-		N.Mul(N, q)
+		bigQ.Mul(bigQ, q)
 	}
+	// P = 7 mod 8, like the original attack prime, so (P+1)/8 is an integer.
+	pBits := common.MinUnknownOrderModulusBitLen - bigQ.BitLen() + 1
+	var P *big.Int
+	for {
+		var err error
+		P, err = rand.Prime(rand.Reader, pBits)
+		require.NoError(t, err)
+		if new(big.Int).And(P, big.NewInt(7)).Int64() == 7 {
+			break
+		}
+	}
+	N := new(big.Int).Mul(P, bigQ)
+	require.GreaterOrEqual(t, N.BitLen(), common.MinUnknownOrderModulusBitLen)
+	require.True(t, common.IsUsableUnknownOrderModulus(N, common.MinUnknownOrderModulusBitLen),
+		"the attack modulus must pass the modulus policy")
 
 	proof, err := newHackedModProof(session, N, P, Q)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	ok, err := proof.ModVerify(N, session)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.False(t, ok, "false proof should not verify")
+	assert.Contains(t, err.Error(), "jacobi", "the forged w must be rejected by the Jacobi check")
 }
 
 func newHackedModProof(session []byte, N, P *big.Int, Q []*big.Int) (*ModProof, error) {

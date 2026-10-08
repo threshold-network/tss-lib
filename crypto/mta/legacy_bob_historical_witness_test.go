@@ -18,30 +18,24 @@ import (
 	"github.com/bnb-chain/tss-lib/tss"
 )
 
-// historicalBobProofForWitnessY builds a session-less legacy Bob/BobWC proof
-// from the exact historical (2e712689) prover equations via
-// fixedHistoricalBobProof, with the MtA blinding witness y and the c2
-// ciphertext parameterized so the honest T1 = e*y + gamma range can be
-// exercised at the documented acceptance boundary. It returns the proof and
-// the c2 ciphertext used in its verification.
+// historicalBobProofForWitnessY builds a Bob/BobWC proof from the exact
+// historical (2e712689) prover equations via fixedHistoricalBobProof, with
+// the MtA blinding witness y parameterized so the honest T1 = e*y + gamma
+// range can be exercised at the documented acceptance boundary. gamma and
+// session are passed through to fixedHistoricalBobProof. It returns the
+// proof and the c2 ciphertext used in its verification.
 func historicalBobProofForWitnessY(
 	t *testing.T,
 	ec elliptic.Curve,
 	pk *paillier.PublicKey,
 	nTilde, h1, h2, c1 *big.Int,
-	x, y, r *big.Int,
+	x, y, r, gamma *big.Int,
 	X *crypto.ECPoint,
+	session []byte,
 ) (*ProofBobWC, *big.Int) {
 	t.Helper()
-	modNSquared := common.ModInt(pk.NSquare())
-	c2 := modNSquared.Mul(
-		modNSquared.Exp(c1, x),
-		modNSquared.Mul(
-			modNSquared.Exp(pk.Gamma(), y),
-			modNSquared.Exp(r, pk.N),
-		),
-	)
-	return fixedHistoricalBobProof(ec, pk, nTilde, h1, h2, c1, c2, x, y, r, X), c2
+	c2 := c2ForWitness(t, ec, pk, c1, x, y, r)
+	return fixedHistoricalBobProof(ec, pk, nTilde, h1, h2, c1, c2, x, y, r, gamma, X, session), c2
 }
 
 // deterministicHistoricalWitnessY returns a deterministic witness y in
@@ -107,8 +101,8 @@ func TestLegacyBobWidenedVerifierAcceptsHistoricalWitnessRange(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			bobProof, c2 := historicalBobProofForWitnessY(t, ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, x, tc.y, r, nil)
-			wcProof, _ := historicalBobProofForWitnessY(t, ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, x, tc.y, r, X)
+			bobProof, c2 := historicalBobProofForWitnessY(t, ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, x, tc.y, r, nil, nil, nil)
+			wcProof, _ := historicalBobProofForWitnessY(t, ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, x, tc.y, r, nil, X, nil)
 			// An honest historical proof must never exceed the widened
 			// historical bound, in either check mode.
 			if bobProof.T1.Cmp(widenedMaxT1) >= 0 || wcProof.T1.Cmp(widenedMaxT1) >= 0 {
@@ -162,7 +156,7 @@ func TestLegacyHistoricalWitnessRangeRejectsWiderT1(t *testing.T) {
 	r := firstSmallUnit(pk.N, 2)
 	c1 := fixedPaillierEncryption(pk, big.NewInt(5), firstSmallUnit(pk.N, 3))
 	y := new(big.Int).Sub(pk.N, big.NewInt(1))
-	bobProof, c2 := historicalBobProofForWitnessY(t, ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, x, y, r, nil)
+	bobProof, c2 := historicalBobProofForWitnessY(t, ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, x, y, r, nil, nil, nil)
 	// The shared verify core owns the default tight legacy bound: N + q^6.
 	q6 := new(big.Int).Exp(ec.Params().N, big.NewInt(6), nil)
 	tightT1Max := new(big.Int).Add(pk.N, q6)
@@ -191,7 +185,7 @@ func TestLegacyHistoricalWitnessRangeRejectsWiderT1(t *testing.T) {
 	}
 
 	X := crypto.ScalarBaseMult(ec, x)
-	wcProof, _ := historicalBobProofForWitnessY(t, ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, x, y, r, X)
+	wcProof, _ := historicalBobProofForWitnessY(t, ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, x, y, r, nil, X, nil)
 	if wcProof.T1.Cmp(tightT1Max) < 0 {
 		t.Fatal("y = N - 1 WC witness did not place T1 above the tight N + q^6 bound; the y = N-T wrap family is not exercised")
 	}

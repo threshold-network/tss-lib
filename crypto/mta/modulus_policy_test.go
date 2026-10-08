@@ -7,7 +7,6 @@
 package mta
 
 import (
-	"fmt"
 	"math/big"
 	"testing"
 
@@ -42,32 +41,15 @@ import (
 // not the canonical-generator width guard), a 65537-bit odd composite,
 // and an even 2048-bit value.
 //
-// The swapped-modulus .Verify rejections fall out of the preamble, so the
-// table keeps rejecting only while the gate stays in place: the direct
-// validateVerifierParams assertions below pin the shared gate on these same
-// values. With pk.N, the generators, and the ciphertexts all held at their
-// fixture values, the 2047-bit NTilde row is rejected only by the
-// IsUsableUnknownOrderModulus width floor, so deleting that call from
-// validateVerifierParams flips that row to accepted and fails this test.
+// The positive control and the swapped rows run in the default timing mode
+// only: the shared preamble does not depend on it.
+//
+// The swapped rows can also be rejected by later checks or equation
+// failures, so this table alone does not prove that each Verify calls
+// validateVerifierParams. The direct validateVerifierParams assertions
+// below pin what the gate checks; TestMtaVerifiersCallSharedGate pins that
+// each verifier calls it.
 func TestMtaModulusPolicy(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
-			setMTAProofTestMode(t, enabled)
-			runMtaModulusPolicy(t)
-		})
-	}
-}
-
-// oddCompositeAt returns 3*2^(bits-2)+extra: an odd value of exactly bits
-// bits. extra = 3 keeps divisibility by 3 (ProbablyPrime rejects it in
-// the first round); extra = 5 avoids 3 where coprimality to the fixture
-// ciphertexts is needed. No keygen or primality generation is involved.
-func oddCompositeAt(bits int, extra int64) *big.Int {
-	v := new(big.Int).Lsh(big.NewInt(3), uint(bits-2))
-	return new(big.Int).Add(v, big.NewInt(extra))
-}
-
-func runMtaModulusPolicy(t *testing.T) {
 	key := mtaFixtureKey(t)
 	fixturePk := &key.PublicKey
 	NTilde, h1, h2, err := keygen.LoadNTildeH1H2FromTestFixture(0)
@@ -88,12 +70,10 @@ func runMtaModulusPolicy(t *testing.T) {
 	//  - belowFloorN = 3*2^2045+3: 2047 bits, odd, divisible by 3. Only
 	//    the width floor rejects it; the canonical-generator and
 	//    ciphertext checks still hold for every fixture value against a
-	//    2047-bit modulus, so deleting IsUsableUnknownOrderModulus
-	//    would let the pk.N row pass.
+	//    2047-bit modulus, so the gate assertion on it pins the floor.
 	//  - pastCeiling = 3*2^65535+5: 65537 bits, odd, composite, and
-	//    coprime to every fixture generator and ciphertext. The width
-	//    ceiling rejects it; deleting the ceiling (or the IsUsable call,
-	//    whose width check subsumes it) lets the 65537-bit rows pass.
+	//    coprime to every fixture generator and ciphertext, so the gate
+	//    assertions on it pin the width ceiling.
 	//  - evenAtFloor: fixture N-1 (and NTilde-1): even, 2048 bits, so
 	//    the parity check rejects them.
 	//  - belowFloorTilde = 3*2^2045+1: 2047 bits, odd, composite (2^5+1
@@ -131,19 +111,6 @@ func runMtaModulusPolicy(t *testing.T) {
 			"fixture value must be coprime to the 65537-bit swap value")
 	}
 
-	// Direct predicate pinning: each policy gate rejects exactly its
-	// constructed value, independently of the verifier wiring.
-	require.False(t, common.IsUsableUnknownOrderModulus(belowFloorN, common.MinUnknownOrderModulusBitLen),
-		"2047-bit odd composite must fail the width floor")
-	require.False(t, common.IsUsableUnknownOrderModulus(belowFloorTilde, common.MinUnknownOrderModulusBitLen),
-		"2047-bit odd composite must fail the width floor")
-	require.False(t, common.IsUsableUnknownOrderModulus(pastCeiling, common.MinUnknownOrderModulusBitLen),
-		"65537-bit odd composite must fail the width ceiling")
-	require.False(t, common.IsUsableUnknownOrderModulus(evenN, common.MinUnknownOrderModulusBitLen),
-		"even 2048-bit value must fail the parity check")
-	require.False(t, common.IsUsableUnknownOrderModulus(evenTilde, common.MinUnknownOrderModulusBitLen),
-		"even 2048-bit value must fail the parity check")
-
 	// Build the valid fixture proofs. x and y are small in-domain
 	// witnesses; c2 is the MtA-shaped ciphertext c1^x * G^y * r^N mod N^2.
 	// The session-less (legacy) verifier bounds admit these proofs.
@@ -169,7 +136,7 @@ func runMtaModulusPolicy(t *testing.T) {
 	require.False(t, validateVerifierParams(&paillier.PublicKey{N: belowFloorN}, NTilde, h1, h2, c1, c2, cMsg),
 		"2047-bit pk.N must fail the gate's width floor")
 	require.False(t, validateVerifierParams(fixturePk, belowFloorTilde, h1, h2, c1, c2, cMsg),
-		"2047-bit NTilde must fail the gate's width floor (binding row: pins deletion of IsUsableUnknownOrderModulus)")
+		"2047-bit NTilde must fail the gate's width floor")
 	require.False(t, validateVerifierParams(&paillier.PublicKey{N: pastCeiling}, NTilde, h1, h2, c1, c2, cMsg),
 		"65537-bit pk.N must fail the gate's width ceiling")
 	require.False(t, validateVerifierParams(fixturePk, pastCeiling, h1, h2, c1, c2, cMsg),
@@ -193,7 +160,6 @@ func runMtaModulusPolicy(t *testing.T) {
 		{"N_odd_composite_2047bit_rejected", belowFloorN, NTilde, false},
 		{"N_odd_composite_65537bit_rejected", pastCeiling, NTilde, false},
 		{"N_even_2048bit_rejected", evenN, NTilde, false},
-		{"NTilde_fixture_accepted", fixturePk.N, NTilde, true},
 		{"NTilde_odd_composite_2047bit_rejected", fixturePk.N, belowFloorTilde, false},
 		{"NTilde_odd_composite_65537bit_rejected", fixturePk.N, pastCeiling, false},
 		{"NTilde_even_2048bit_rejected", fixturePk.N, evenTilde, false},
@@ -210,4 +176,45 @@ func runMtaModulusPolicy(t *testing.T) {
 			assert.Equal(t, tc.want, gotRange, "RangeProofAlice.Verify")
 		})
 	}
+}
+
+// oddCompositeAt returns 3*2^(bits-2)+extra: an odd value of exactly bits
+// bits. extra = 3 keeps divisibility by 3 (ProbablyPrime rejects it in
+// the first round); extra = 5 avoids 3 where coprimality to the fixture
+// ciphertexts is needed. No keygen or primality generation is involved.
+func oddCompositeAt(bits int, extra int64) *big.Int {
+	v := new(big.Int).Lsh(big.NewInt(3), uint(bits-2))
+	return new(big.Int).Add(v, big.NewInt(extra))
+}
+
+// TestMtaVerifiersCallSharedGate pins that every MtA verifier calls
+// validateVerifierParams. The proofs are honest proofs for the generator
+// pair (h1, h1), so every response bound and verification equation holds.
+// Of all the verifier checks, only the gate rejects equal generators, so a
+// verifier that does not call the gate accepts these proofs.
+func TestMtaVerifiersCallSharedGate(t *testing.T) {
+	key := mtaFixtureKey(t)
+	pk := &key.PublicKey
+	NTilde, h1, _, err := keygen.LoadNTildeH1H2FromTestFixture(0)
+	require.NoError(t, err)
+	ec := tss.EC()
+
+	x, y, r := big.NewInt(7), big.NewInt(11), firstSmallUnit(pk.N, 2)
+	c1 := fixedPaillierEncryption(pk, big.NewInt(5), firstSmallUnit(pk.N, 3))
+	c2 := c2ForWitness(t, ec, pk, c1, x, y, r)
+	X := crypto.ScalarBaseMult(ec, x)
+	proofBob, err := ProveBob(ec, pk, NTilde, h1, h1, c1, c2, x, y, r)
+	require.NoError(t, err)
+	proofBobWC, err := ProveBobWC(ec, pk, NTilde, h1, h1, c1, c2, x, y, r, X)
+	require.NoError(t, err)
+	m, rMsg := big.NewInt(424242), big.NewInt(2)
+	cMsg := fixedPaillierEncryption(pk, m, rMsg)
+	proofRange, err := ProveRangeAlice(ec, pk, cMsg, NTilde, h1, h1, m, rMsg)
+	require.NoError(t, err)
+
+	require.False(t, validateVerifierParams(pk, NTilde, h1, h1, c1, c2, cMsg), "the gate must reject h1 == h2")
+	assert.False(t, proofBob.Verify(ec, pk, NTilde, h1, h1, c1, c2), "ProofBob.Verify")
+	assert.False(t, proofBob.VerifyLegacy(ec, pk, NTilde, h1, h1, c1, c2, true), "ProofBob.VerifyLegacy")
+	assert.False(t, proofBobWC.Verify(ec, pk, NTilde, h1, h1, c1, c2, X), "ProofBobWC.Verify")
+	assert.False(t, proofRange.Verify(ec, pk, NTilde, h1, h1, cMsg), "RangeProofAlice.Verify")
 }

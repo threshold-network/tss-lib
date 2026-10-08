@@ -13,7 +13,8 @@ import (
 )
 
 // TestLegacyBobVerifierAcceptsHistoricalGammaRange pins a historical proof
-// shape the security-v2 verifier intentionally rejects. PRIOR and the restored
+// shape the security-v2 verifier intentionally rejects. The historical
+// 2e712689 prover (see testdata/legacy_transcript/README.md) and the restored
 // legacy prover sample gamma as a unit below the 2048-bit Paillier modulus;
 // the security-v2 prover samples below q^7 instead. The proof is otherwise
 // generated from the exact historical equations with fixed test-only witnesses
@@ -32,72 +33,22 @@ func TestLegacyBobVerifierAcceptsHistoricalGammaRange(t *testing.T) {
 	y := big.NewInt(11)
 	r := firstSmallUnit(pk.N, 2)
 	c1 := fixedPaillierEncryption(pk, big.NewInt(5), firstSmallUnit(pk.N, 3))
-	modNSquared := common.ModInt(pk.NSquare())
-	c2 := modNSquared.Mul(
-		modNSquared.Exp(c1, x),
-		modNSquared.Mul(
-			modNSquared.Exp(pk.Gamma(), y),
-			modNSquared.Exp(r, pk.N),
-		),
-	)
-
-	legacy := fixedHistoricalBobProof(
-		ec,
-		pk,
-		aux.NTildei,
-		aux.H1i,
-		aux.H2i,
-		c1,
-		c2,
-		x,
-		y,
-		r,
-		nil,
-	)
-	if !legacy.ProofBob.Verify(
-		ec,
-		pk,
-		aux.NTildei,
-		aux.H1i,
-		aux.H2i,
-		c1,
-		c2,
-	) {
-		t.Fatal("legacy Bob verifier rejected a proof in PRIOR's gamma range")
-	}
-
 	X := crypto.ScalarBaseMult(ec, x)
-	legacyWC := fixedHistoricalBobProof(
-		ec,
-		pk,
-		aux.NTildei,
-		aux.H1i,
-		aux.H2i,
-		c1,
-		c2,
-		x,
-		y,
-		r,
-		X,
-	)
-	if !legacyWC.Verify(
-		ec,
-		pk,
-		aux.NTildei,
-		aux.H1i,
-		aux.H2i,
-		c1,
-		c2,
-		X,
-	) {
-		t.Fatal("legacy BobWC verifier rejected a proof in PRIOR's gamma range")
+
+	legacy, c2 := historicalBobProofForWitnessY(t, ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, x, y, r, nil, nil, nil)
+	if !legacy.ProofBob.Verify(ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, c2) {
+		t.Fatal("legacy Bob verifier rejected a proof in the historical gamma range")
+	}
+	legacyWC, _ := historicalBobProofForWitnessY(t, ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, x, y, r, nil, X, nil)
+	if !legacyWC.Verify(ec, pk, aux.NTildei, aux.H1i, aux.H2i, c1, c2, X) {
+		t.Fatal("legacy BobWC verifier rejected a proof in the historical gamma range")
 	}
 
 	q := ec.Params().N
 	q3 := new(big.Int).Exp(q, big.NewInt(3), nil)
 	q7 := new(big.Int).Exp(q, big.NewInt(7), nil)
 	if legacy.T1.Cmp(q7) <= 0 || legacyWC.T1.Cmp(q7) <= 0 {
-		t.Fatal("fixture does not exercise PRIOR's wider gamma range")
+		t.Fatal("fixture does not exercise the historical wider gamma range")
 	}
 	// BobMid samples the T1 witness y below q^5, so the exact honest legacy
 	// range is gamma + e*y < N + q^6.
@@ -109,7 +60,7 @@ func TestLegacyBobVerifierAcceptsHistoricalGammaRange(t *testing.T) {
 		t.Fatal("fixture accidentally exceeds the shared S1 bound")
 	}
 
-	session := []byte("R01/security-v2/bob/range")
+	session := []byte("mta-test/bob/historical-range")
 	if legacy.ProofBob.Verify(
 		ec,
 		pk,
@@ -134,11 +85,18 @@ func TestLegacyBobVerifierAcceptsHistoricalGammaRange(t *testing.T) {
 	}
 }
 
+// fixedHistoricalBobProof builds a Bob proof (a BobWC proof when X is not
+// nil) from the exact historical 2e712689 prover equations with fixed
+// test-only blinders. gamma is the T1 blinder; nil selects N-1, a valid
+// historical gamma (a unit below pk.N) that is wider than q^7 for the
+// 2048-bit fixture modulus. A nil session gives the legacy untagged
+// challenge; a non-nil session gives the session-tagged challenge.
 func fixedHistoricalBobProof(
 	ec elliptic.Curve,
 	pk *paillier.PublicKey,
-	nTilde, h1, h2, c1, c2, x, y, r *big.Int,
+	nTilde, h1, h2, c1, c2, x, y, r, gamma *big.Int,
 	X *crypto.ECPoint,
+	session []byte,
 ) *ProofBobWC {
 	q := ec.Params().N
 	q3 := new(big.Int).Exp(q, big.NewInt(3), nil)
@@ -148,17 +106,17 @@ func fixedHistoricalBobProof(
 	alpha := new(big.Int).Rsh(new(big.Int).Set(q3), 1)
 	rho := new(big.Int).Rsh(new(big.Int).Set(qNTilde), 2)
 	sigma := new(big.Int).Rsh(new(big.Int).Set(qNTilde), 3)
-	// PRIOR sampled tau below q*NTilde.
+	// The historical prover sampled tau below q*NTilde.
 	tau := new(big.Int).Sub(qNTilde, big.NewInt(1))
 	rhoPrime := new(big.Int).Rsh(new(big.Int).Set(q3NTilde), 2)
 	beta := firstSmallUnit(pk.N, 5)
-	// This is a valid PRIOR gamma (< pk.N and coprime to it) but is wider
-	// than q^7 for the 2048-bit fixture modulus.
-	gamma := new(big.Int).Sub(pk.N, big.NewInt(1))
+	if gamma == nil {
+		gamma = new(big.Int).Sub(pk.N, big.NewInt(1))
+	}
 
 	var u *crypto.ECPoint
 	if X != nil {
-		u = crypto.ScalarBaseMult(tss.EC(), alpha)
+		u = crypto.ScalarBaseMult(ec, alpha)
 	}
 	modNTilde := common.ModInt(nTilde)
 	z := modNTilde.ExpMulExp(h1, x, h2, rho)
@@ -171,7 +129,7 @@ func fixedHistoricalBobProof(
 	w := modNTilde.ExpMulExp(h1, gamma, h2, tau)
 
 	e := bobProofChallenge(
-		nil,
+		session,
 		q,
 		pk,
 		nTilde,

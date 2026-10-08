@@ -21,16 +21,6 @@ import (
 
 // ----- Constructor protocol-mode enforcement -----
 
-// assertPanicsWith runs fn and fails unless it panics with exactly message.
-func assertPanicsWith(t *testing.T, message string, fn func()) {
-	t.Helper()
-	defer func() {
-		r := recover()
-		require.Equal(t, message, r, "panic value must equal the expected message")
-	}()
-	fn()
-}
-
 // TestNewLocalPartyRequiresProtocolMode pins the constructor-level
 // enforcement of the explicit protocol-mode rule: building a keygen party
 // without a selected mode, or with a legacy mode plus a session nonce,
@@ -42,7 +32,7 @@ func TestNewLocalPartyRequiresProtocolMode(t *testing.T) {
 
 	modeless := tss.NewParameters(tss.S256(), p2pCtx, pIDs[0], 2, 1)
 	// No protocol mode selected: the constructor must fail fast.
-	assertPanicsWith(t, "tss: protocol mode must be selected before local party construction",
+	assert.PanicsWithValue(t, "tss: protocol mode must be selected before local party construction",
 		func() {
 			_ = NewLocalParty(modeless, nil, nil)
 		})
@@ -50,7 +40,7 @@ func TestNewLocalPartyRequiresProtocolMode(t *testing.T) {
 	legacyWithNonce := tss.NewParameters(tss.S256(), p2pCtx, pIDs[0], 2, 1)
 	legacyWithNonce.SetProtocolMode(tss.ProtocolModeLegacy)
 	legacyWithNonce.SetSessionNonce(big.NewInt(1))
-	assertPanicsWith(t, "tss: legacy protocol mode must not set a session nonce",
+	assert.PanicsWithValue(t, "tss: legacy protocol mode must not set a session nonce",
 		func() {
 			_ = NewLocalParty(legacyWithNonce, nil, nil)
 		})
@@ -78,15 +68,15 @@ func TestNewLocalPartyFreezesProtocolMode(t *testing.T) {
 	params.SetSessionNonce(big.NewInt(1))
 	_ = NewLocalParty(params, nil, nil)
 
-	assertPanicsWith(t, "tss: protocol mode is immutable after local party construction",
+	assert.PanicsWithValue(t, "tss: protocol mode is immutable after local party construction",
 		func() {
 			params.SetProtocolMode(tss.ProtocolModeLegacy)
 		})
-	assertPanicsWith(t, "tss: session nonce is immutable after local party construction",
+	assert.PanicsWithValue(t, "tss: session nonce is immutable after local party construction",
 		func() {
 			params.SetSessionNonce(big.NewInt(2))
 		})
-	assertPanicsWith(t, "tss: legacy historical Bob compatibility is immutable after local party construction",
+	assert.PanicsWithValue(t, "tss: legacy historical Bob compatibility is immutable after local party construction",
 		func() {
 			params.SetLegacyHistoricalBobCompatibility(true)
 		})
@@ -163,9 +153,9 @@ func TestKeygenProofTranscriptSelection(t *testing.T) {
 // and no party ever produces save data. The legacy party emits historical
 // untagged proofs; the security-v2 party verifies them under its
 // ssid-tagged transcript (and vice versa), so every cross-verification is a
-// guaranteed mismatch. The ceremony stops at the first fatal round-2 error
-// so the test stays short; the round-2 message leg is covered by the
-// mixed-binary CI harness instead.
+// guaranteed mismatch. The ceremony stops at the first fatal round-2 error,
+// so no round-2 message is ever exchanged and this test does not cover
+// round-2 message handling in a mixed ceremony.
 func TestMixedModeKeygenFailsClosed(t *testing.T) {
 	setUp("info")
 
