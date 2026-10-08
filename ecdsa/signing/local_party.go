@@ -98,14 +98,10 @@ type (
 	}
 )
 
-// NewLocalParty returns a local signing party for the GG20 protocol.
+// NewLocalParty returns a local signing party for the GG20 protocol. It is
+// NewLocalPartyWithKDD without a key derivation delta.
 //
-// Panics: fullBytesLen is required (variadic argument), must be positive, no
-// larger than the curve order byte length, and at least ceil(msg.BitLen()/8);
-// params must have an explicit protocol mode selected (legacy or security-v2)
-// via SetProtocolMode before this call; and legacy mode must not have a
-// session nonce set. Any of these panics at the call site rather than later
-// inside a protocol goroutine.
+// Panics under the same conditions as NewLocalPartyWithKDD.
 func NewLocalParty(
 	msg *big.Int,
 	params *tss.Parameters,
@@ -120,16 +116,24 @@ func NewLocalParty(
 // NewLocalPartyWithKDD returns a party with key derivation delta for HD support.
 // The message and the keyDerivationDelta are copied so later caller mutations
 // cannot change this party's signing context.
-// Panics: fullBytesLen is required (variadic argument), must be positive, no
-// larger than the curve order byte length, and at least ceil(msg.BitLen()/8);
-// params must have an explicit protocol mode selected (legacy or security-v2)
-// via SetProtocolMode before this call; and legacy mode must not have a
-// session nonce set. Any of these panics at the call site rather than later
-// inside a protocol goroutine.
 //
 // fullBytesLen fixes the byte width used to encode the message for the final
 // ECDSA verification/output path (preserving leading zero bytes). Every signer
 // in a ceremony must pass the same value.
+//
+// Panics:
+//   - if fullBytesLen is not passed exactly once;
+//   - if fullBytesLen is not positive;
+//   - if fullBytesLen is smaller than ceil(msg.BitLen()/8);
+//   - if params is nil or has no curve order;
+//   - if fullBytesLen is larger than the curve order byte length;
+//   - if no protocol mode was selected on params;
+//   - if the protocol mode is legacy and a session nonce was set;
+//   - if key has a nil party key, or a signer in params has no PartyID
+//     content or is not in key (see keygen.BuildLocalSaveDataSubset).
+//
+// The panic happens synchronously at the call site rather than later inside
+// a protocol goroutine.
 func NewLocalPartyWithKDD(
 	msg *big.Int,
 	params *tss.Parameters,
@@ -168,8 +172,6 @@ func NewLocalPartyWithKDD(
 	// this party's signing context between construction and Start.
 	if keyDerivationDelta != nil {
 		p.temp.keyDerivationDelta = new(big.Int).Set(keyDerivationDelta)
-	} else {
-		p.temp.keyDerivationDelta = nil
 	}
 	if msg != nil {
 		p.temp.m = new(big.Int).Set(msg)

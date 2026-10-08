@@ -1,6 +1,6 @@
 name: Go Race
 on:
-  # D11: weekly off-PR -race full-suite run against master and dev. Schedule
+  # Weekly off-PR -race full-suite run against master and dev. Schedule
   # and workflow_dispatch become available after this file reaches the default
   # branch (master).
   schedule:

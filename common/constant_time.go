@@ -31,12 +31,22 @@
 //     leaving them on math/big is a pragmatic deferral, NOT a safety guarantee.
 //   - Exponentiations modulo an even value (e.g. inverses mod phi(N)): bigmod requires
 //     an odd modulus, so these stay on math/big.
-//   - crypto/mta.AliceEnd/AliceEndWC's Paillier decrypt: the reduction of
-//     the secret decryption exponent remains variable-time. The only known
-//     mitigation is a sleep-based response-time normalization (~200ms target
-//     plus jitter), which was not adopted because it would inject a fixed
-//     ~200ms delay into every MtA share round, a latency/throughput cost
-//     not signed off on. The gap remains open.
+//   - crypto/mta.AliceEnd/AliceEndWC's Paillier decrypt: c^LambdaN and the
+//     inverse of LambdaN mod N run in constant time, but the steps around
+//     them stay on math/big: the LambdaN mod N reduction before the inverse,
+//     the L(u) = (u-1)/N division, the math/big multiplication of L(u) by the
+//     inverse mod N, and decryptShare's reduction of the secret plaintext
+//     mod q. The only known mitigation is a sleep-based response-time
+//     normalization (~200ms target plus jitter), which was not adopted
+//     because it would add about 200ms to every MtA share round, a latency
+//     cost not signed off on. The gap remains open.
+//   - Elliptic-curve scalar multiplication on secp256k1: tss.S256() uses the
+//     variable-time btcec/v2 (Decred) routines, so secret scalars such as
+//     Schnorr nonces and key shares are multiplied in variable time.
+//   - The keygen ring-Pedersen inverse beta = alpha^-1 mod p*q: the inverse
+//     itself is constant-time, but ModInverseCT first reduces the secret
+//     alpha (sampled below NTilde, so wider than p*q) mod p*q with math/big.
+//     This happens once per keygen.
 //
 // Reference: https://github.com/golang/go/issues/20654
 
@@ -160,17 +170,21 @@ func newCTModInt(mod, inverseExp *big.Int) *CTModInt {
 // pointer to releasePadded (typically via defer) to return the same pooled
 // buffer instead of leaking it.
 // NOTE: big.Int.Mod is not constant-time, but it is applied unconditionally
-// (no secret-dependent branch) and the bases reduced here are public or
-// already in range at every call site. A caller passing a secret base near
-// the modulus should be aware the reduction's timing depends on the value.
-// One exception worth calling out: in `ecdsa/signing/round_5.go`, the
-// operand `rx = R.X()` is a field-prime (mod p) coordinate that is not yet
-// reduced mod the curve order N when fed into `MulCT(rx, sigma)`. The
-// reduction is correctness-required (both the CT and non-CT paths always
-// performed it) and `rx` is derived from public values -- R is built from
-// the round-4 decommitted Gamma_j points and the delta (the sum of the
-// theta_i values broadcast in round 3), both public -- so
-// the variable-time reduction mod N leaks nothing secret.
+// (no secret-dependent branch) and, with one exception, the values reduced
+// here are public or already in range. A caller passing a secret value at
+// or above the modulus should know that the reduction's timing depends on
+// the value.
+// The exception is the keygen ring-Pedersen inverse in
+// `ecdsa/keygen/prepare.go`: ModInverseCT(alpha) reduces the secret alpha,
+// sampled below NTilde, mod p*q here. This is a known gap.
+// An example of a safe reduction of a public value: in
+// `ecdsa/signing/round_5.go`, `rx = R.X()` is a field-prime (mod p)
+// coordinate that is not yet reduced mod the curve order N when it goes into
+// `MulCT(rx, sigma)`. The reduction is required for correctness (both the CT
+// and non-CT paths always did it), and `rx` comes from public values: R is
+// built from the round-4 decommitted Gamma_j points and delta (the sum of the
+// theta_i values broadcast in round 3). So the variable-time reduction mod N
+// leaks nothing secret.
 func (ct *CTModInt) reduceToPaddedBytes(val *big.Int) *[]byte {
 	reduced := new(big.Int).Mod(val, ct.modBigInt)
 

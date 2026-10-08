@@ -18,7 +18,7 @@ permissions:
 
 # Cancel superseded PR runs. Only pull_request events cancel in-progress;
 # push/dispatch runs use their own run-scoped group, so a push can never cancel
-# another push (orchestrator concurrency guidance).
+# another push.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

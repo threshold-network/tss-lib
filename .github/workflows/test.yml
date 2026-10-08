@@ -18,10 +18,15 @@ permissions:
 
 # Cancel superseded PR runs. Only pull_request events cancel in-progress;
 # push/dispatch runs use their own run-scoped group, so a push can never cancel
-# another push (orchestrator concurrency guidance).
+# another push.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Development and CI toolchain for every job except go-minimum-build, which
+# pins the documented minimum instead.
+env:
+  GO_VERSION: '1.26.8'
 
 jobs:
   # Cheap early gate - fails a broken PR in ~1 min instead of ~10. go vet is
@@ -39,7 +44,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.26.8'
+        go-version: ${{ env.GO_VERSION }}
         cache: true
 
     # The documented minimum (README) and the module's enforced minimum
@@ -71,7 +76,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.26.8'
+        go-version: ${{ env.GO_VERSION }}
         cache: true
 
     - name: Run Keygen Units
@@ -93,7 +98,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.26.8'
+        go-version: ${{ env.GO_VERSION }}
         cache: true
 
     - name: Run Tests
@@ -117,8 +122,13 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.26.8'
+        go-version: ${{ env.GO_VERSION }}
         cache: true
+        # The harness also downloads the pinned historical module's
+        # dependencies, so key the module cache on its go.sum too.
+        cache-dependency-path: |
+          go.sum
+          testdata/legacy_transcript/historical/go.sum.fixture
 
     - name: Vet harness
       run: |

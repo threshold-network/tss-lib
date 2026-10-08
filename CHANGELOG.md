@@ -95,9 +95,11 @@ Keygen (DKG) interop with the pre-upgrade binary is qualified only by the
 primitive-level oracle vectors (DLN, ModProof, FactorProof), not by a live
 mixed-version keygen run; there is no mixed-version DKG exercise.
 
-Three of the four caller obligations below are enforced at runtime — two by
-constructor panic, one by a `Start()` error — and the fourth is an operational
-rollout step (see Breaking Changes 1 and 2 and the PR #9 entry below):
+Obligations 1 and 3 panic at construction; obligation 2 panics at construction
+in legacy mode and fails `Start()` in security-v2; uniqueness per ceremony and
+agreement between signers are left to the caller; obligation 4 is an
+operational rollout step (see Breaking Changes 1 and 2 and the PR #9 entry
+below):
 1. Select exactly one protocol mode before constructing a local party.
 2. In security-v2, set a unique per-ceremony session nonce; in legacy, leave it unset.
 3. Pass a positive `fullBytesLen` to every signing constructor.
@@ -206,14 +208,10 @@ rollout step (see Breaking Changes 1 and 2 and the PR #9 entry below):
   work. `ModProof` also reuses its fixed constant-time contexts and exponents
   across all 80 iterations without changing proof bytes.
 - **Constant-time Paillier performance (PR #31):** encryption uses the
-  `Gamma = N+1` identity through constant-time multiplication, bounded exponents
-  are padded to their public bound (the Paillier modulus width for `HomoMult`;
-  the curve-order width `q.BitLen()` for the `x`, `m`, and `b` exponents of the
-  Bob and Alice provers, while `ProofBob`/`ProofBobWC` keep `y` padded to the
-  Paillier modulus width — see the caller-observable
-  behavior follow-up bullet below), and pooled scratch buffers no longer
-  allocate boxed slice headers on each return. Proof bytes and public APIs are
-  unchanged.
+  `Gamma = N+1` identity through constant-time multiplication, bounded
+  exponents use the public `N.BitLen()` width, and pooled scratch buffers no
+  longer allocate boxed slice headers on each return. Proof bytes and public
+  APIs are unchanged.
 - **Rollout assurance (PRs #27, #29, #32, #33):** regression, fuzz, and live
   mixed-binary checks cover constant-time width handling, proof and wire
   decoding, both historical Bob/BobWC rejection paths, context mismatch
@@ -254,30 +252,45 @@ rollout step (see Breaking Changes 1 and 2 and the PR #9 entry below):
   rejection have consumer-visible regressions. The Go module minimum is
   aligned with the documented Go 1.25.7 requirement; the preferred
   development and CI toolchain remains Go 1.26.8.
-- **Caller-observable behavior follow-ups (PR #41):** `paillier.PublicKey.HomoMultWithBitLen(m, c1, bitLen)` is
-  added, and `HomoMult(m, c1)` is equivalent to `HomoMultWithBitLen(m, c1, publicKey.N.BitLen())`;
-  an out-of-domain message or exponent (`bitLen` below 1, above the modulus width, or
-  a message wider than `bitLen` bits) returns `paillier.ErrMessageTooLong` in both timing
-  modes. MtA prover witness domains tighten: `BobMid`/`BobMidWC` reject a witness `b`
-  outside `[0, q)` and exponentiate it to the bound `q.BitLen()`; `ProveRangeAlice`
-  accepts a witness `m` in `[0, q)`; and `ProofBob`/`ProofBobWC` accept `x` in
-  `[0, q)` with its exponent padded to `q.BitLen()`, while `y` keeps its original
-  Paillier plaintext domain `[0, pk.N)` and its `pk.N.BitLen()` exponent padding
-  (unlike `x`, `m`, and `b`, `y` was not narrowed to the curve order). The
-  constant-time exponent widths that narrow from the Paillier modulus width to the
-  curve-order `q.BitLen()` are the `x`, `m`, and `b` exponents only; proof bytes for
-  in-domain witnesses are
-  unchanged. The MtA provers return errors instead of panicking on degenerate
-  `pk`/`N`/`NTilde`/`X` inputs, `paillier.HomoAdd` now validates the key modulus
-  (`paillier.ErrInvalidModulus`) before use, `common.IsUsableUnknownOrderModulus`
-  rejects moduli wider than `common.MaxUnknownOrderModulusBitLen` before the
-  primality test, `ckd.NewExtendedKeyFromString` picks its parser by curve
-  parameters (`crypto.SameCurve`) and returns an error for keys it cannot parse,
-  the keygen ring-Pedersen `beta = alpha^-1 mod pq` uses a constant-time inverse
-  when constant-time operations are enabled, and the signing constructors copy
-  `keyDerivationDelta` so later caller mutations cannot change the party's key.
-  CI adds the `Mixed-binary interop` and `Go minimum build` jobs and a
-  HEAD-prover → historical-verifier leg to `verify.sh`.
+- **Narrower constant-time exponent padding (PR #41):** the secret MtA
+  exponents `x` (`ProofBob`/`ProofBobWC`), `m` (`ProveRangeAlice`), and `b`
+  (`BobMid`/`BobMidWC`) are padded to the curve-order width `q.BitLen()`
+  instead of the Paillier modulus width. `y` stays in its Paillier plaintext
+  domain `[0, N)` and keeps `N.BitLen()` padding. `BobMid` takes 58.7 ms
+  instead of 73.6 ms (-20%), and one full MtA exchange (`AliceInit`, `BobMid`,
+  `AliceEnd`) takes about 10% less time (constant-time on, security-v2 session,
+  `BenchmarkBobMid` in `crypto/mta`, `-benchtime=15x -count=3 -cpu=1`).
+  Proof bytes for in-domain witnesses do not change. The witness domain checks
+  that come with this change are listed under Security & correctness
+  hardening.
+- **`paillier.PublicKey.HomoMultBounded` (PR #41):** new homomorphic
+  multiplication with a public exclusive bound; see Added.
+- **Prover input validation (PR #41):** the MtA provers return errors instead
+  of panicking on degenerate `pk`/`N`/`NTilde`/`X` inputs.
+  `common.GetRandomPositiveInt` and the other samplers return nil instead of
+  panicking when the limit is wider than the 5000-bit sampler cap, and the
+  provers return an error in that case. `paillier.HomoAdd` checks the key
+  modulus (`paillier.ErrInvalidModulus`) before use.
+  `common.IsUsableUnknownOrderModulus` rejects moduli wider than
+  `common.MaxUnknownOrderModulusBitLen` before the primality test.
+- **`ckd` curve selection (PR #41):** `ckd.NewExtendedKeyFromString` picks its
+  public-key parser by curve parameters instead of the concrete curve type.
+  It decodes secp256k1 keys with btcec and other curves with
+  `elliptic.UnmarshalCompressed`, and returns an error for key data it cannot
+  decode instead of a key with nil coordinates.
+- **Keygen (PR #41):** the ring-Pedersen `beta = alpha^-1 mod pq` uses a
+  constant-time inverse when constant-time operations are enabled. The
+  reduction of `alpha` mod `pq` before the inverse is still variable-time;
+  see the known gap under Breaking Change 8.
+- **Signing (PR #41):** the signing constructors copy `keyDerivationDelta`, so
+  later caller mutations cannot change the party's key. Round 2 checks the
+  local `gamma` and `w` are in `[0, q)` before it starts the per-peer MtA
+  work; if they are not, it reports a local failure and blames no peer.
+- **CI (PR #41):** adds the `Mixed-binary interop` and `Go minimum build` jobs
+  and a HEAD-prover to historical-verifier leg in `verify.sh`.
+- **Rollback (PR #41):** all of these changes are local. No wire format or
+  proof bytes change, so reverting them restores the previous padding with no
+  interop impact.
 
 ### Breaking changes
 
@@ -431,24 +444,29 @@ rollout step (see Breaking Changes 1 and 2 and the PR #9 entry below):
   normalized. Upstream adds a ~200ms sleep-based normalizer that this fork deliberately
   did not port (latency cost); the gap is disclosed in the COVERAGE comment in
   `common/constant_time.go`.
-  Two further gaps are outside the bigmod path even where the operation
-  itself is constant-time: the one-time per-proof MtA blind exponents
-  (`alpha`, `rho`, `rhoPrm`, `sigma`, `gamma`, `tau`, and the `beta^N` term
-  in `crypto/mta`) stay on `math/big` — they are fresh per proof, but each
-  masks a secret witness in a published response (for example S1 = e*x +
-  alpha in the Bob proof), so a timing leak of a blind can leak the witness;
-  leaving them on `math/big` is a documented pragmatic deferral, not a
-  safety claim — and EC scalar
-  multiplications on `tss.S256()` use the btcec/v2 (Decred) variable-time
-  routines. Neither is claimed covered by this PR; both are in scope for the
-  pre-mainnet side-channel review.
+  The one-time MtA blind exponents (`alpha`, `rho`, `rhoPrm`, `sigma`,
+  `gamma`, `tau`, and the `beta^N` term in `crypto/mta`) stay on `math/big`,
+  and each masks a secret witness in a published response (for example
+  S1 = e*x + alpha in the Bob proof), so a timing leak of a blind can leak the
+  witness.
+  Elliptic-curve scalar multiplication on `tss.S256()` uses the variable-time
+  btcec/v2 (Decred) routines, including for secret scalars.
+- **Known gap: keygen ring-Pedersen inverse (PR #41):** `beta = alpha^-1 mod pq`
+  uses a constant-time inverse, but the secret `alpha` (sampled below
+  `NTilde`) is first reduced mod `p*q` with variable-time `math/big`, once per
+  keygen.
+- **Known gap: legacy MtA prover `tau` range:** in `ProtocolModeLegacy`,
+  `ProofBob`/`ProofBobWC` sample `tau` below `q*NTilde`, as the deployed
+  historical prover `2e712689` does; this keeps legacy proofs byte-identical.
+  GG18 specifies `q^3*NTilde` so that `e*sigma` is statistically hidden.
+  Security-v2 samples `tau` below `q^3*NTilde`. Verifiers are unaffected.
 - **Break type:** Performance only. Same mathematical result on every path (see the
   constant-time equivalence tests added alongside each hardened package); no wire, source,
   or runtime-input behavior changes. A microbenchmark
   (`go test ./common/... -bench 'BenchmarkExp(CT|Standard)' -benchtime=2s`) measured constant-time
   modexp at parity with the standard path on this fork's test hardware (~2.7ms vs ~2.8ms per op,
   n≈900 CT samples, n≈800 standard samples). The 256-bit-class `MulCT` and `ModInverseCT`
-  operations this PR's Schnorr/signing-rounds extension actually uses are measured by the
+  operations PR #23's Schnorr/signing-rounds extension actually uses are measured by the
   paired `BenchmarkMulCT`/`BenchmarkMulStandard` and
   `BenchmarkModInverseCT`/`BenchmarkModInverseStandard` benchmarks (256-bit prime modulus):
   `MulCT` runs at roughly 2x the standard `math/big` multiply (≈2.3µs vs ≈1.1µs per op on
@@ -507,10 +525,6 @@ rollout step (see Breaking Changes 1 and 2 and the PR #9 entry below):
 - **Migration:** Use the `elliptic.Curve` interface. Callers holding keys from another
   secp256k1 implementation should compare keys by coordinates or encoded bytes, or rebuild
   them on one curve object.
-- **Also in this change:** `ckd.NewExtendedKeyFromString` picks its public-key
-  parser by curve parameters (`crypto.SameCurve` against `btcec.S256`) instead of
-  the concrete-type assertion, and returns an error for curves that cannot
-  parse the key data instead of a nil-coordinate key.
 
 #### 11. Keygen message decoders return errors (PR #28)
 - **What:** `KGRound2Message1.UnmarshalFactorProof`, `UnmarshalFactorProofTilde`, and
@@ -675,6 +689,14 @@ rejecting input that an honest caller would previously have produced.
   distinct-generator policy already enforced by DLN and MtA proofs
   (`crypto/paillier/factor_proof.go`). Honest setups use distinct generators.
   _Provenance: `threshold-original`, PR #7._
+- **MtA prover witness domains (PR #41):** the MtA provers now require
+  curve-order witnesses. `ProveRangeAlice` rejects `m` in `[q, N)`;
+  `ProofBob`/`ProofBobWC` reject `x >= q`; `BobMid`/`BobMidWC` reject `b`
+  outside `[0, q)`. `AliceInit` with `a >= q` now returns an error after it
+  encrypts `a`, because its range proof rejects the witness. In-tree signing
+  always passes curve-order scalars, so honest ceremonies are unaffected; a
+  direct caller that passed a wider witness now gets an error.
+  _Provenance: `threshold-original`, PR #41._
 
 ### Added
 
@@ -717,16 +739,16 @@ rejecting input that an honest caller would previously have produced.
   `CTModInt.ExpCTWithBitLen` (PR #17); `CTModInt.ExpCTWithBytes`,
   `ExpCTCanonicalWithBitLen`, `ExpCTCanonicalWithBytes`, `MulCTCanonical` (review fixes
   `873b8ad`..`fa6ef4d`).
-- `common.MinUnknownOrderModulusBitLen` (2048), `MaxUnknownOrderModulusBitLen` (65536),
-  and `ExceedsUnknownOrderModulusCeiling` — the shared unknown-order modulus width
-  policy. _PR #34._
+- `common.MinUnknownOrderModulusBitLen` (2048) and `MaxUnknownOrderModulusBitLen` (65536)
+  — the shared unknown-order modulus width policy. _PR #34._
 - `paillier.ErrInvalidModulus` and `paillier.ErrMalformedKey` — sentinel errors for
   invalid Paillier keys (review fixes `873b8ad`..`fa6ef4d`).
-- `paillier.PublicKey.HomoMultWithBitLen(m, c1, bitLen)` — homomorphic multiplication
-  with an explicit public exponent bound; `HomoMult(m, c1)` is equivalent to it at the
-  modulus-width bound. In constant-time mode the exponent is padded to `bitLen`, in
-  `math/big` mode `bitLen` only gates validation; out-of-domain messages return
-  `paillier.ErrMessageTooLong`. _Provenance: `threshold-original`, PR #41._
+- `paillier.PublicKey.HomoMultBounded(m, c1, bound)` and `paillier.ErrInvalidBound` —
+  homomorphic multiplication with a public exclusive bound on `m`. In constant-time mode
+  the exponent is padded to `bound.BitLen()` bits. It returns `ErrInvalidBound` when
+  `bound` is nil, not positive, or greater than `N`, and `ErrMessageTooLong` when `m` is
+  outside `[0, bound)`. `HomoMult(m, c1)` is `HomoMultBounded(m, c1, N)`.
+  _Provenance: `threshold-original`, PR #41._
 
 ### Notes
 

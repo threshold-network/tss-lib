@@ -11,7 +11,7 @@
 // verifier's bound math but never exercises an actual historical binary. This
 // program instead spawns the pinned historical commit as a child process (the
 // two versions share one Go module path and cannot be linked into one
-// binary), drives it through a live 2-of-2 signing ceremony opposite a
+// binary), drives it through a live signing ceremony with a 2-signer subset opposite a
 // current-implementation party in ProtocolModeLegacy, and asserts on the
 // resulting behavior:
 //

@@ -54,7 +54,7 @@ pump:
 		// parties have emitted their first round-8-or-later message. Each
 		// such message is captured as per-actor evidence and dropped (never
 		// forwarded), and lower-round messages keep flowing until both
-		// sides have emitted round 8 — so this minimal 2-of-20 fixture
+		// sides have emitted round 8 — so this minimal 2-signer fixture
 		// subset can never cascade into round 9.
 		if result.round8BothReached() {
 			break pump

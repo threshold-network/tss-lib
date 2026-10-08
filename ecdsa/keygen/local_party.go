@@ -58,16 +58,18 @@ type (
 	}
 )
 
-// Exported, used in `tss` client
+// NewLocalParty returns a keygen party for the given parameters. It is the
+// entry point used by `tss` clients.
 //
 // Panics:
-//   - if the protocol mode was never selected:
-//     "tss: protocol mode must be selected before local party construction"
-//   - if the mode is legacy but a session nonce was set:
-//     "tss: legacy protocol mode must not set a session nonce"
+//   - if params is nil;
+//   - if no protocol mode was selected on params;
+//   - if the protocol mode is legacy and a session nonce was set;
+//   - if more than one optionalPreParams value is passed;
+//   - if the optionalPreParams value fails ValidateWithProof.
 //
-// The panic happens synchronously at the caller's call site; the constructor
-// refuses to build a party whose transcript selection is not explicit.
+// The panic happens synchronously at the call site, so a party with an
+// unclear transcript selection or invalid pre-parameters is never built.
 func NewLocalParty(
 	params *tss.Parameters,
 	out chan<- tss.Message,

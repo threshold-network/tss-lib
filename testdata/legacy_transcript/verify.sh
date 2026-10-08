@@ -20,8 +20,8 @@ else
   )
 fi
 
-# Leg 1: the checked-out implementation must still verify the historical
-# PRIOR transcript byte-for-byte.
+# Leg 1: the checked-out implementation must verify the historical PRIOR
+# transcript, and PRIOR and R1 must be equal outside provenance.
 (
   cd "${repository_root}"
   go run ./testdata/legacy_transcript/oracle/main.go \
@@ -42,11 +42,11 @@ cp "${data_dir}/oracle/main.go" "${historical_module}/main.go"
 )
 
 # Leg 3: the HEAD legacy provers must produce a transcript the historical
-# verifier accepts. The generator mode of the oracle runs at HEAD with the
-# same deterministic streams that produced the checked-in vectors, so the
-# proofs it emits are the ones the historical verifier was qualified against;
-# verifying that generated document in the historical module closes the
-# HEAD-prover -> historical-verifier direction.
+# verifier accepts (the HEAD-prover -> historical-verifier direction). The
+# oracle's generator mode runs at HEAD with the same deterministic streams
+# that produced the checked-in vectors. The historical module must verify the
+# generated document, and the document must be equal to PRIOR outside
+# provenance.
 (
   cd "${repository_root}"
   go run ./testdata/legacy_transcript/oracle/main.go > "${generated_vector}"
@@ -59,9 +59,8 @@ fi
   cd "${historical_module}"
   go run -mod=readonly ./main.go "${generated_vector}"
 )
-# The generated vector is byte-for-byte reproducible from the PRIOR vector
-# under the deterministic streams (only provenance differs by construction),
-# so assert the equality the pair of documents is meant to make.
+# Under the deterministic streams the generated vector must be equal to PRIOR
+# outside provenance.
 (
   cd "${repository_root}"
   go run ./testdata/legacy_transcript/oracle/main.go \
