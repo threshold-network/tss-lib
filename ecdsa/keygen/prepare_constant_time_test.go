@@ -7,6 +7,7 @@
 package keygen
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -46,48 +47,59 @@ func TestPrepareTrapdoorCTEquivalence(t *testing.T) {
 	assert.Zero(t, pp.H2i.Cmp(got), "recomputed h2i must equal the stored trapdoor element")
 }
 
-// TestPrepareTrapdoorBetaCTEquivalence verifies that the constant-time inverse
-// used in GeneratePreParamsWithContext to compute beta = alpha^-1 mod (p*q)
-// (where p, q are the two safe-prime factors of the NTilde modulus) produces
-// the same result as math/big.ModInverse, and that the ring-Pedersen
-// consistency identity h1 = h2^beta mod NTildei holds for the fixture values.
-// Without this test a silent regression that made the CT inverse fall back to
-// a variable-time computation (or used the wrong modulus/group exponent) would
-// be undetectable, since both paths give the same answer for correct inputs.
-func TestPrepareTrapdoorBetaCTEquivalence(t *testing.T) {
+// TestRingPedersenBeta checks the beta = alpha^-1 mod (p*q) helper that
+// GeneratePreParams uses, in both timing modes, against math/big ModInverse.
+// The fixture row also checks the stored Beta and the ring-Pedersen
+// identity h1 = h2^beta mod NTildei.
+func TestRingPedersenBeta(t *testing.T) {
 	fixtures, _, err := LoadKeygenTestFixtures(1)
 	if err != nil {
 		t.Skip("keygen test fixtures are required (avoids safe-prime generation)")
 	}
 	pp := fixtures[0].LocalPreParams
 
-	// alpha and beta are stored in the fixture; recompute beta independently.
-	phiPQ := new(big.Int).Mul(new(big.Int).Sub(pp.P, big.NewInt(1)),
-		new(big.Int).Sub(pp.Q, big.NewInt(1)))
-	modPQ := new(big.Int).Mul(pp.P, pp.Q)
-
-	// Non-CT reference: math/big extended Euclidean inverse.
-	want := new(big.Int).ModInverse(pp.Alpha, modPQ)
-	if want == nil {
-		t.Skip("alpha is not invertible mod p*q in this fixture")
+	// 11 and 23 are Germain primes (23 = 2*11+1, 47 = 2*23+1), so the
+	// small rows use the same shape of modulus as the fixture.
+	small := struct{ p, q *big.Int }{big.NewInt(11), big.NewInt(23)}
+	cases := []struct {
+		name         string
+		alpha, p, q  *big.Int
+		checkFixture bool
+	}{
+		{"fixture", pp.Alpha, pp.P, pp.Q, true},
+		{"alpha = 1", big.NewInt(1), small.p, small.q, false},
+		{"alpha = 2", big.NewInt(2), small.p, small.q, false},
+		{"alpha = p*q - 1", big.NewInt(11*23 - 1), small.p, small.q, false},
 	}
 
-	// CT path: NewCTModIntWithPhi(p*q, phi) with ModInverseCT.
-	gotCT := common.NewCTModIntWithPhi(modPQ, phiPQ).ModInverseCT(pp.Alpha)
-
-	// CT and non-CT inverses must agree.
-	assert.Zero(t, want.Cmp(gotCT), "CT beta must match math/big inverse")
-
-	// The fixture's stored Beta was computed by GeneratePreParamsWithContext,
-	// which uses the CT path when CT is enabled and math/big otherwise;
-	// both must produce the same value.
-	assert.Zero(t, pp.Beta.Cmp(want), "stored Beta must equal the math/big inverse of Alpha mod p*q")
-
-	// Ring-Pedersen consistency: since h1 = f1^2 is always a quadratic
-	// residue mod NTildei, ord(h1) | p*q, and alpha*beta ≡ 1 (mod p*q), so
-	// h2^beta = (h1^alpha)^beta = h1^(alpha*beta) = h1^(1+k*pq) = h1 mod NTildei.
-	modNTildeI := common.ModInt(pp.NTildei)
-	h1Recomputed := modNTildeI.Exp(pp.H2i, pp.Beta)
-	assert.Zero(t, pp.H1i.Cmp(h1Recomputed),
-		"h1 must equal h2^beta mod NTildei (ring-Pedersen inverse identity)")
+	previousMode := common.IsConstantTimeEnabled()
+	t.Cleanup(func() {
+		if previousMode {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+	})
+	for _, ct := range []bool{false, true} {
+		if ct {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+		for _, tc := range cases {
+			t.Run(fmt.Sprintf("CT=%t/%s", ct, tc.name), func(t *testing.T) {
+				want := new(big.Int).ModInverse(tc.alpha, new(big.Int).Mul(tc.p, tc.q))
+				got := ringPedersenBeta(tc.alpha, tc.p, tc.q)
+				assert.Zero(t, want.Cmp(got), "beta must match math/big ModInverse")
+				if !tc.checkFixture {
+					return
+				}
+				assert.Zero(t, pp.Beta.Cmp(got), "beta must equal the stored fixture Beta")
+				// h1 is a square mod NTildei, so ord(h1) divides p*q and
+				// h2^beta = h1^(alpha*beta) = h1.
+				h1 := common.ModInt(pp.NTildei).Exp(pp.H2i, got)
+				assert.Zero(t, pp.H1i.Cmp(h1), "h1 must equal h2^beta mod NTildei")
+			})
+		}
+	}
 }

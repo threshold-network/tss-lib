@@ -123,19 +123,9 @@ consumer:
 	modNTildeI := common.ModInt(NTildei)
 
 	p, q := sgps[0].Prime(), sgps[1].Prime()
-	modPQ := common.ModInt(new(big.Int).Mul(p, q))
 	f1 := common.GetRandomPositiveRelativelyPrimeInt(NTildei)
 	alpha := common.GetRandomPositiveRelativelyPrimeInt(NTildei)
-	// beta = alpha^-1 mod (p*q) is the secret ring-Pedersen trapdoor pair;
-	// compute it in constant time when CT ops are enabled (modulus p*q is
-	// odd, phi = (p-1)*(q-1) is the group exponent).
-	var beta *big.Int
-	if common.IsConstantTimeEnabled() {
-		phiPQ := new(big.Int).Mul(new(big.Int).Sub(p, big.NewInt(1)), new(big.Int).Sub(q, big.NewInt(1)))
-		beta = common.NewCTModIntWithPhi(new(big.Int).Mul(p, q), phiPQ).ModInverseCT(alpha)
-	} else {
-		beta = modPQ.ModInverse(alpha)
-	}
+	beta := ringPedersenBeta(alpha, p, q)
 	h1i := modNTildeI.Mul(f1, f1)
 	var h2i *big.Int
 	if common.IsConstantTimeEnabled() {
@@ -158,4 +148,17 @@ consumer:
 		Q:          q,
 	}
 	return preParams, nil
+}
+
+// ringPedersenBeta returns beta = alpha^-1 mod (p*q). alpha and beta are the
+// secret ring-Pedersen trapdoor pair, so the inverse runs in constant time
+// when CT ops are enabled (the modulus p*q is odd and phi = (p-1)*(q-1) is
+// its group exponent).
+func ringPedersenBeta(alpha, p, q *big.Int) *big.Int {
+	pq := new(big.Int).Mul(p, q)
+	if common.IsConstantTimeEnabled() {
+		phiPQ := new(big.Int).Mul(new(big.Int).Sub(p, big.NewInt(1)), new(big.Int).Sub(q, big.NewInt(1)))
+		return common.NewCTModIntWithPhi(pq, phiPQ).ModInverseCT(alpha)
+	}
+	return common.ModInt(pq).ModInverse(alpha)
 }
