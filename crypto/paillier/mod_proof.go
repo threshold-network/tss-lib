@@ -2,7 +2,6 @@ package paillier
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"math/big"
 
@@ -13,10 +12,6 @@ const (
 	PARAM_M             = 80 // ZKP iterations
 	fsDomainTagModProof = "tss-lib.threshold.modproof"
 )
-
-// errModulusCeiling distinguishes the shared width-ceiling rejection in
-// package tests without making error text or a new exported API contractual.
-var errModulusCeiling = errors.New("unknown-order modulus exceeds the shared ceiling")
 
 func fsSessionModProof(session []byte) []byte {
 	return append([]byte(fsDomainTagModProof+"|"), session...)
@@ -68,6 +63,9 @@ func (privateKey *PrivateKey) ModProof(session ...[]byte) *ModProof {
 	// wipe below is deferred so it also runs if a later step aborts.
 	ctx := newModProofCTContext(p, q, N, phiN, invN, useCT)
 	defer ctx.wipeExponentEncodings()
+	if modProofTestHook != nil {
+		modProofTestHook(ctx)
+	}
 
 	for i, y_i := range y {
 		a_i, b_i, x_i := ctx.defineXi(w, y_i, p, q, N)
@@ -106,15 +104,8 @@ func (pf ModProof) ModVerify(N *big.Int, session ...[]byte) (bool, error) {
 		return false, fmt.Errorf("mod proof verify: nil inputs in proof")
 	}
 
-	// Width policy: reject a caller-supplied modulus wider than the shared
-	// ceiling before IsUsableUnknownOrderModulus's ProbablyPrime call, the
-	// sampler and any per-candidate exponentiation is run against it.
-	if common.ExceedsUnknownOrderModulusCeiling(N) {
-		return false, fmt.Errorf("mod proof verify: modulus bit length %d exceeds maximum %d: %w", N.BitLen(), common.MaxUnknownOrderModulusBitLen, errModulusCeiling)
-	}
-
 	if !common.IsUsableUnknownOrderModulus(N, common.MinUnknownOrderModulusBitLen) {
-		return false, fmt.Errorf("mod proof verify: invalid modulus %d", N)
+		return false, fmt.Errorf("mod proof verify: invalid modulus (bit length %d)", N.BitLen())
 	}
 
 	if !common.Gt(pf.W, zero) || !common.Lt(pf.W, N) {
@@ -218,6 +209,10 @@ func sampleYModN(tag []byte, N *big.Int, inputs ...*big.Int) *big.Int {
 		}
 	}
 }
+
+// modProofTestHook lets a test observe the context ModProof creates, after
+// the deferred wipe is registered. It is nil outside tests.
+var modProofTestHook func(*modProofCTContext)
 
 // modProofCTContext is the precomputed state ModProof shares across all
 // PARAM_M iterations: the p, q and N modular contexts, the key's

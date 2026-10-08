@@ -9,6 +9,7 @@ package mta
 import (
 	"crypto/elliptic"
 	"errors"
+	"fmt"
 	"math/big"
 
 	"github.com/bnb-chain/tss-lib/common"
@@ -47,13 +48,6 @@ func BobMid(
 		return
 	}
 	q := ec.Params().N
-	// b is the MtA scalar this party contributes; it must be a curve-order
-	// scalar, which is also the public width the bounded homomorphic variant
-	// below is only safe with.
-	if b == nil || b.Cmp(zero) == -1 || b.Cmp(q) != -1 {
-		err = errors.New("BobMid: b outside the curve-order domain")
-		return
-	}
 	q5 := new(big.Int).Mul(q, q)
 	q5 = new(big.Int).Mul(q5, q5)
 	q5 = new(big.Int).Mul(q5, q)
@@ -62,11 +56,12 @@ func BobMid(
 	if err != nil {
 		return
 	}
-	// b < q is a public bound narrower than the Paillier modulus: use the
-	// bounded variant so the constant-time exponentiation pads to that width
-	// instead of the wider modulus width.
-	cB, err = pkA.HomoMultWithBitLen(b, cA, q.BitLen())
+	// b is the MtA scalar this party contributes, a curve-order scalar.
+	// HomoMultBounded rejects b outside [0, q) and pads the constant-time
+	// exponent to q's width instead of the wider Paillier modulus width.
+	cB, err = pkA.HomoMultBounded(b, cA, q)
 	if err != nil {
+		err = fmt.Errorf("BobMid: HomoMultBounded: %w", err)
 		return
 	}
 	cB, err = pkA.HomoAdd(cB, cBetaPrm)
@@ -91,13 +86,6 @@ func BobMidWC(
 		return
 	}
 	q := ec.Params().N
-	// b is the MtA scalar this party contributes; it must be a curve-order
-	// scalar, which is also the public width the bounded homomorphic variant
-	// below is only safe with.
-	if b == nil || b.Cmp(zero) == -1 || b.Cmp(q) != -1 {
-		err = errors.New("BobMidWC: b outside the curve-order domain")
-		return
-	}
 	q5 := new(big.Int).Mul(q, q)
 	q5 = new(big.Int).Mul(q5, q5)
 	q5 = new(big.Int).Mul(q5, q)
@@ -106,11 +94,12 @@ func BobMidWC(
 	if err != nil {
 		return
 	}
-	// b < q is a public bound narrower than the Paillier modulus: use the
-	// bounded variant so the constant-time exponentiation pads to that width
-	// instead of the wider modulus width.
-	cB, err = pkA.HomoMultWithBitLen(b, cA, q.BitLen())
+	// b is the MtA scalar this party contributes, a curve-order scalar.
+	// HomoMultBounded rejects b outside [0, q) and pads the constant-time
+	// exponent to q's width instead of the wider Paillier modulus width.
+	cB, err = pkA.HomoMultBounded(b, cA, q)
 	if err != nil {
+		err = fmt.Errorf("BobMidWC: HomoMultBounded: %w", err)
 		return
 	}
 	cB, err = pkA.HomoAdd(cB, cBetaPrm)

@@ -7,6 +7,8 @@
 package ckd_test
 
 import (
+	"bytes"
+	"crypto/ecdsa"
 	"crypto/elliptic"
 	"math/big"
 	"testing"
@@ -165,36 +167,15 @@ tests:
 	}
 }
 
-// koblitzShim mimics a non-btcec secp256k1 elliptic.Curve implementation:
-// it carries the secp256k1 domain parameters but is a distinct concrete type,
-// and its IsOnCurve always reports failure so that stdlib point decoding
-// silently yields nil coordinates.
+// koblitzShim is a non-btcec elliptic.Curve value with the secp256k1 domain
+// parameters. Its IsOnCurve always reports failure, so the stdlib point
+// decoding path would reject every key.
 type koblitzShim struct {
-	inner *btcec.KoblitzCurve
+	elliptic.Curve
 }
 
-func (c koblitzShim) Params() *elliptic.CurveParams {
-	return c.inner.Params()
-}
-
-func (c koblitzShim) IsOnCurve(x, y *big.Int) bool {
+func (koblitzShim) IsOnCurve(x, y *big.Int) bool {
 	return false
-}
-
-func (c koblitzShim) Add(x1, y1, x2, y2 *big.Int) (*big.Int, *big.Int) {
-	return c.inner.Add(x1, y1, x2, y2)
-}
-
-func (c koblitzShim) Double(x1, y1 *big.Int) (*big.Int, *big.Int) {
-	return c.inner.Double(x1, y1)
-}
-
-func (c koblitzShim) ScalarMult(x1, y1 *big.Int, k []byte) (*big.Int, *big.Int) {
-	return c.inner.ScalarMult(x1, y1, k)
-}
-
-func (c koblitzShim) ScalarBaseMult(k []byte) (*big.Int, *big.Int) {
-	return c.inner.ScalarBaseMult(k)
 }
 
 // TestNewExtendedKeyFromStringParsesByCurveParameters covers a non-btcec
@@ -204,7 +185,7 @@ func (c koblitzShim) ScalarBaseMult(k []byte) (*big.Int, *big.Int) {
 func TestNewExtendedKeyFromStringParsesByCurveParameters(t *testing.T) {
 	const master = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8"
 	inner := btcec.S256()
-	shim := koblitzShim{inner: inner}
+	shim := koblitzShim{Curve: inner}
 
 	key, err := NewExtendedKeyFromString(master, &shim)
 	if err != nil {
@@ -224,43 +205,45 @@ func TestNewExtendedKeyFromStringParsesByCurveParameters(t *testing.T) {
 	}
 }
 
-// unparseableCurve is a non-secp256k1 elliptic.Curve whose 33-byte key data
-// cannot be decoded into a point on the curve.
-type unparseableCurve struct{}
-
-func (c unparseableCurve) Params() *elliptic.CurveParams {
-	// P-521 parameters: no BIP-32 secp256k1 key data is a valid P-521 point.
-	return elliptic.P521().Params()
-}
-
-func (c unparseableCurve) IsOnCurve(x, y *big.Int) bool {
-	return false
-}
-
-func (c unparseableCurve) Add(x1, y1, x2, y2 *big.Int) (*big.Int, *big.Int) {
-	return elliptic.P521().Add(x1, y1, x2, y2)
-}
-
-func (c unparseableCurve) Double(x1, y1 *big.Int) (*big.Int, *big.Int) {
-	return elliptic.P521().Double(x1, y1)
-}
-
-func (c unparseableCurve) ScalarMult(x1, y1 *big.Int, k []byte) (*big.Int, *big.Int) {
-	return elliptic.P521().ScalarMult(x1, y1, k)
-}
-
-func (c unparseableCurve) ScalarBaseMult(k []byte) (*big.Int, *big.Int) {
-	return elliptic.P521().ScalarBaseMult(k)
-}
-
 // TestNewExtendedKeyFromStringRejectsUnparseableCurve covers a curve that
-// cannot decode the key data: the function must return an error instead of a
-// key with nil coordinates.
+// cannot decode the key data: 33 bytes is not a compressed P-521 point, so
+// the function must return an error instead of a key with nil coordinates.
 func TestNewExtendedKeyFromStringRejectsUnparseableCurve(t *testing.T) {
 	const master = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8"
 
-	_, err := NewExtendedKeyFromString(master, unparseableCurve{})
+	_, err := NewExtendedKeyFromString(master, elliptic.P521())
 	if err == nil {
 		t.Fatal("NewExtendedKeyFromString must fail when the curve cannot parse the key data")
+	}
+}
+
+// TestNewExtendedKeyFromStringRoundTripsP256 covers the non-secp256k1 parse
+// path with a curve that fits the 33-byte compressed key field: a P-256 key
+// serialized by String must parse back to the same point.
+func TestNewExtendedKeyFromStringRoundTripsP256(t *testing.T) {
+	curve := elliptic.P256()
+	x, y := curve.ScalarBaseMult(big.NewInt(0x5eed).Bytes())
+	key := &ExtendedKey{
+		PublicKey:  ecdsa.PublicKey{Curve: curve, X: x, Y: y},
+		Depth:      1,
+		ChildIndex: 7,
+		ChainCode:  bytes.Repeat([]byte{0x42}, 32),
+		ParentFP:   []byte{1, 2, 3, 4},
+		Version:    []byte{0x04, 0x88, 0xb2, 0x1e},
+	}
+	encoded := key.String()
+
+	parsed, err := NewExtendedKeyFromString(encoded, curve)
+	if err != nil {
+		t.Fatalf("NewExtendedKeyFromString on a P-256 key: %v", err)
+	}
+	if parsed.X.Cmp(x) != 0 || parsed.Y.Cmp(y) != 0 {
+		t.Fatal("parsed P-256 key does not match the serialized point")
+	}
+	if parsed.Curve != curve {
+		t.Fatal("parsed key did not retain the supplied curve instance")
+	}
+	if parsed.String() != encoded {
+		t.Fatal("parsed P-256 key does not serialize back to the same string")
 	}
 }

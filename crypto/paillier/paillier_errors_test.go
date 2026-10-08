@@ -274,47 +274,55 @@ func TestRangeGuardsRejectOutOfDomainInputs(t *testing.T) {
 	}
 }
 
-// TestHomoMultWithBitLenRejectsWideMessages pins the extra gate of
-// HomoMultWithBitLen: a caller-supplied public bit bound below the message
-// width is rejected with ErrMessageTooLong even though the message is still
-// inside the modulus domain, a non-usable bound width is rejected, and a
-// wide enough bound still computes.
-func TestHomoMultWithBitLenRejectsWideMessages(t *testing.T) {
+// TestHomoMultBoundedEnforcesPublicBound pins the HomoMultBounded contract
+// MtA relies on: the caller's public bound must be a usable padding target
+// (positive and at most N), the secret multiplier must sit in [0, bound), and
+// a multiplier at the top of that range gives the same ciphertext with the
+// constant-time padding as the variable-time HomoMult.
+func TestHomoMultBoundedEnforcesPublicBound(t *testing.T) {
 	_, pk, err := loadFixturePaillierKey(0)
 	require.NoError(t, err)
 	N2 := pk.NSquare()
-	// A message inside [0, N) but wider than the tight bound below.
-	wideMsg := new(big.Int).Lsh(one, uint(pk.N.BitLen()-1))
-	// A canonical ciphertext operand for the positive control.
+	// A 256-bit public bound, the shape of a curve order.
+	bound := new(big.Int).Sub(new(big.Int).Lsh(one, 256), big.NewInt(189))
+	top := new(big.Int).Sub(bound, one)
 	cValid, err := pk.Encrypt(big.NewInt(3))
 	require.NoError(t, err)
 
 	for _, ct := range []bool{true, false} {
 		setPaillierCTTestMode(t, ct)
 		t.Run("rejects_"+modeName(ct), func(t *testing.T) {
-			// A non-usable bound width (<= 0) is rejected before the
-			// message is considered.
-			for _, bitLen := range []int{0, -1} {
-				_, err := pk.HomoMultWithBitLen(big.NewInt(3), cValid, bitLen)
-				assert.ErrorIs(t, err, ErrMessageTooLong, "bitLen=%d, ct=%v", bitLen, ct)
+			for name, b := range map[string]*big.Int{
+				"nil":     nil,
+				"zero":    big.NewInt(0),
+				"neg":     big.NewInt(-1),
+				"above_N": new(big.Int).Add(pk.N, one),
+			} {
+				_, err := pk.HomoMultBounded(big.NewInt(3), cValid, b)
+				assert.ErrorIs(t, err, ErrInvalidBound, "bound=%s, ct=%v", name, ct)
 			}
-			// A bound below the message width is rejected even though the
-			// message is still < N.
-			_, err := pk.HomoMultWithBitLen(wideMsg, cValid, wideMsg.BitLen()-1)
-			assert.ErrorIs(t, err, ErrMessageTooLong, "ct=%v", ct)
-			// A public bound at or above the message width is a usable
-			// padding target in both modes and must not be rejected.
-			_, err = pk.HomoMultWithBitLen(big.NewInt(3), cValid, 400)
+			for name, m := range map[string]*big.Int{
+				"nil":      nil,
+				"neg":      big.NewInt(-1),
+				"at_bound": bound,
+			} {
+				_, err := pk.HomoMultBounded(m, cValid, bound)
+				assert.ErrorIs(t, err, ErrMessageTooLong, "m=%s, ct=%v", name, ct)
+			}
+			// bound = N is the plaintext domain and stays usable.
+			_, err := pk.HomoMultBounded(big.NewInt(3), cValid, pk.N)
 			require.NoError(t, err, "ct=%v", ct)
-			// And the result agrees with the plain HomoMult for the same
-			// operands (CONTRACT: same validation and result), staying in
-			// [0, N^2).
-			plain, err := pk.HomoMult(big.NewInt(3), cValid)
-			require.NoError(t, err)
-			got, err := pk.HomoMultWithBitLen(big.NewInt(3), cValid, 400)
-			require.NoError(t, err)
-			assert.Equal(t, 0, got.Cmp(plain), "results must agree, ct=%v", ct)
-			assert.True(t, plain.Sign() >= 0 && plain.Cmp(N2) < 0, "result must stay in [0, N^2), ct=%v", ct)
 		})
 	}
+
+	// m = bound-1 has the full padded width; the padded constant-time
+	// result must match the unpadded variable-time HomoMult.
+	setPaillierCTTestMode(t, false)
+	want, err := pk.HomoMult(top, cValid)
+	require.NoError(t, err)
+	setPaillierCTTestMode(t, true)
+	got, err := pk.HomoMultBounded(top, cValid, bound)
+	require.NoError(t, err)
+	assert.Equal(t, 0, got.Cmp(want), "padded constant-time result must match HomoMult")
+	assert.True(t, got.Sign() >= 0 && got.Cmp(N2) < 0, "result must stay in [0, N^2)")
 }

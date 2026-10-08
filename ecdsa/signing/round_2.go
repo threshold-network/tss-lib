@@ -8,6 +8,8 @@ package signing
 
 import (
 	"errors"
+	"fmt"
+	"math/big"
 	"sync"
 
 	errorspkg "github.com/pkg/errors"
@@ -23,6 +25,22 @@ func (round *round2) Start() *tss.Error {
 	round.number = 2
 	round.started = true
 	round.resetOK()
+
+	// gamma and w are this party's own MtA inputs. Check them once here, so a
+	// bad local value fails the round with no culprits instead of being
+	// blamed on every peer by the BobMid/BobMidWC calls below.
+	q := round.Parameters.EC().Params().N
+	for _, witness := range []struct {
+		name  string
+		value *big.Int
+	}{
+		{"gamma", round.temp.gamma},
+		{"w", round.temp.w},
+	} {
+		if witness.value == nil || witness.value.Sign() < 0 || witness.value.Cmp(q) >= 0 {
+			return round.WrapError(fmt.Errorf("local %s outside the curve-order domain", witness.name))
+		}
+	}
 
 	i := round.PartyID().Index
 	round.ok[i] = true

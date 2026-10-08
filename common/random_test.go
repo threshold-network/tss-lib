@@ -81,3 +81,38 @@ func TestGetRandomPrimeIntRejectsEmptyDomain(t *testing.T) {
 		assert.True(t, prime.ProbablyPrime(50))
 	}
 }
+
+// TestSamplersReturnNilAboveCap pins the sampler width contract: a limit
+// wider than the 5000-bit MustGetRandomInt cap gives nil instead of a panic,
+// so callers that check for nil can return an error to their caller. A
+// limit at exactly the cap still samples.
+func TestSamplersReturnNilAboveCap(t *testing.T) {
+	const capBits = 5000
+	atCap := new(big.Int).Lsh(big.NewInt(1), capBits-1)
+	atCap.Add(atCap, big.NewInt(1)) // odd, exactly capBits bits
+	aboveCap := new(big.Int).Lsh(big.NewInt(1), capBits)
+	aboveCap.Add(aboveCap, big.NewInt(1)) // odd, capBits+1 bits
+
+	samplers := map[string]func(*big.Int) *big.Int{
+		"GetRandomPositiveInt":                    common.GetRandomPositiveInt,
+		"GetRandomPositiveRelativelyPrimeInt":     common.GetRandomPositiveRelativelyPrimeInt,
+		"GetRandomGeneratorOfTheQuadraticResidue": common.GetRandomGeneratorOfTheQuadraticResidue,
+		"GetRandomInt":                            common.GetRandomInt,
+	}
+	for name, sample := range samplers {
+		t.Run(name, func(t *testing.T) {
+			assert.NotPanics(t, func() {
+				assert.Nil(t, sample(aboveCap), "limit above the cap must give nil")
+			})
+		})
+	}
+	// GetRandomInt samples below 2*limit-1, so its widest usable limit is
+	// one bit narrower than the cap.
+	assert.Nil(t, common.GetRandomInt(atCap))
+	assert.NotNil(t, common.GetRandomInt(new(big.Int).Rsh(atCap, 1)))
+	assert.Nil(t, common.GetRandomIntIn2PowerRange(capBits))
+	assert.Nil(t, common.GetRandomIntIn2PowerMulRange(capBits-10, big.NewInt(1<<20)))
+
+	assert.NotNil(t, common.GetRandomPositiveInt(atCap))
+	assert.NotNil(t, common.GetRandomPositiveRelativelyPrimeInt(atCap))
+}

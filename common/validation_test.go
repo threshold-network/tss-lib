@@ -77,7 +77,6 @@ func TestIsUsableUnknownOrderModulusCeilingFirst(t *testing.T) {
 	wide := oddCompositeAtBits(common.MaxUnknownOrderModulusBitLen + 1)
 	require.Equal(t, common.MaxUnknownOrderModulusBitLen+1, wide.BitLen())
 	require.Equal(t, uint(1), wide.Bit(0))
-	require.True(t, common.ExceedsUnknownOrderModulusCeiling(wide))
 	// Without the width check this composite would be reported usable; the
 	// width rejection is the whole point.
 	require.False(t, common.IsUsableUnknownOrderModulus(wide, common.MinUnknownOrderModulusBitLen),
@@ -85,33 +84,10 @@ func TestIsUsableUnknownOrderModulusCeilingFirst(t *testing.T) {
 
 	atCeiling := oddCompositeAtBits(common.MaxUnknownOrderModulusBitLen)
 	require.Equal(t, common.MaxUnknownOrderModulusBitLen, atCeiling.BitLen())
-	require.False(t, common.ExceedsUnknownOrderModulusCeiling(atCeiling),
-		"a modulus at exactly the ceiling must not exceed it")
 	// The width check is inclusive: the 65536-bit composite still passes
 	// width and is accepted on its (composite) order.
 	require.True(t, common.IsUsableUnknownOrderModulus(atCeiling, common.MinUnknownOrderModulusBitLen),
 		"65536-bit odd composite must stay usable")
-}
-
-func TestExceedsUnknownOrderModulusCeiling(t *testing.T) {
-	max := common.MaxUnknownOrderModulusBitLen
-	cases := []struct {
-		name string
-		N    *big.Int
-		want bool
-	}{
-		{"nil", nil, false},
-		{"small_odd", big.NewInt(1025), false},
-		{"odd_one_below_ceiling", oddCompositeAtBits(max - 1), false},
-		{"odd_at_ceiling", oddCompositeAtBits(max), false},
-		{"odd_one_past_ceiling", oddCompositeAtBits(max + 1), true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, common.ExceedsUnknownOrderModulusCeiling(tc.N),
-				"ExceedsUnknownOrderModulusCeiling")
-		})
-	}
 }
 
 func TestIsCanonicalGenerator(t *testing.T) {

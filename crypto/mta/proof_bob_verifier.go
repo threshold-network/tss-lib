@@ -41,9 +41,7 @@ func (pf *ProofBobWC) verify(
 	} else if !pf.ProofBob.ValidateBasic() {
 		return false
 	}
-	// Shared modulus/generator/ciphertext preamble: width ceiling before
-	// IsUsableUnknownOrderModulus's ProbablyPrime call, then canonical
-	// generators, then canonical ciphertexts. Preserves exact check order.
+	// Shared modulus/generator/ciphertext preamble.
 	if !validateVerifierParams(pk, NTilde, h1, h2, c1, c2) {
 		return false
 	}
@@ -321,22 +319,14 @@ func bobProofChallenge(
 }
 
 // validateVerifierParams is the shared modulus/generator/ciphertext preamble
-// of this package's unknown-order verifiers. It preserves the exact check
-// order: width ceiling before IsUsableUnknownOrderModulus's ProbablyPrime
-// call, then canonical generators, then canonical ciphertext checks.
+// of this package's unknown-order verifiers: usable moduli, then canonical
+// generators, then canonical ciphertexts.
 // All moduli and generators must be non-nil.
 func validateVerifierParams(
 	pk *paillier.PublicKey,
 	NTilde, h1, h2 *big.Int,
 	ciphertexts ...*big.Int,
 ) bool {
-	// Width policy: reject caller-supplied moduli wider than the shared
-	// ceiling before IsUsableUnknownOrderModulus's ProbablyPrime call or
-	// any modulus-sized work is performed against them.
-	if common.ExceedsUnknownOrderModulusCeiling(pk.N) ||
-		common.ExceedsUnknownOrderModulusCeiling(NTilde) {
-		return false
-	}
 	if !common.IsUsableUnknownOrderModulus(pk.N, common.MinUnknownOrderModulusBitLen) ||
 		!common.IsUsableUnknownOrderModulus(NTilde, common.MinUnknownOrderModulusBitLen) {
 		return false

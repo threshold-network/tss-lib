@@ -22,8 +22,8 @@ import (
 )
 
 // TestMtaModulusPolicy pins the shared unknown-order modulus policy of
-// validateVerifierParams (width ceiling first, then
-// common.IsUsableUnknownOrderModulus: odd, >= 2048 bits, composite) on all
+// validateVerifierParams (common.IsUsableUnknownOrderModulus: odd, between
+// 2048 and MaxUnknownOrderModulusBitLen bits, composite) on all
 // three MtA verifier entry points: ProofBob.Verify, ProofBobWC.Verify and
 // RangeProofAlice.Verify.
 //
@@ -34,8 +34,7 @@ import (
 //   - a 2047-bit odd composite: rejected by the width floor
 //     (2047 < MinUnknownOrderModulusBitLen);
 //   - a 65537-bit odd composite: rejected by the width ceiling
-//     (65537 > MaxUnknownOrderModulusBitLen, checked before any
-//     modulus-sized work);
+//     (65537 > MaxUnknownOrderModulusBitLen);
 //   - an even 2048-bit value: rejected by the parity check.
 //
 // For NTilde the same shape is repeated: a 2047-bit odd composite above
@@ -50,10 +49,6 @@ import (
 // fixture values, the 2047-bit NTilde row is rejected only by the
 // IsUsableUnknownOrderModulus width floor, so deleting that call from
 // validateVerifierParams flips that row to accepted and fails this test.
-// Deleting the width ceiling call alone is behavior-preserving:
-// IsUsableUnknownOrderModulus re-checks the ceiling internally (pinned by
-// common's validation tests); the ceiling call's observable role is to
-// reject past-ceiling inputs before any modulus-sized work runs.
 func TestMtaModulusPolicy(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
@@ -148,8 +143,6 @@ func runMtaModulusPolicy(t *testing.T) {
 		"even 2048-bit value must fail the parity check")
 	require.False(t, common.IsUsableUnknownOrderModulus(evenTilde, common.MinUnknownOrderModulusBitLen),
 		"even 2048-bit value must fail the parity check")
-	require.True(t, common.ExceedsUnknownOrderModulusCeiling(pastCeiling),
-		"65537-bit value must exceed the width ceiling")
 
 	// Build the valid fixture proofs. x and y are small in-domain
 	// witnesses; c2 is the MtA-shaped ciphertext c1^x * G^y * r^N mod N^2.

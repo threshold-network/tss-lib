@@ -55,15 +55,10 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 	if pk.N == nil || pk.N.Cmp(one) <= 0 {
 		return nil, errors.New("ProveRangeAlice: invalid Paillier modulus N")
 	}
-	// Reject degenerate or over-wide moduli before any sampling or
-	// exponentiation runs against them: an even NTilde makes the
-	// constant-time modular context panic, and a limit wider than the
-	// sampler's cap panics the random samplers below.
+	// Reject a degenerate NTilde before any exponentiation runs against it:
+	// an even NTilde makes the constant-time modular context panic.
 	if NTilde.Cmp(one) <= 0 || NTilde.Bit(0) == 0 {
 		return nil, errors.New("ProveRangeAlice: invalid auxiliary modulus N-tilde")
-	}
-	if NTilde.BitLen() > randomSamplerBitCap || pk.N.BitLen() > randomSamplerBitCap {
-		return nil, errors.New("ProveRangeAlice: modulus width exceeds the random sampler cap")
 	}
 
 	q := ec.Params().N
@@ -83,22 +78,18 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 
 	// 1.
 	alpha := common.GetRandomPositiveInt(q3)
-	if alpha == nil {
-		return nil, errors.New("ProveRangeAlice: could not sample randomness")
-	}
 	// 2.
 	beta := common.GetRandomPositiveRelativelyPrimeInt(pk.N)
-	if beta == nil {
-		return nil, errors.New("ProveRangeAlice: could not sample randomness")
-	}
 
 	// 3.
 	gamma := common.GetRandomPositiveInt(q3NTilde)
 
 	// 4.
 	rho := common.GetRandomPositiveInt(qNTilde)
-	if gamma == nil || rho == nil {
-		return nil, errors.New("ProveRangeAlice: could not sample randomness")
+	// The samplers return nil when a limit is wider than their cap, which
+	// a wide caller-supplied NTilde or N can cause.
+	if alpha == nil || beta == nil || gamma == nil || rho == nil {
+		return nil, errors.New("ProveRangeAlice: could not sample randomness (modulus too wide?)")
 	}
 
 	// 5.
@@ -165,9 +156,7 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 		NTilde == nil || h1 == nil || h2 == nil || c == nil {
 		return false
 	}
-	// Shared modulus/generator/ciphertext preamble: width ceiling before
-	// IsUsableUnknownOrderModulus's ProbablyPrime call, then canonical
-	// generators, then canonical ciphertext. Preserves exact check order.
+	// Shared modulus/generator/ciphertext preamble.
 	if !validateVerifierParams(pk, NTilde, h1, h2, c) {
 		return false
 	}

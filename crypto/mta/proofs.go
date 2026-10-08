@@ -20,12 +20,6 @@ import (
 const (
 	ProofBobBytesParts   = 10
 	ProofBobWCBytesParts = 12
-
-	// randomSamplerBitCap mirrors the random sampler cap in common/random.go:
-	// the sampler panics on limits wider than this, so the provers reject
-	// such moduli up front instead of letting the panic escape the
-	// exported API.
-	randomSamplerBitCap = 5000
 )
 
 type (
@@ -49,15 +43,10 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 	if pk.N == nil || pk.N.Cmp(one) <= 0 {
 		return nil, errors.New("ProveBob: invalid Paillier modulus N")
 	}
-	// Reject degenerate or over-wide moduli before any sampling or
-	// exponentiation runs against them: an even NTilde makes the
-	// constant-time modular context panic, and a limit wider than the
-	// sampler's cap panics the random samplers below.
+	// Reject a degenerate NTilde before any exponentiation runs against it:
+	// an even NTilde makes the constant-time modular context panic.
 	if NTilde.Cmp(one) <= 0 || NTilde.Bit(0) == 0 {
 		return nil, errors.New("ProveBob: invalid auxiliary modulus N-tilde")
-	}
-	if NTilde.BitLen() > randomSamplerBitCap || pk.N.BitLen() > randomSamplerBitCap {
-		return nil, errors.New("ProveBob: modulus width exceeds the random sampler cap")
 	}
 	if X != nil && !X.ValidateBasic() {
 		return nil, errors.New("ProveBob: invalid with-check point X")
@@ -103,21 +92,12 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 	} else {
 		tau = common.GetRandomPositiveInt(q3NTilde)
 	}
-	if alpha == nil || rho == nil || sigma == nil || tau == nil {
-		return nil, errors.New("ProveBob: could not sample randomness")
-	}
 
 	// 3.
 	rhoPrm := common.GetRandomPositiveInt(q3NTilde)
-	if rhoPrm == nil {
-		return nil, errors.New("ProveBob: could not sample randomness")
-	}
 
 	// 4.
 	beta := common.GetRandomPositiveRelativelyPrimeInt(pk.N)
-	if beta == nil {
-		return nil, errors.New("ProveBob: could not sample randomness")
-	}
 	var gamma *big.Int
 	if Session == nil {
 		// The historical 2e712689 prover samples gamma as a unit modulo the
@@ -127,8 +107,10 @@ func ProveBobWC(ec elliptic.Curve, pk *paillier.PublicKey, NTilde, h1, h2, c1, c
 	} else {
 		gamma = common.GetRandomPositiveInt(q7)
 	}
-	if gamma == nil {
-		return nil, errors.New("ProveBob: could not sample randomness")
+	// The samplers return nil when a limit is wider than their cap, which
+	// a wide caller-supplied NTilde or N can cause.
+	if alpha == nil || rho == nil || sigma == nil || tau == nil || rhoPrm == nil || beta == nil || gamma == nil {
+		return nil, errors.New("ProveBob: could not sample randomness (modulus too wide?)")
 	}
 
 	// 5.

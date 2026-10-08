@@ -28,13 +28,13 @@ const (
 	MaxUnknownOrderModulusBitLen = 65536
 )
 
-// ExceedsUnknownOrderModulusCeiling reports whether N is wider than
-// MaxUnknownOrderModulusBitLen. It is a constant-time width check (no
-// primality work, no modulus-sized allocation) that exported unknown-order
-// verifiers use to reject oversized caller-supplied moduli before
-// IsUsableUnknownOrderModulus's ProbablyPrime call or any other
-// modulus-sized work runs against them.
-func ExceedsUnknownOrderModulusCeiling(N *big.Int) bool {
+// exceedsUnknownOrderModulusCeiling reports whether N is wider than
+// MaxUnknownOrderModulusBitLen. It is an O(1) width check on public data
+// (no primality work, no modulus-sized allocation).
+// IsUsableUnknownOrderModulus runs it before its ProbablyPrime call, so an
+// oversized caller-supplied modulus is rejected before any modulus-sized
+// work runs against it; verifiers need no separate width check.
+func exceedsUnknownOrderModulusCeiling(N *big.Int) bool {
 	return N != nil && N.BitLen() > MaxUnknownOrderModulusBitLen
 }
 
@@ -42,13 +42,12 @@ func ExceedsUnknownOrderModulusCeiling(N *big.Int) bool {
 // unknown-order modulus for the exported verifiers: positive, odd, at least
 // minBitLen bits, not wider than MaxUnknownOrderModulusBitLen, and composite
 // (it fails the probabilistic primality test). The width checks run before
-// the ProbablyPrime call so
-// oversized inputs are rejected with no modulus-sized work.
+// the ProbablyPrime call (see exceedsUnknownOrderModulusCeiling).
 func IsUsableUnknownOrderModulus(N *big.Int, minBitLen int) bool {
 	if N == nil || N.Sign() != 1 || N.Bit(0) != 1 {
 		return false
 	}
-	if ExceedsUnknownOrderModulusCeiling(N) || N.BitLen() < minBitLen {
+	if exceedsUnknownOrderModulusCeiling(N) || N.BitLen() < minBitLen {
 		return false
 	}
 	return !N.ProbablyPrime(primalityRounds)

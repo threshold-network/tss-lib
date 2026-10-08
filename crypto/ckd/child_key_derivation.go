@@ -115,8 +115,9 @@ func NewExtendedKeyFromString(key string, curve elliptic.Curve) (*ExtendedKey, e
 		pubKey = *pk.ToECDSA()
 		pubKey.Curve = curve
 	} else {
-		px, py := elliptic.Unmarshal(curve, keyData)
-		// elliptic.Unmarshal reports an undecodable point as nil
+		// keyData is the 33-byte compressed point, so decode it as one.
+		px, py := elliptic.UnmarshalCompressed(curve, keyData)
+		// elliptic.UnmarshalCompressed reports an undecodable point as nil
 		// coordinates; fail closed instead of returning a key with nil X/Y.
 		if px == nil || py == nil {
 			return nil, errors.New("invalid extended key: cannot decode public key")

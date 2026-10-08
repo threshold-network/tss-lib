@@ -36,9 +36,9 @@ func evenAtBits(bitLen int) *big.Int {
 }
 
 // hasWidthPolicyError reports whether err is one of the shared
-// width-policy rejections FactorVerify returns: the modulus-width ceiling
-// ("exceeds maximum") or the usability floor/parity/composite check
-// ("invalid Paillier modulus" / "invalid auxiliary modulus"). A width-
+// width-policy rejections FactorVerify returns: the usability
+// floor/ceiling/parity/composite check ("invalid Paillier modulus" /
+// "invalid auxiliary modulus"). A width-
 // valid 2048-bit odd composite is rejected downstream (generators,
 // equations), so a negative assert against this helper proves the width
 // policy itself did not fire.
@@ -47,8 +47,7 @@ func hasWidthPolicyError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "exceeds maximum") ||
-		strings.Contains(msg, "invalid Paillier modulus") ||
+	return strings.Contains(msg, "invalid Paillier modulus") ||
 		strings.Contains(msg, "invalid auxiliary modulus")
 }
 
@@ -96,7 +95,7 @@ func TestFactorVerifyModulusPolicySwaps(t *testing.T) {
 			name:      "paillier_65537bit_odd_composite_rejected",
 			pkN:       oddCompositeAtBits(common.MaxUnknownOrderModulusBitLen + 1),
 			N:         auxPrime.N,
-			errSubstr: "exceeds maximum",
+			errSubstr: "invalid Paillier modulus",
 		},
 		{
 			name:      "paillier_even_rejected",
@@ -119,7 +118,7 @@ func TestFactorVerifyModulusPolicySwaps(t *testing.T) {
 			name:      "aux_65537bit_odd_composite_rejected",
 			pkN:       publicKey.N,
 			N:         oddCompositeAtBits(common.MaxUnknownOrderModulusBitLen + 1),
-			errSubstr: "exceeds maximum",
+			errSubstr: "invalid auxiliary modulus",
 		},
 		{
 			name:      "aux_even_rejected",

@@ -54,6 +54,9 @@ type (
 var (
 	ErrMessageTooLong   = fmt.Errorf("the message is too large or < 0")
 	ErrMessageMalFormed = fmt.Errorf("the message is mal-formed")
+	// ErrInvalidBound is returned when the public bound passed to
+	// HomoMultBounded is nil, not positive or greater than N.
+	ErrInvalidBound = errors.New("paillier: multiplier bound must be positive and at most N")
 
 	zero = big.NewInt(0)
 	one  = big.NewInt(1)
@@ -162,24 +165,24 @@ func (publicKey *PublicKey) Encrypt(m *big.Int) (c *big.Int, err error) {
 	return
 }
 
-// HomoMultWithBitLen returns c1^m mod N^2, an encryption of m times c1's
+// HomoMultBounded returns c1^m mod N^2, an encryption of m times c1's
 // plaintext. m is a secret scalar in the MtA protocol, so the exponent is
-// evaluated in constant time; bitLen is a public upper bound on m's bit
-// length that the caller guarantees, never m's own size. In constant-time
-// mode the exponent is padded to exactly bitLen. It returns
-// ErrMessageTooLong when bitLen < 1, bitLen > N.BitLen(), m < 0, m >= N,
-// m.BitLen() > bitLen, or c1 is outside [0, N^2).
-func (publicKey *PublicKey) HomoMultWithBitLen(m, c1 *big.Int, bitLen int) (*big.Int, error) {
+// evaluated in constant time when constant-time operations are enabled.
+// bound is a public exclusive upper bound on m that the caller guarantees,
+// never derived from m itself; when constant-time operations are enabled the
+// exponent is padded to bound.BitLen() bits. It returns:
+//   - ErrInvalidModulus when N is nil, even or not greater than one;
+//   - ErrInvalidBound when bound is nil, not positive or greater than N;
+//   - ErrMessageTooLong when m is nil or outside [0, bound), or c1 is
+//     outside [0, N^2).
+func (publicKey *PublicKey) HomoMultBounded(m, c1, bound *big.Int) (*big.Int, error) {
 	if err := checkPaillierModulus(publicKey.N); err != nil {
 		return nil, err
 	}
-	if bitLen < 1 || bitLen > publicKey.N.BitLen() {
-		return nil, ErrMessageTooLong
+	if bound == nil || bound.Sign() <= 0 || bound.Cmp(publicKey.N) > 0 {
+		return nil, ErrInvalidBound
 	}
-	if m.Cmp(zero) == -1 || m.Cmp(publicKey.N) != -1 { // m < 0 || m >= N ?
-		return nil, ErrMessageTooLong
-	}
-	if m.BitLen() > bitLen {
+	if m == nil || m.Sign() < 0 || m.Cmp(bound) >= 0 { // m < 0 || m >= bound ?
 		return nil, ErrMessageTooLong
 	}
 	st := publicKey.paillierPublicStateFor()
@@ -194,27 +197,27 @@ func (publicKey *PublicKey) HomoMultWithBitLen(m, c1 *big.Int, bitLen int) (*big
 	if common.IsConstantTimeEnabled() {
 		// SECURITY: m is the secret scalar multiplier used as the exponent;
 		// exponentiate in constant time (N2 is odd). The guards above prove
-		// c1 is canonical modulo N2 (0 <= c1 < N2) and bound m to the
-		// caller's public bitLen, so the exponent is padded to bitLen
-		// rather than the full modulus width; the N2 context is reused
+		// c1 is canonical modulo N2 (0 <= c1 < N2) and bound m below the
+		// caller's public bound, so the exponent is padded to the bound's
+		// width rather than the full modulus width; the N2 context is reused
 		// across calls on this key.
 		ctN2, err := st.ctN2(publicKey)
 		if err != nil {
 			return nil, err
 		}
-		return ctN2.ExpCTCanonicalWithBitLen(c1, m, bitLen), nil
+		return ctN2.ExpCTCanonicalWithBitLen(c1, m, bound.BitLen()), nil
 	}
 	return common.ModInt(N2).Exp(c1, m), nil
 }
 
-// HomoMult is HomoMultWithBitLen with bitLen = N.BitLen(), the public
-// bound implied by m < N. The modulus is checked first, so a nil or
-// degenerate N returns ErrInvalidModulus before N.BitLen() is read.
+// HomoMult is HomoMultBounded with bound = N, the plaintext domain. It
+// returns the same errors; the modulus is checked first, so a nil or
+// degenerate N returns ErrInvalidModulus.
 func (publicKey *PublicKey) HomoMult(m, c1 *big.Int) (*big.Int, error) {
 	if err := checkPaillierModulus(publicKey.N); err != nil {
 		return nil, err
 	}
-	return publicKey.HomoMultWithBitLen(m, c1, publicKey.N.BitLen())
+	return publicKey.HomoMultBounded(m, c1, publicKey.N)
 }
 
 func (publicKey *PublicKey) HomoAdd(c1, c2 *big.Int) (*big.Int, error) {
@@ -339,12 +342,6 @@ func (pf Proof) Verify(pkN, k *big.Int, ecdsaPub *crypto2.ECPoint) (bool, error)
 		return false, nil
 	}
 	if k.Sign() < 0 {
-		return false, nil
-	}
-	// Width policy: reject a caller-supplied modulus wider than the shared
-	// ceiling before IsUsableUnknownOrderModulus's ProbablyPrime call or any
-	// modulus-sized work is run against it.
-	if common.ExceedsUnknownOrderModulusCeiling(pkN) {
 		return false, nil
 	}
 	if !common.IsUsableUnknownOrderModulus(pkN, common.MinUnknownOrderModulusBitLen) {
