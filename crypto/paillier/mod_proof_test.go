@@ -1,27 +1,21 @@
 package paillier
 
 import (
-	"context"
+	"crypto/rand"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
+// modSetUp shares the package-level fixture loaded by setUp: the
+// pre-generated 2048-bit Paillier key pair from test/_ecdsa_fixtures.
 func modSetUp(t *testing.T) {
-	if privateKey != nil && publicKey != nil {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	var err error
-	privateKey, publicKey, err = GenerateKeyPair(ctx, testPaillierKeyLength)
-	assert.NoError(t, err)
+	setUp(t)
 }
 
 func TestModProofVerify(t *testing.T) {
@@ -171,10 +165,14 @@ func TestModProofVerify_ForgedProof(t *testing.T) {
 	assert.False(t, res, "proof verify result must be false")
 }
 
+// TestModProofVerify_AttackMod checks a forged proof for a modulus with
+// many prime factors: N = P * Q_1 * ... * Q_7. The forged w is 1 mod P and
+// 0 mod every Q_i, so it shares a factor with N. P is a large prime chosen
+// so that N is at least 2048 bits; this way the width floor does not reject
+// N first and the proof reaches the Jacobi check on w.
 func TestModProofVerify_AttackMod(t *testing.T) {
 	session := []byte("mod-proof-attack-session")
 
-	P := mustSetString("11956161572522965463")
 	Q := []*big.Int{
 		mustSetString("2495927741"),
 		mustSetString("3726287311"),
@@ -184,18 +182,33 @@ func TestModProofVerify_AttackMod(t *testing.T) {
 		mustSetString("2316427879"),
 		mustSetString("3704490329"),
 	}
-
-	N := new(big.Int).Set(P)
+	bigQ := new(big.Int).Set(one)
 	for _, q := range Q {
-		N.Mul(N, q)
+		bigQ.Mul(bigQ, q)
 	}
+	// P = 7 mod 8, like the original attack prime, so (P+1)/8 is an integer.
+	pBits := common.MinUnknownOrderModulusBitLen - bigQ.BitLen() + 1
+	var P *big.Int
+	for {
+		var err error
+		P, err = rand.Prime(rand.Reader, pBits)
+		require.NoError(t, err)
+		if new(big.Int).And(P, big.NewInt(7)).Int64() == 7 {
+			break
+		}
+	}
+	N := new(big.Int).Mul(P, bigQ)
+	require.GreaterOrEqual(t, N.BitLen(), common.MinUnknownOrderModulusBitLen)
+	require.True(t, common.IsUsableUnknownOrderModulus(N, common.MinUnknownOrderModulusBitLen),
+		"the attack modulus must pass the modulus policy")
 
 	proof, err := newHackedModProof(session, N, P, Q)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	ok, err := proof.ModVerify(N, session)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.False(t, ok, "false proof should not verify")
+	assert.Contains(t, err.Error(), "jacobi", "the forged w must be rejected by the Jacobi check")
 }
 
 func newHackedModProof(session []byte, N, P *big.Int, Q []*big.Int) (*ModProof, error) {
@@ -283,19 +296,67 @@ func TestModSqrt(t *testing.T) {
 	// 37^2 = 1369 = 60 mod 77
 
 	// 60^2 = 3600 = 58 mod 77
-	// 37^4 = 58 mod 77
+	// 37^4 = 58 mod 77. The context's QR predicate and fourth root must
+	// agree with the math/big reference in both the plain and the
+	// constant-time context; the context's mode is fixed at construction.
+	p, q, N := b(7), b(11), b(77)
+	phiN := new(big.Int).Mul(new(big.Int).Sub(p, one), new(big.Int).Sub(q, one))
+	invN := new(big.Int).ModInverse(N, phiN)
+	require.NotNil(t, invN, "the 7*11 modulus must admit N^(-1) mod phiN")
 
-	// 59 = 3 (mod 7) which is not a residue
-	// 59 = 4 (mod 11)
+	ctxOff := newModProofCTContext(p, q, N, phiN, invN, false)
 
-	assert.True(isQuadResidueModPrime(b(58), b(7)))
-	assert.True(isQuadResidueModPrime(b(58), b(11)))
+	assert.True(ctxOff.isQuadResidueModPrime(b(58), p, nil, ctxOff.psP, nil))
+	assert.True(ctxOff.isQuadResidueModPrime(b(58), q, nil, ctxOff.psQ, nil))
 
-	assert.False(isQuadResidueModPrime(b(59), b(7)))
-	assert.True(isQuadResidueModPrime(b(59), b(11)))
+	assert.False(ctxOff.isQuadResidueModPrime(b(59), p, nil, ctxOff.psP, nil))
+	assert.True(ctxOff.isQuadResidueModPrime(b(59), q, nil, ctxOff.psQ, nil))
 
-	assert.True(isQuadResidueModComposite(b(58), b(7), b(11)))
-	assert.False(isQuadResidueModComposite(b(59), b(7), b(11)))
+	assert.True(ctxOff.isQuadResidueModComposite(b(58), b(7), b(11)))
+	assert.False(ctxOff.isQuadResidueModComposite(b(59), b(7), b(11)))
 
-	assert.Equal(b(37), quadResidueModComposite(b(58), b(7), b(11), b(77), b(60)))
+	assert.Equal(b(37), ctxOff.fourthRoot(b(58), b(77)))
+	ctxOn := newModProofCTContext(p, q, N, phiN, invN, true)
+
+	assert.True(ctxOn.isQuadResidueModPrime(b(58), p, ctxOn.ctP, ctxOn.psP, ctxOn.psPExp))
+	assert.True(ctxOn.isQuadResidueModPrime(b(58), q, ctxOn.ctQ, ctxOn.psQ, ctxOn.psQExp))
+
+	assert.False(ctxOn.isQuadResidueModPrime(b(59), p, ctxOn.ctP, ctxOn.psP, ctxOn.psPExp))
+	assert.True(ctxOn.isQuadResidueModPrime(b(59), q, ctxOn.ctQ, ctxOn.psQ, ctxOn.psQExp))
+
+	assert.True(ctxOn.isQuadResidueModComposite(b(58), b(7), b(11)))
+	assert.False(ctxOn.isQuadResidueModComposite(b(59), b(7), b(11)))
+
+	assert.Equal(b(37), ctxOn.fourthRoot(b(58), b(77)))
+}
+
+// TestModProofVerifyModulusBitLenCeilingBehavior tests the end-to-end ModVerify
+// wiring: an odd modulus just past the ceiling (passing simple parity and
+// minimum-size guards) is rejected at the modulus gate, before the proof
+// members are checked. Without the width ceiling the 65537-bit composite
+// would pass the gate and fail a later proof-member check instead.
+func TestModProofVerifyModulusBitLenCeilingBehavior(t *testing.T) {
+	proof := minimalModProof()
+
+	// Odd modulus one bit past the ceiling: 2^65536 + 1.
+	// Clears the odd parity check and minimum bit length floor.
+	pastCeiling := new(big.Int).Lsh(one, uint(common.MaxUnknownOrderModulusBitLen))
+	pastCeiling.Add(pastCeiling, one)
+	require.Equal(t, common.MaxUnknownOrderModulusBitLen+1, pastCeiling.BitLen())
+	require.Equal(t, uint(1), pastCeiling.Bit(0), "must be odd")
+
+	ok, err := proof.ModVerify(pastCeiling)
+	assert.False(t, ok)
+	require.Error(t, err)
+	assert.True(t, strings.HasPrefix(err.Error(), "mod proof verify: invalid modulus"),
+		"must reject at the modulus gate")
+}
+
+// minimalModProof builds a ModProof that clears per-member nil checks.
+func minimalModProof() *ModProof {
+	proof := &ModProof{W: big.NewInt(2)}
+	for i := range proof.X {
+		proof.X[i], proof.Z[i] = big.NewInt(7), big.NewInt(5)
+	}
+	return proof
 }

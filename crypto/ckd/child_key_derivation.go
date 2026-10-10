@@ -16,8 +16,8 @@ import (
 
 	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto"
-	"github.com/btcsuite/btcd/btcec"
-	"github.com/btcsuite/btcutil/base58"
+	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcutil/base58"
 	"golang.org/x/crypto/ripemd160"
 )
 
@@ -105,16 +105,23 @@ func NewExtendedKeyFromString(key string, curve elliptic.Curve) (*ExtendedKey, e
 
 	var pubKey ecdsa.PublicKey
 
-	if c, ok := curve.(*btcec.KoblitzCurve); ok {
+	if crypto.SameCurve(curve, btcec.S256()) {
 		// Ensure the public key parses correctly and is actually on the
 		// secp256k1 curve.
-		pk, err := btcec.ParsePubKey(keyData, c)
+		pk, err := btcec.ParsePubKey(keyData)
 		if err != nil {
 			return nil, err
 		}
-		pubKey = ecdsa.PublicKey(*pk)
+		pubKey = *pk.ToECDSA()
+		pubKey.Curve = curve
 	} else {
-		px, py := elliptic.Unmarshal(curve, keyData)
+		// keyData is the 33-byte compressed point, so decode it as one.
+		px, py := elliptic.UnmarshalCompressed(curve, keyData)
+		// elliptic.UnmarshalCompressed reports an undecodable point as nil
+		// coordinates; fail closed instead of returning a key with nil X/Y.
+		if px == nil || py == nil {
+			return nil, errors.New("invalid extended key: cannot decode public key")
+		}
 		pubKey = ecdsa.PublicKey{
 			Curve: curve,
 			X:     px,

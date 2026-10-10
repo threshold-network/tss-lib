@@ -27,6 +27,79 @@ const (
 	testPaillierKeyLength = 2048
 )
 
+func TestLegacyBobChallengesMatchHistoricalTranscript(t *testing.T) {
+	q := tss.EC().Params().N
+	pk := &paillier.PublicKey{N: big.NewInt(17)}
+	c1 := big.NewInt(19)
+	c2 := big.NewInt(23)
+	z := big.NewInt(29)
+	zPrime := big.NewInt(31)
+	transcriptT := big.NewInt(37)
+	v := big.NewInt(41)
+	w := big.NewInt(43)
+
+	expected := common.HashToN(
+		q,
+		append(pk.AsInts(), c1, c2, z, zPrime, transcriptT, v, w)...,
+	)
+	actual := bobProofChallenge(
+		nil,
+		q,
+		pk,
+		big.NewInt(47),
+		big.NewInt(53),
+		big.NewInt(59),
+		c1,
+		c2,
+		nil,
+		nil,
+		z,
+		zPrime,
+		transcriptT,
+		v,
+		w,
+	)
+	assert.Equal(t, 0, expected.Cmp(actual))
+
+	x := crypto.ScalarBaseMult(tss.EC(), big.NewInt(2))
+	u := crypto.ScalarBaseMult(tss.EC(), big.NewInt(3))
+	expectedWithCheck := common.HashToN(
+		q,
+		append(
+			pk.AsInts(),
+			x.X(),
+			x.Y(),
+			c1,
+			c2,
+			u.X(),
+			u.Y(),
+			z,
+			zPrime,
+			transcriptT,
+			v,
+			w,
+		)...,
+	)
+	actualWithCheck := bobProofChallenge(
+		nil,
+		q,
+		pk,
+		big.NewInt(47),
+		big.NewInt(53),
+		big.NewInt(59),
+		c1,
+		c2,
+		x,
+		u,
+		z,
+		zPrime,
+		transcriptT,
+		v,
+		w,
+	)
+	assert.Equal(t, 0, expectedWithCheck.Cmp(actualWithCheck))
+}
+
 func TestShareProtocol(t *testing.T) {
 	q := tss.EC().Params().N
 
@@ -61,10 +134,7 @@ func TestShareProtocol(t *testing.T) {
 }
 
 func TestProofBobSessionBinding(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	sk, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	sk, pk, err := loadPaillierKeyFixture(3)
 	assert.NoError(t, err)
 
 	q := tss.EC().Params().N
@@ -93,10 +163,7 @@ func TestProofBobSessionBinding(t *testing.T) {
 func TestShareProtocolWC(t *testing.T) {
 	q := tss.EC().Params().N
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	sk, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	sk, pk, err := loadPaillierKeyFixture(4)
 	assert.NoError(t, err)
 
 	a := common.GetRandomPositiveInt(q)
@@ -129,11 +196,11 @@ func TestShareProtocolWC(t *testing.T) {
 
 	badS2 := cloneProofBobWC(pfB)
 	badS2.S2 = new(big.Int).Set(tooLargeBlind)
-	assert.False(t, badS2.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "overwide S2 must fail before exponentiation")
+	assert.False(t, badS2.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "S2 above the 2*q^3*NTilde bound must be rejected")
 
 	badT2 := cloneProofBobWC(pfB)
 	badT2.T2 = new(big.Int).Set(tooLargeBlind)
-	assert.False(t, badT2.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "overwide T2 must fail before exponentiation")
+	assert.False(t, badT2.Verify(tss.EC(), pk, NTildei, h1i, h2i, cA, cB, gBPoint), "T2 above the 2*q^3*NTilde bound must be rejected")
 
 	badV := cloneProofBobWC(pfB)
 	badV.V = big.NewInt(0)
@@ -153,10 +220,7 @@ func TestShareProtocolWC(t *testing.T) {
 }
 
 func TestProofBobWCSessionBinding(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	sk, pk, err := paillier.GenerateKeyPair(ctx, testPaillierKeyLength)
+	sk, pk, err := loadPaillierKeyFixture(5)
 	assert.NoError(t, err)
 
 	q := tss.EC().Params().N

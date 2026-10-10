@@ -8,11 +8,12 @@ package signing
 
 import (
 	"errors"
+	"fmt"
+	"math/big"
 	"sync"
 
 	errorspkg "github.com/pkg/errors"
 
-	"github.com/bnb-chain/tss-lib/common"
 	"github.com/bnb-chain/tss-lib/crypto/mta"
 	"github.com/bnb-chain/tss-lib/tss"
 )
@@ -25,13 +26,28 @@ func (round *round2) Start() *tss.Error {
 	round.started = true
 	round.resetOK()
 
+	// gamma and w are this party's own MtA inputs. Check them once here, so a
+	// bad local value fails the round with no culprits instead of being
+	// blamed on every peer by the BobMid/BobMidWC calls below.
+	q := round.Parameters.EC().Params().N
+	for _, witness := range []struct {
+		name  string
+		value *big.Int
+	}{
+		{"gamma", round.temp.gamma},
+		{"w", round.temp.w},
+	} {
+		if witness.value == nil || witness.value.Sign() < 0 || witness.value.Cmp(q) >= 0 {
+			return round.WrapError(fmt.Errorf("local %s outside the curve-order domain", witness.name))
+		}
+	}
+
 	i := round.PartyID().Index
 	round.ok[i] = true
 
 	errChs := make(chan *tss.Error, (len(round.Parties().IDs())-1)*2)
 	wg := sync.WaitGroup{}
 	wg.Add((len(round.Parties().IDs()) - 1) * 2)
-	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 	attributeBobMidErr := func(err error, Pj *tss.PartyID) *tss.Error {
 		if errors.Is(err, mta.ErrRangeProofVerify) {
 			return round.WrapError(errorspkg.Wrap(err, "peer RangeProofAlice rejected"), Pj)
@@ -63,7 +79,7 @@ func (round *round2) Start() *tss.Error {
 				round.key.NTildej[i],
 				round.key.H1j[i],
 				round.key.H2j[i],
-				contextI)
+				round.proofContext(i)...)
 			// should be thread safe as these are pre-allocated
 			round.temp.betas[j] = beta
 			round.temp.c1jis[j] = c1ji
@@ -94,7 +110,7 @@ func (round *round2) Start() *tss.Error {
 				round.key.H1j[i],
 				round.key.H2j[i],
 				round.temp.bigWs[i],
-				contextI)
+				round.proofContext(i)...)
 			round.temp.vs[j] = v
 			round.temp.c2jis[j] = c2ji
 			round.temp.pi2jis[j] = pi2ji

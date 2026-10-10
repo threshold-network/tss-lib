@@ -31,11 +31,11 @@ type (
 
 		keys keygen.LocalPartySaveData
 		temp localTempData
-		data common.SignatureData
+		data *common.SignatureData
 
 		// outbound messaging
 		out chan<- tss.Message
-		end chan<- common.SignatureData
+		end chan<- *common.SignatureData
 	}
 
 	localMessageStore struct {
@@ -98,35 +98,53 @@ type (
 	}
 )
 
+// NewLocalParty returns a local signing party for the GG20 protocol. It is
+// NewLocalPartyWithKDD without a key derivation delta.
+//
+// Panics under the same conditions as NewLocalPartyWithKDD.
 func NewLocalParty(
 	msg *big.Int,
 	params *tss.Parameters,
 	key keygen.LocalPartySaveData,
 	out chan<- tss.Message,
-	end chan<- common.SignatureData,
+	end chan<- *common.SignatureData,
 	fullBytesLen ...int,
 ) tss.Party {
 	return NewLocalPartyWithKDD(msg, params, key, nil, out, end, fullBytesLen...)
 }
 
 // NewLocalPartyWithKDD returns a party with key derivation delta for HD support.
+// The message and the keyDerivationDelta are copied so later caller mutations
+// cannot change this party's signing context.
 //
 // fullBytesLen fixes the byte width used to encode the message for the final
 // ECDSA verification/output path (preserving leading zero bytes). Every signer
-// in a ceremony must pass the same value. It must be positive, no larger than
-// the curve order byte length, and at least ceil(msg.BitLen()/8); violating
-// these constraints is a caller bug and the constructor panics at the call site
-// rather than later inside a protocol goroutine.
+// in a ceremony must pass the same value.
+//
+// Panics:
+//   - if fullBytesLen is not passed exactly once;
+//   - if fullBytesLen is not positive;
+//   - if fullBytesLen is smaller than ceil(msg.BitLen()/8);
+//   - if params is nil or has no curve order;
+//   - if fullBytesLen is larger than the curve order byte length;
+//   - if no protocol mode was selected on params;
+//   - if the protocol mode is legacy and a session nonce was set;
+//   - if key has a nil party key, or a signer in params has no PartyID
+//     content or is not in key (see keygen.BuildLocalSaveDataSubset).
+//
+// The panic happens synchronously at the call site rather than later inside
+// a protocol goroutine.
 func NewLocalPartyWithKDD(
 	msg *big.Int,
 	params *tss.Parameters,
 	key keygen.LocalPartySaveData,
 	keyDerivationDelta *big.Int,
 	out chan<- tss.Message,
-	end chan<- common.SignatureData,
+	end chan<- *common.SignatureData,
 	fullBytesLen ...int,
 ) tss.Party {
 	validatedFullBytesLen := validateFullBytesLen("NewLocalPartyWithKDD", msg, params, fullBytesLen)
+	params.FreezeProtocolMode()
 
 	partyCount := len(params.Parties().IDs())
 	p := &LocalParty{
@@ -134,7 +152,7 @@ func NewLocalPartyWithKDD(
 		params:    params,
 		keys:      keygen.BuildLocalSaveDataSubset(key, params.Parties().IDs()),
 		temp:      localTempData{},
-		data:      common.SignatureData{},
+		data:      &common.SignatureData{},
 		out:       out,
 		end:       end,
 	}
@@ -150,8 +168,14 @@ func NewLocalPartyWithKDD(
 	p.temp.signRound8Messages = make([]tss.ParsedMessage, partyCount)
 	p.temp.signRound9Messages = make([]tss.ParsedMessage, partyCount)
 	// temp data init
-	p.temp.keyDerivationDelta = keyDerivationDelta
-	p.temp.m = msg
+	// Copy the delta so caller mutation of the shared *big.Int cannot change
+	// this party's signing context between construction and Start.
+	if keyDerivationDelta != nil {
+		p.temp.keyDerivationDelta = new(big.Int).Set(keyDerivationDelta)
+	}
+	if msg != nil {
+		p.temp.m = new(big.Int).Set(msg)
+	}
 	p.temp.fullBytesLen = validatedFullBytesLen
 	p.temp.cis = make([]*big.Int, partyCount)
 	p.temp.bigWs = make([]*crypto.ECPoint, partyCount)
@@ -187,7 +211,7 @@ func validateFullBytesLen(caller string, msg *big.Int, params *tss.Parameters, f
 }
 
 func (p *LocalParty) FirstRound() tss.Round {
-	return newRound1(p.params, &p.keys, &p.data, &p.temp, p.out, p.end)
+	return newRound1(p.params, &p.keys, p.data, &p.temp, p.out, p.end)
 }
 
 func (p *LocalParty) Start() *tss.Error {

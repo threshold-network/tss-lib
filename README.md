@@ -34,6 +34,9 @@ In contrast to MultiSig solutions, transactions produced by TSS preserve the pri
 There is also a performance bonus in that blockchain nodes may check the validity of a signature without any extra MultiSig logic or processing.
 
 ## Usage
+
+Go 1.25.7 or newer is required. Development and CI use Go 1.26.8, as specified by the `toolchain` directive in `go.mod`.
+
 You should start by creating an instance of a `LocalParty` and giving it the arguments that it needs.
 
 The `LocalParty` that you use should be from the `keygen` or `signing` package depending on what you want to do.
@@ -52,25 +55,35 @@ parties := tss.SortPartyIDs(getParticipantPartyIDs())
 // The `id` should be a unique string representing this party in the network and `moniker` can be anything (even left blank).
 // The `uniqueKey` is a unique identifying key for this peer (such as its p2p public key) as a big.Int.
 thisParty := tss.NewPartyID(id, moniker, uniqueKey)
-ctx := tss.NewPeerContext(parties)
-
 // Select an elliptic curve.
 curve := tss.S256()
 
-params := tss.NewParameters(curve, ctx, thisParty, len(parties), threshold)
-
 // You should keep a local mapping of `id` strings to `*PartyID` instances so that an incoming message can have its origin party's `*PartyID` recovered for passing to `UpdateFromBytes` (see below)
-partyIDMap := make(map[string]*PartyID)
+partyIDMap := make(map[string]*tss.PartyID)
 for _, id := range parties {
     partyIDMap[id.Id] = id
 }
 ```
+Each keygen and each signing ceremony gets its own `tss.NewParameters(...)` value
+with its own session nonce: keygen uses the full peer set, signing uses the `t+1`
+signers' `PeerContext`. The protocol mode and session nonce freeze when the first
+local party is constructed from a `Parameters` value, and the setters panic
+afterwards, so a `Parameters` built for one ceremony must not be reused for another.
+For the legacy mixed-binary rollout procedure, see "How to use this securely" below.
 
 ### Keygen
 Use the `keygen.LocalParty` for the keygen protocol. The save data you receive through the `endCh` upon completion of the protocol should be persisted to secure storage.
 
 ```go
-party := keygen.NewLocalParty(params, outCh, endCh, preParams) // Omit the last arg to compute the pre-params in round 1
+ctx := tss.NewPeerContext(parties)
+params := tss.NewParameters(curve, ctx, thisParty, len(parties), threshold)
+// New ceremonies must select a protocol mode and bind a per-ceremony session
+// ID before constructing a local party; the mode and nonce are frozen at
+// construction.
+params.SetProtocolMode(tss.ProtocolModeSecurityV2)
+params.SetSessionNonceBytes([]byte(keygenSessionID)) // high-entropy, >=16 bytes, unique to this keygen ceremony
+endCh := make(chan keygen.LocalPartySaveData, 1)
+party := keygen.NewLocalParty(params, outCh, endCh, *preParams) // Omit the last arg to compute the pre-params in round 1
 go func() {
     err := party.Start()
     // handle err ...
@@ -78,11 +91,19 @@ go func() {
 ```
 
 ### Signing
-Use the `signing.LocalParty` for signing and provide it with a `message` to sign. It requires the key data obtained from the keygen protocol. The signature will be sent through the `endCh` once completed.
+Use the `signing.LocalParty` for signing and provide it with a `message` to sign. It requires the key data obtained from the keygen protocol. The signature will be sent through the `endCh` (a `chan *common.SignatureData`) once completed; the receiver owns the delivered value.
 
 Please note that `t+1` signers are required to sign a message and for optimal usage no more than this should be involved. Each signer should have the same view of who the `t+1` signers are.
 
 ```go
+// Signing builds its own Parameters over the t+1 signers and its own session
+// nonce; the keygen ceremony's Parameters and nonce are not reused.
+signers := tss.SortPartyIDs(getSignerPartyIDs()) // the t+1 signers, agreed out-of-band
+signerCtx := tss.NewPeerContext(signers)
+params := tss.NewParameters(curve, signerCtx, thisParty, len(signers), threshold)
+params.SetProtocolMode(tss.ProtocolModeSecurityV2)
+params.SetSessionNonceBytes([]byte(signingSessionID)) // high-entropy, >=16 bytes, unique to this signing ceremony
+endCh := make(chan *common.SignatureData, 1)
 fullBytesLen := (params.EC().Params().N.BitLen() + 7) / 8
 party := signing.NewLocalParty(message, params, ourKeyData, outCh, endCh, fullBytesLen)
 go func() {
@@ -126,21 +147,76 @@ When you build a transport, it should offer a broadcast channel as well as point
 
 Within your transport, each message should be wrapped with a **session ID** that is unique to a single run of the keygen or signing rounds. This session ID should be agreed upon out-of-band and known only by the participating parties before the rounds begin. Upon receiving any message, your program should make sure that the received session ID matches the one that was agreed upon at the start.
 
-The same session ID should be bound into the protocol parameters before constructing local parties:
+The proof-transcript mode must be selected explicitly before constructing an
+ECDSA keygen or signing party. New ceremonies should use the session-bound
+security-v2 mode and bind the same session ID into the protocol parameters:
 
 ```go
 params := tss.NewParameters(curve, ctx, thisParty, len(parties), threshold)
+params.SetProtocolMode(tss.ProtocolModeSecurityV2)
 params.SetSessionNonceBytes([]byte(sessionID))
 ```
 
-All parties in the run must use the same high-entropy session ID of at least 16 bytes, and it must be unique to the ceremony. Keygen and signing fail closed if no session nonce is set; reusing a session ID across otherwise identical ceremonies reintroduces transcript-splicing risk.
+All parties in the run must use the same high-entropy session ID of at least 16 bytes, and it must be unique to the ceremony. Security-v2 keygen and signing fail closed at `Start` if no session nonce is set; legacy parties must leave it unset, and setting one panics at party construction. Reusing a session ID across otherwise identical ceremonies reintroduces transcript-splicing risk.
+
+`ProtocolModeLegacy` exists only for coordinated compatibility with peers that
+use the historical untagged GG20 transcript. A ceremony must be homogeneous:
+legacy and security-v2 parties cannot interoperate. The selected mode is frozen
+when the local party is constructed and cannot change while the protocol is in
+flight.
+Mixed-binary legacy rollout: while not every peer has been upgraded to this
+version, select `ProtocolModeLegacy`, call
+`params.SetLegacyHistoricalBobCompatibility(true)` before constructing the
+local party, and leave the session nonce unset. Without this rollout-only
+opt-in the default tighter Bob/BobWC verification can reject the historical
+`y < N` proofs that pre-upgrade peers produce. Once every peer is upgraded,
+stop calling `SetLegacyHistoricalBobCompatibility` (or pass `false` only while still
+in `ProtocolModeLegacy`, before the local party is constructed — any call, `true`
+or `false`, panics outside legacy mode), then coordinate the cutover to
+`ProtocolModeSecurityV2` with a shared per-ceremony session ID.
+
+Security-v2 ECDSA signing binds both the message integer and `fullBytesLen`
+into the signing SSID. All signers must agree on the message and its byte width
+before constructing their parties. Signing constructors copy the message integer
+in both modes, so later caller mutations do not alter the party's message.
+This changes the security-v2 proof transcript:
+deploy and activate this version together across every signer in a ceremony.
+Security-v2 signers from before and after this change cannot interoperate.
+Legacy transcript bytes remain unchanged.
+
+The low-level proof APIs follow the same unambiguous split. The historical
+generic APIs (`NewZKProof`, `NewZKVProof`, and their `Verify` methods) call the
+exact historical `HashToN` challenge directly, so no session argument selects a
+transcript. The `WithSession` counterparts are security-v2-only, require a
+non-empty session, and never interpret nil or an empty slice as legacy. DLN,
+MtA range/Bob/BobWC, ModProof, and FactorProof retain their source-compatible
+optional session argument: omitting the argument is legacy, while supplying
+one requires a non-empty value and selects the tagged transcript. The legacy
+Bob/BobWC path also restores the historical `tau` and relatively-prime
+Paillier `gamma` sampling ranges; security-v2 retains its hardened `q^3*N-tilde`
+and `q^7` ranges.
+
+The checked-in bidirectional compatibility oracle and release test commands
+are:
+
+```sh
+./testdata/legacy_transcript/verify.sh
+./testdata/legacy_transcript/verify_mixed_interop.sh
+go test ./crypto/schnorr ./ecdsa/signing -count=20 -timeout=60m
+go test ./... -count=1 -timeout=60m
+```
+
+The keygen package alone takes over ten minutes per run because it generates
+safe primes, so it runs once in the full suite rather than in the repeated set.
+Slower builders may need a longer `-timeout`; keep the package list and repeat
+count unchanged.
 
 Additionally, there should be a mechanism in your transport to allow for "reliable broadcasts", meaning parties can broadcast a message to other parties such that it's guaranteed that each one receives the same message. There are several examples of algorithms online that do this by sharing and comparing hashes of received messages.
 
 Timeouts and errors should be handled by your application. The method `WaitingFor` may be called on a `Party` to get the set of other parties that it is still waiting for messages from. You may also get the set of culprit parties that caused an error from a `*tss.Error`.
 
 ## Security Audit
-A full review of this library was carried out by Kudelski Security and their final report was made available in October, 2019. A copy of this report [`audit-binance-tss-lib-final-20191018.pdf`](https://github.com/bnb-chain/tss-lib/releases/download/v1.0.0/audit-binance-tss-lib-final-20191018.pdf) may be found in the v1.0.0 release notes of this repository.
+A full review of this library was carried out by Kudelski Security and their final report was made available in October, 2019. A copy of this report [`audit-binance-tss-lib-final-20191018.pdf`](https://github.com/bnb-chain/tss-lib/releases/download/v1.0.0/audit-binance-tss-lib-final-20191018.pdf) may be found in the v1.0.0 release notes of this repository. That audit predates this fork's changes; the hardening listed in `CHANGELOG.md` has not had an independent audit.
 
 ## References
 \[1\] https://eprint.iacr.org/2019/114.pdf

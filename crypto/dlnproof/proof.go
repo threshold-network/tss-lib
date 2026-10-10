@@ -19,9 +19,8 @@ import (
 )
 
 const (
-	Iterations             = 128
-	verifyMinModulusBitLen = 2048
-	fsDomainTagDLNProof    = "tss-lib.threshold.dlnproof"
+	Iterations          = 128
+	fsDomainTagDLNProof = "tss-lib.threshold.dlnproof"
 )
 
 func fsSessionDLNProof(session []byte) []byte {
@@ -40,23 +39,44 @@ var (
 )
 
 func NewDLNProof(h1, h2, x, p, q, N *big.Int, session ...[]byte) *Proof {
+	useCT := common.IsConstantTimeEnabled()
 	Session := optionalSession(session)
 	pMulQ := new(big.Int).Mul(p, q)
 	modN, modPQ := common.ModInt(N), common.ModInt(pMulQ)
 	a := make([]*big.Int, Iterations)
 	alpha := [Iterations]*big.Int{}
-	for i := range alpha {
-		a[i] = common.GetRandomPositiveInt(pMulQ)
-		alpha[i] = modN.Exp(h1, a[i])
+	if useCT {
+		// SECURITY: h1^a[i] mod N uses the constant-time path (N is odd).
+		ctModN := common.NewCTModInt(N)
+		for i := range alpha {
+			a[i] = common.GetRandomPositiveInt(pMulQ)
+			alpha[i] = ctModN.ExpCT(h1, a[i])
+		}
+	} else {
+		for i := range alpha {
+			a[i] = common.GetRandomPositiveInt(pMulQ)
+			alpha[i] = modN.Exp(h1, a[i])
+		}
 	}
 	msg := append([]*big.Int{h1, h2, N}, alpha[:]...)
-	c := common.SHA512_256i_TAGGED(fsSessionDLNProof(Session), msg...)
+	c := proofChallenge(Session, msg...)
 	t := [Iterations]*big.Int{}
 	cIBI := new(big.Int)
-	for i := range t {
-		cI := c.Bit(i)
-		cIBI = cIBI.SetInt64(int64(cI))
-		t[i] = modPQ.Add(a[i], modPQ.Mul(cIBI, x))
+	if useCT {
+		// SECURITY: x is the secret discrete-log witness; multiply it in constant time
+		// (the modulus p*q is odd).
+		ctModPQ := common.NewCTModInt(pMulQ)
+		for i := range t {
+			cI := c.Bit(i)
+			cIBI = cIBI.SetInt64(int64(cI))
+			t[i] = modPQ.Add(a[i], ctModPQ.MulCT(cIBI, x))
+		}
+	} else {
+		for i := range t {
+			cI := c.Bit(i)
+			cIBI = cIBI.SetInt64(int64(cI))
+			t[i] = modPQ.Add(a[i], modPQ.Mul(cIBI, x))
+		}
 	}
 	return &Proof{alpha, t}
 }
@@ -66,7 +86,7 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 	if p == nil {
 		return false
 	}
-	if !common.IsUsableUnknownOrderModulus(N, verifyMinModulusBitLen) {
+	if !common.IsUsableUnknownOrderModulus(N, common.MinUnknownOrderModulusBitLen) {
 		return false
 	}
 	modN := common.ModInt(N)
@@ -87,7 +107,7 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 		}
 	}
 	msg := append([]*big.Int{h1, h2, N}, p.Alpha[:]...)
-	c := common.SHA512_256i_TAGGED(fsSessionDLNProof(Session), msg...)
+	c := proofChallenge(Session, msg...)
 	cIBI := new(big.Int)
 	for i := 0; i < Iterations; i++ {
 		cI := c.Bit(i)
@@ -100,6 +120,13 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 		}
 	}
 	return true
+}
+
+func proofChallenge(session []byte, values ...*big.Int) *big.Int {
+	if session == nil {
+		return common.SHA512_256i(values...)
+	}
+	return common.SHA512_256i_TAGGED(fsSessionDLNProof(session), values...)
 }
 
 func optionalSession(session [][]byte) []byte {
