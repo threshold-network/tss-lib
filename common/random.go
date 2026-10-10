@@ -35,8 +35,18 @@ func MustGetRandomInt(bits int) *big.Int {
 	return n
 }
 
+// exceedsSamplerCap reports whether limit is wider than the widest value
+// MustGetRandomInt can draw. The samplers below return nil for such limits
+// instead of letting MustGetRandomInt panic.
+func exceedsSamplerCap(limit *big.Int) bool {
+	return limit.BitLen() > mustGetRandomIntMaxBits
+}
+
+// GetRandomPositiveInt returns a random integer in [1, lessThan).
+// It returns nil when lessThan is nil, not greater than 1, or wider than
+// mustGetRandomIntMaxBits bits.
 func GetRandomPositiveInt(lessThan *big.Int) *big.Int {
-	if lessThan == nil || lessThan.Cmp(one) <= 0 {
+	if lessThan == nil || lessThan.Cmp(one) <= 0 || exceedsSamplerCap(lessThan) {
 		return nil
 	}
 	var try *big.Int
@@ -49,8 +59,11 @@ func GetRandomPositiveInt(lessThan *big.Int) *big.Int {
 	return try
 }
 
+// getRandomNonNegativeInt returns a random integer in [0, lessThan).
+// It returns nil when lessThan is nil, not positive, or wider than
+// mustGetRandomIntMaxBits bits.
 func getRandomNonNegativeInt(lessThan *big.Int) *big.Int {
-	if lessThan == nil || lessThan.Sign() <= 0 {
+	if lessThan == nil || lessThan.Sign() <= 0 || exceedsSamplerCap(lessThan) {
 		return nil
 	}
 	var try *big.Int
@@ -64,6 +77,8 @@ func getRandomNonNegativeInt(lessThan *big.Int) *big.Int {
 }
 
 // Sample an integer in range (-limit, limit)
+// Returns nil when limit is nil, not positive, or when 2*limit-1 is wider
+// than mustGetRandomIntMaxBits bits.
 func GetRandomInt(limit *big.Int) *big.Int {
 	if limit == nil || limit.Sign() <= 0 {
 		return nil
@@ -73,10 +88,16 @@ func GetRandomInt(limit *big.Int) *big.Int {
 	// get an integer in [0, 2*limit-1) and subtract limit-1
 	// to get an integer in [-limit+1, limit-1]
 	i := getRandomNonNegativeInt(limitDoubleMinus1)
+	if i == nil {
+		return nil
+	}
 	i = i.Sub(i, limitMinus1)
 	return i
 }
 
+// GetRandomPrimeInt returns a random prime with `bits` bits. If rand.Prime
+// fails, the fallback path returns a prime of at most `bits` bits.
+// It returns nil when bits is less than 2.
 func GetRandomPrimeInt(bits int) *big.Int {
 	if bits < 2 {
 		return nil
@@ -97,8 +118,10 @@ func GetRandomPrimeInt(bits int) *big.Int {
 
 // Generate a random element in the group of all the elements in Z/nZ that
 // has a multiplicative inverse.
+// Returns nil when n is nil, not greater than 1, or wider than
+// mustGetRandomIntMaxBits bits.
 func GetRandomPositiveRelativelyPrimeInt(n *big.Int) *big.Int {
-	if n == nil || n.Cmp(one) <= 0 {
+	if n == nil || n.Cmp(one) <= 0 || exceedsSamplerCap(n) {
 		return nil
 	}
 	var try *big.Int
@@ -120,10 +143,13 @@ func IsNumberInMultiplicativeGroup(n, v *big.Int) bool {
 		gcd.GCD(nil, nil, v, n).Cmp(one) == 0
 }
 
-//	Return a random generator of RQn with high probability.
-//	THIS METHOD ONLY WORKS IF N IS THE PRODUCT OF TWO SAFE PRIMES!
+// Return a random generator of RQn with high probability.
+// THIS METHOD ONLY WORKS IF N IS THE PRODUCT OF TWO SAFE PRIMES!
 //
 // https://github.com/didiercrunch/paillier/blob/d03e8850a8e4c53d04e8016a2ce8762af3278b71/utils.go#L39
+//
+// Returns nil when n is nil, not greater than 1, or wider than
+// mustGetRandomIntMaxBits bits.
 func GetRandomGeneratorOfTheQuadraticResidue(n *big.Int) *big.Int {
 	f := GetRandomPositiveRelativelyPrimeInt(n)
 	if f == nil {
@@ -134,6 +160,7 @@ func GetRandomGeneratorOfTheQuadraticResidue(n *big.Int) *big.Int {
 }
 
 // Sample an integer in range (-2^power, 2^power)
+// Returns nil when the range is wider than the GetRandomInt cap.
 func GetRandomIntIn2PowerRange(power uint) *big.Int {
 	limit := big.NewInt(1)
 	limit.Lsh(limit, power)
@@ -141,6 +168,8 @@ func GetRandomIntIn2PowerRange(power uint) *big.Int {
 }
 
 // Sample an integer in range (-2^power * multiplier, 2^power * multiplier)
+// Returns nil when multiplier is not positive or the range is wider than
+// the GetRandomInt cap.
 func GetRandomIntIn2PowerMulRange(power uint, multiplier *big.Int) *big.Int {
 	limit := big.NewInt(1)
 	limit.Lsh(limit, power)

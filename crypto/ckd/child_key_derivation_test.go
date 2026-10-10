@@ -7,6 +7,10 @@
 package ckd_test
 
 import (
+	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"math/big"
 	"testing"
 
 	. "github.com/bnb-chain/tss-lib/crypto/ckd"
@@ -160,5 +164,86 @@ tests:
 				test.name, pubStr, test.wantPub)
 			continue
 		}
+	}
+}
+
+// koblitzShim is a non-btcec elliptic.Curve value with the secp256k1 domain
+// parameters. Its IsOnCurve always reports failure, so the stdlib point
+// decoding path would reject every key.
+type koblitzShim struct {
+	elliptic.Curve
+}
+
+func (koblitzShim) IsOnCurve(x, y *big.Int) bool {
+	return false
+}
+
+// TestNewExtendedKeyFromStringParsesByCurveParameters covers a non-btcec
+// secp256k1 curve value: the parser must be selected by the curve's domain
+// parameters, so a key that the stdlib decode path would silently mangle (nil
+// coordinates) still parses successfully.
+func TestNewExtendedKeyFromStringParsesByCurveParameters(t *testing.T) {
+	const master = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8"
+	inner := btcec.S256()
+	shim := koblitzShim{Curve: inner}
+
+	key, err := NewExtendedKeyFromString(master, &shim)
+	if err != nil {
+		t.Fatalf("NewExtendedKeyFromString with a secp256k1-parameters shim curve: %v", err)
+	}
+	if key.X == nil || key.Y == nil {
+		t.Fatal("parsed key has nil coordinates on a secp256k1-parameters curve")
+	}
+	if !inner.IsOnCurve(key.X, key.Y) {
+		t.Fatal("parsed key coordinates are not on secp256k1")
+	}
+	if key.Curve != &shim {
+		t.Fatal("parsed key did not retain the supplied curve instance")
+	}
+	if got, want := key.String(), master; got != want {
+		t.Fatalf("parsed key serializes to %q, want %q", got, want)
+	}
+}
+
+// TestNewExtendedKeyFromStringRejectsUnparseableCurve covers a curve that
+// cannot decode the key data: 33 bytes is not a compressed P-521 point, so
+// the function must return an error instead of a key with nil coordinates.
+func TestNewExtendedKeyFromStringRejectsUnparseableCurve(t *testing.T) {
+	const master = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8"
+
+	_, err := NewExtendedKeyFromString(master, elliptic.P521())
+	if err == nil {
+		t.Fatal("NewExtendedKeyFromString must fail when the curve cannot parse the key data")
+	}
+}
+
+// TestNewExtendedKeyFromStringRoundTripsP256 covers the non-secp256k1 parse
+// path with a curve that fits the 33-byte compressed key field: a P-256 key
+// serialized by String must parse back to the same point.
+func TestNewExtendedKeyFromStringRoundTripsP256(t *testing.T) {
+	curve := elliptic.P256()
+	x, y := curve.ScalarBaseMult(big.NewInt(0x5eed).Bytes())
+	key := &ExtendedKey{
+		PublicKey:  ecdsa.PublicKey{Curve: curve, X: x, Y: y},
+		Depth:      1,
+		ChildIndex: 7,
+		ChainCode:  bytes.Repeat([]byte{0x42}, 32),
+		ParentFP:   []byte{1, 2, 3, 4},
+		Version:    []byte{0x04, 0x88, 0xb2, 0x1e},
+	}
+	encoded := key.String()
+
+	parsed, err := NewExtendedKeyFromString(encoded, curve)
+	if err != nil {
+		t.Fatalf("NewExtendedKeyFromString on a P-256 key: %v", err)
+	}
+	if parsed.X.Cmp(x) != 0 || parsed.Y.Cmp(y) != 0 {
+		t.Fatal("parsed P-256 key does not match the serialized point")
+	}
+	if parsed.Curve != curve {
+		t.Fatal("parsed key did not retain the supplied curve instance")
+	}
+	if parsed.String() != encoded {
+		t.Fatal("parsed P-256 key does not serialize back to the same string")
 	}
 }

@@ -23,5 +23,8 @@ func GenerateNTildei(safePrimes [2]*big.Int) (NTildei, h1i, h2i *big.Int, err er
 	NTildei = new(big.Int).Mul(safePrimes[0], safePrimes[1])
 	h1 := common.GetRandomGeneratorOfTheQuadraticResidue(NTildei)
 	h2 := common.GetRandomGeneratorOfTheQuadraticResidue(NTildei)
+	if h1 == nil || h2 == nil {
+		return nil, nil, nil, fmt.Errorf("GenerateNTildei: could not sample generators (modulus too wide?)")
+	}
 	return NTildei, h1, h2, nil
 }

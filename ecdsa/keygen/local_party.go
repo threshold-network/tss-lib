@@ -58,7 +58,18 @@ type (
 	}
 )
 
-// Exported, used in `tss` client
+// NewLocalParty returns a keygen party for the given parameters. It is the
+// entry point used by `tss` clients.
+//
+// Panics:
+//   - if params is nil;
+//   - if no protocol mode was selected on params;
+//   - if the protocol mode is legacy and a session nonce was set;
+//   - if more than one optionalPreParams value is passed;
+//   - if the optionalPreParams value fails ValidateWithProof.
+//
+// The panic happens synchronously at the call site, so a party with an
+// unclear transcript selection or invalid pre-parameters is never built.
 func NewLocalParty(
 	params *tss.Parameters,
 	out chan<- tss.Message,

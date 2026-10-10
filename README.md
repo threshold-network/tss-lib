@@ -55,32 +55,35 @@ parties := tss.SortPartyIDs(getParticipantPartyIDs())
 // The `id` should be a unique string representing this party in the network and `moniker` can be anything (even left blank).
 // The `uniqueKey` is a unique identifying key for this peer (such as its p2p public key) as a big.Int.
 thisParty := tss.NewPartyID(id, moniker, uniqueKey)
-ctx := tss.NewPeerContext(parties)
-
 // Select an elliptic curve.
 curve := tss.S256()
 
-params := tss.NewParameters(curve, ctx, thisParty, len(parties), threshold)
-// New ceremonies must select a protocol mode and bind a per-ceremony session
-// ID before constructing a local party; the mode is frozen at construction.
-// For the legacy mixed-binary rollout procedure, see "How to use this securely"
-// below.
-params.SetProtocolMode(tss.ProtocolModeSecurityV2)
-params.SetSessionNonceBytes([]byte(sessionID)) // high-entropy, >=16 bytes, unique to this ceremony
-
 // You should keep a local mapping of `id` strings to `*PartyID` instances so that an incoming message can have its origin party's `*PartyID` recovered for passing to `UpdateFromBytes` (see below)
-partyIDMap := make(map[string]*PartyID)
+partyIDMap := make(map[string]*tss.PartyID)
 for _, id := range parties {
     partyIDMap[id.Id] = id
 }
 ```
+Each keygen and each signing ceremony gets its own `tss.NewParameters(...)` value
+with its own session nonce: keygen uses the full peer set, signing uses the `t+1`
+signers' `PeerContext`. The protocol mode and session nonce freeze when the first
+local party is constructed from a `Parameters` value, and the setters panic
+afterwards, so a `Parameters` built for one ceremony must not be reused for another.
+For the legacy mixed-binary rollout procedure, see "How to use this securely" below.
 
 ### Keygen
 Use the `keygen.LocalParty` for the keygen protocol. The save data you receive through the `endCh` upon completion of the protocol should be persisted to secure storage.
 
 ```go
+ctx := tss.NewPeerContext(parties)
+params := tss.NewParameters(curve, ctx, thisParty, len(parties), threshold)
+// New ceremonies must select a protocol mode and bind a per-ceremony session
+// ID before constructing a local party; the mode and nonce are frozen at
+// construction.
+params.SetProtocolMode(tss.ProtocolModeSecurityV2)
+params.SetSessionNonceBytes([]byte(keygenSessionID)) // high-entropy, >=16 bytes, unique to this keygen ceremony
 endCh := make(chan keygen.LocalPartySaveData, 1)
-party := keygen.NewLocalParty(params, outCh, endCh, preParams) // Omit the last arg to compute the pre-params in round 1
+party := keygen.NewLocalParty(params, outCh, endCh, *preParams) // Omit the last arg to compute the pre-params in round 1
 go func() {
     err := party.Start()
     // handle err ...
@@ -93,6 +96,13 @@ Use the `signing.LocalParty` for signing and provide it with a `message` to sign
 Please note that `t+1` signers are required to sign a message and for optimal usage no more than this should be involved. Each signer should have the same view of who the `t+1` signers are.
 
 ```go
+// Signing builds its own Parameters over the t+1 signers and its own session
+// nonce; the keygen ceremony's Parameters and nonce are not reused.
+signers := tss.SortPartyIDs(getSignerPartyIDs()) // the t+1 signers, agreed out-of-band
+signerCtx := tss.NewPeerContext(signers)
+params := tss.NewParameters(curve, signerCtx, thisParty, len(signers), threshold)
+params.SetProtocolMode(tss.ProtocolModeSecurityV2)
+params.SetSessionNonceBytes([]byte(signingSessionID)) // high-entropy, >=16 bytes, unique to this signing ceremony
 endCh := make(chan *common.SignatureData, 1)
 fullBytesLen := (params.EC().Params().N.BitLen() + 7) / 8
 party := signing.NewLocalParty(message, params, ourKeyData, outCh, endCh, fullBytesLen)
@@ -147,7 +157,7 @@ params.SetProtocolMode(tss.ProtocolModeSecurityV2)
 params.SetSessionNonceBytes([]byte(sessionID))
 ```
 
-All parties in the run must use the same high-entropy session ID of at least 16 bytes, and it must be unique to the ceremony. Keygen and signing fail closed if no session nonce is set; reusing a session ID across otherwise identical ceremonies reintroduces transcript-splicing risk.
+All parties in the run must use the same high-entropy session ID of at least 16 bytes, and it must be unique to the ceremony. Security-v2 keygen and signing fail closed at `Start` if no session nonce is set; legacy parties must leave it unset, and setting one panics at party construction. Reusing a session ID across otherwise identical ceremonies reintroduces transcript-splicing risk.
 
 `ProtocolModeLegacy` exists only for coordinated compatibility with peers that
 use the historical untagged GG20 transcript. A ceremony must be homogeneous:
@@ -160,8 +170,10 @@ version, select `ProtocolModeLegacy`, call
 local party, and leave the session nonce unset. Without this rollout-only
 opt-in the default tighter Bob/BobWC verification can reject the historical
 `y < N` proofs that pre-upgrade peers produce. Once every peer is upgraded,
-disable `SetLegacyHistoricalBobCompatibility` for all parties, then coordinate
-the cutover to `ProtocolModeSecurityV2` with a shared per-ceremony session ID.
+stop calling `SetLegacyHistoricalBobCompatibility` (or pass `false` only while still
+in `ProtocolModeLegacy`, before the local party is constructed — any call, `true`
+or `false`, panics outside legacy mode), then coordinate the cutover to
+`ProtocolModeSecurityV2` with a shared per-ceremony session ID.
 
 Security-v2 ECDSA signing binds both the message integer and `fullBytesLen`
 into the signing SSID. All signers must agree on the message and its byte width

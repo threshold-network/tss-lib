@@ -54,6 +54,9 @@ type (
 var (
 	ErrMessageTooLong   = fmt.Errorf("the message is too large or < 0")
 	ErrMessageMalFormed = fmt.Errorf("the message is mal-formed")
+	// ErrInvalidBound is returned when the public bound passed to
+	// HomoMultBounded is nil, not positive or greater than N.
+	ErrInvalidBound = errors.New("paillier: multiplier bound must be positive and at most N")
 
 	zero = big.NewInt(0)
 	one  = big.NewInt(1)
@@ -154,7 +157,6 @@ func (publicKey *PublicKey) EncryptAndReturnRandomness(m *big.Int) (c *big.Int, 
 	xN := new(big.Int).Exp(x, publicKey.N, N2)
 	// 3. (1) * (2) mod N2
 	c = common.ModInt(N2).Mul(Gm, xN)
-	runtime.KeepAlive(publicKey)
 	return
 }
 
@@ -163,11 +165,24 @@ func (publicKey *PublicKey) Encrypt(m *big.Int) (c *big.Int, err error) {
 	return
 }
 
-func (publicKey *PublicKey) HomoMult(m, c1 *big.Int) (*big.Int, error) {
+// HomoMultBounded returns c1^m mod N^2, an encryption of m times c1's
+// plaintext. m is a secret scalar in the MtA protocol, so the exponent is
+// evaluated in constant time when constant-time operations are enabled.
+// bound is a public exclusive upper bound on m that the caller guarantees,
+// never derived from m itself; when constant-time operations are enabled the
+// exponent is padded to bound.BitLen() bits. It returns:
+//   - ErrInvalidModulus when N is nil, even or not greater than one;
+//   - ErrInvalidBound when bound is nil, not positive or greater than N;
+//   - ErrMessageTooLong when m is nil or outside [0, bound), or c1 is
+//     outside [0, N^2).
+func (publicKey *PublicKey) HomoMultBounded(m, c1, bound *big.Int) (*big.Int, error) {
 	if err := checkPaillierModulus(publicKey.N); err != nil {
 		return nil, err
 	}
-	if m.Cmp(zero) == -1 || m.Cmp(publicKey.N) != -1 { // m < 0 || m >= N ?
+	if bound == nil || bound.Sign() <= 0 || bound.Cmp(publicKey.N) > 0 {
+		return nil, ErrInvalidBound
+	}
+	if m == nil || m.Sign() < 0 || m.Cmp(bound) >= 0 { // m < 0 || m >= bound ?
 		return nil, ErrMessageTooLong
 	}
 	st := publicKey.paillierPublicStateFor()
@@ -180,25 +195,39 @@ func (publicKey *PublicKey) HomoMult(m, c1 *big.Int) (*big.Int, error) {
 	}
 	// cipher^m mod N2
 	if common.IsConstantTimeEnabled() {
-		// SECURITY: m is the secret scalar multiplier used as the exponent; exponentiate
-		// in constant time (N2 is odd). The guards above prove c1 is canonical
-		// modulo N2 (0 <= c1 < N2) and bound 0 <= m < N, so N.BitLen() is a
-		// proven public bound narrower than N2's default width, halving the
-		// exponent padding bigmod.Exp works over; the N2 context is reused
+		// SECURITY: m is the secret scalar multiplier used as the exponent;
+		// exponentiate in constant time (N2 is odd). The guards above prove
+		// c1 is canonical modulo N2 (0 <= c1 < N2) and bound m below the
+		// caller's public bound, so the exponent is padded to the bound's
+		// width rather than the full modulus width; the N2 context is reused
 		// across calls on this key.
 		ctN2, err := st.ctN2(publicKey)
 		if err != nil {
 			return nil, err
 		}
-		defer runtime.KeepAlive(publicKey)
-		return ctN2.ExpCTCanonicalWithBitLen(c1, m, publicKey.N.BitLen()), nil
+		return ctN2.ExpCTCanonicalWithBitLen(c1, m, bound.BitLen()), nil
 	}
-	defer runtime.KeepAlive(publicKey)
 	return common.ModInt(N2).Exp(c1, m), nil
 }
 
+// HomoMult is HomoMultBounded with bound = N, the plaintext domain. It
+// returns the same errors; the modulus is checked first, so a nil or
+// degenerate N returns ErrInvalidModulus.
+func (publicKey *PublicKey) HomoMult(m, c1 *big.Int) (*big.Int, error) {
+	if err := checkPaillierModulus(publicKey.N); err != nil {
+		return nil, err
+	}
+	return publicKey.HomoMultBounded(m, c1, publicKey.N)
+}
+
 func (publicKey *PublicKey) HomoAdd(c1, c2 *big.Int) (*big.Int, error) {
-	N2 := publicKey.NSquare()
+	if err := checkPaillierModulus(publicKey.N); err != nil {
+		return nil, err
+	}
+	N2, err := publicKey.paillierPublicStateFor().n2Value(publicKey)
+	if err != nil {
+		return nil, err
+	}
 	if c1.Cmp(zero) == -1 || c1.Cmp(N2) != -1 { // c1 < 0 || c1 >= N2 ?
 		return nil, ErrMessageTooLong
 	}
@@ -263,8 +292,8 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 		inv = new(big.Int).ModInverse(L(gammaExpLambda, privateKey.N), privateKey.N)
 	}
 	if inv == nil {
-		// A non-invertible decryption coefficient means malformed key
-		// material; both modes return the same error.
+		// A non-invertible decryption coefficient (LambdaN mod N not
+		// invertible) means malformed key material.
 		return nil, ErrMalformedKey
 	}
 
@@ -281,7 +310,8 @@ func (privateKey *PrivateKey) Decrypt(c *big.Int) (m *big.Int, err error) {
 // An efficient non-interactive statistical zero-knowledge proof system for quasi-safe prime products.
 // In: In Proc. of the 5th ACM Conference on Computer and Communications Security (CCS-98. Citeseer (1998)
 //
-// This only implements the stage 1 proof that N is square-free from 3.1
+// This only implements the stage 1 proof that N is square-free from 3.1.
+//
 // It panics if the private key modulus cannot supply challenges.
 func (privateKey *PrivateKey) Proof(k *big.Int, ecdsaPub *crypto2.ECPoint) Proof {
 	var pi Proof
@@ -312,12 +342,6 @@ func (pf Proof) Verify(pkN, k *big.Int, ecdsaPub *crypto2.ECPoint) (bool, error)
 		return false, nil
 	}
 	if k.Sign() < 0 {
-		return false, nil
-	}
-	// Width policy: reject a caller-supplied modulus wider than the shared
-	// ceiling before IsUsableUnknownOrderModulus's ProbablyPrime call or any
-	// modulus-sized work is run against it.
-	if common.ExceedsUnknownOrderModulusCeiling(pkN) {
 		return false, nil
 	}
 	if !common.IsUsableUnknownOrderModulus(pkN, common.MinUnknownOrderModulusBitLen) {

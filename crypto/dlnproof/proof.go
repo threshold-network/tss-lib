@@ -86,12 +86,6 @@ func (p *Proof) Verify(h1, h2, N *big.Int, session ...[]byte) bool {
 	if p == nil {
 		return false
 	}
-	// Width policy: reject a caller-supplied modulus wider than the shared
-	// ceiling before any ProbablyPrime call or per-candidate modular
-	// exponentiation is run against it.
-	if common.ExceedsUnknownOrderModulusCeiling(N) {
-		return false
-	}
 	if !common.IsUsableUnknownOrderModulus(N, common.MinUnknownOrderModulusBitLen) {
 		return false
 	}

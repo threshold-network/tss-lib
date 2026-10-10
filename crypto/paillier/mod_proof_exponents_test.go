@@ -1,6 +1,7 @@
 package paillier
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 
@@ -80,5 +81,54 @@ func TestModProofCTContextExponentReuseEquivalence(t *testing.T) {
 		zRef := new(big.Int).Exp(x, invN, N)
 		zOn := ctxOn.ctN.ExpCTCanonicalWithBytes(x, ctxOn.invNExp)
 		assert.Zero(t, zOn.Cmp(zRef), "CT context z (reused encoded invN) must match the math/big reference")
+	}
+}
+
+// TestModProofCTContextExponentWipe pins the advertised secret-wipe of the
+// context's owned exponent encodings on the real ModProof path: a
+// constant-time proof encodes the four secret-derived exponents (psP, psQ,
+// rootExp, invN) into non-zero fixed-width byte strings, and the deferred
+// wipe zeroes every byte of all four in place, also when proof generation
+// aborts. The hook forces that abort with a panic right after the context is
+// created. A regression that drops the deferred wipe, wipes only on the
+// success path, or reassigns the slices instead of zeroing them fails the
+// assertions below.
+func TestModProofCTContextExponentWipe(t *testing.T) {
+	p, q, N, _, invN := modProofContextInputs(t)
+	setPaillierCTTestMode(t, true)
+	t.Cleanup(func() { modProofTestHook = nil })
+
+	// Each owned encoding must equal the fixed-width encoding of its
+	// exponent before the wipe, i.e. hold the secret and not a freshly
+	// zeroed array.
+	var want, got [][]byte
+	abort := errors.New("abort ModProof after context creation")
+	modProofTestHook = func(ctx *modProofCTContext) {
+		want = [][]byte{
+			fixedWidthExponentBytes(ctx.psP, p),
+			fixedWidthExponentBytes(ctx.psQ, q),
+			fixedWidthExponentBytes(ctx.rootExp, N),
+			fixedWidthExponentBytes(invN, N),
+		}
+		got = [][]byte{ctx.psPExp, ctx.psQExp, ctx.rootExpExp, ctx.invNExp}
+		for i := range got {
+			require.Equal(t, want[i], got[i], "owned encoding %d must hold its exponent before the wipe", i)
+		}
+		panic(abort)
+	}
+
+	func() {
+		defer func() {
+			assert.Equal(t, abort, recover(), "ModProof must abort through the test hook")
+		}()
+		privateKey.ModProof()
+	}()
+
+	// After the abort every byte of every owned encoding is zero, and the
+	// arrays keep their original length (zeroed in place, not reassigned).
+	require.Len(t, got, 4, "the hook must have captured the context")
+	for i := range got {
+		zero := make([]byte, len(want[i]))
+		assert.Equal(t, zero, got[i], "owned encoding %d must be fully zeroed after the abort", i)
 	}
 }

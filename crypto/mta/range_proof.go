@@ -52,17 +52,25 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 	if ec == nil || pk == nil || NTilde == nil || h1 == nil || h2 == nil || c == nil || m == nil || r == nil {
 		return nil, errors.New("ProveRangeAlice constructor received nil value(s)")
 	}
-
-	// m is Alice's secret value and a Paillier plaintext, so it must sit in
-	// the intended 0 <= m < pk.N domain. Validate before any sampling or
-	// exponentiation so a malformed direct-API witness returns a constructor
-	// error in either timing mode. Honest protocol witnesses stay valid:
-	// AliceInit encrypts a, whose Paillier domain is exactly 0 <= m < N.
-	if m.Cmp(zero) == -1 || m.Cmp(pk.N) != -1 {
-		return nil, errors.New("ProveRangeAlice: witness m outside the Paillier plaintext domain")
+	if pk.N == nil || pk.N.Cmp(one) <= 0 {
+		return nil, errors.New("ProveRangeAlice: invalid Paillier modulus N")
+	}
+	// Reject a degenerate NTilde before any exponentiation runs against it:
+	// an even NTilde makes the constant-time modular context panic.
+	if NTilde.Cmp(one) <= 0 || NTilde.Bit(0) == 0 {
+		return nil, errors.New("ProveRangeAlice: invalid auxiliary modulus N-tilde")
 	}
 
 	q := ec.Params().N
+	// m is Alice's secret value and the MtA range message, so it must sit in
+	// the curve-order domain 0 <= m < q. Validate before any sampling or
+	// exponentiation so a malformed direct-API witness returns a constructor
+	// error in either timing mode. Honest protocol witnesses stay valid:
+	// AliceInit encrypts a, whose MtA domain is exactly 0 <= m < q.
+	if m.Cmp(zero) == -1 || m.Cmp(q) != -1 {
+		return nil, errors.New("ProveRangeAlice: witness m outside the curve-order domain")
+	}
+
 	q3 := new(big.Int).Mul(q, q)
 	q3 = new(big.Int).Mul(q, q3)
 	qNTilde := new(big.Int).Mul(q, NTilde)
@@ -72,15 +80,17 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 	alpha := common.GetRandomPositiveInt(q3)
 	// 2.
 	beta := common.GetRandomPositiveRelativelyPrimeInt(pk.N)
-	if beta == nil {
-		return nil, errors.New("ProveRangeAlice: could not sample randomness")
-	}
 
 	// 3.
 	gamma := common.GetRandomPositiveInt(q3NTilde)
 
 	// 4.
 	rho := common.GetRandomPositiveInt(qNTilde)
+	// The samplers return nil when a limit is wider than their cap, which
+	// a wide caller-supplied NTilde or N can cause.
+	if alpha == nil || beta == nil || gamma == nil || rho == nil {
+		return nil, errors.New("ProveRangeAlice: could not sample randomness (modulus too wide?)")
+	}
 
 	// 5.
 	modNTilde := common.ModInt(NTilde)
@@ -89,8 +99,10 @@ func ProveRangeAlice(ec elliptic.Curve, pk *paillier.PublicKey, c, NTilde, h1, h
 		// SECURITY: m is Alice's secret value used as the exponent; exponentiate in
 		// constant time (NTilde is odd). The h2^rho blind and the u/w terms use one-time
 		// randomness and stay on math/big (see common/constant_time.go).
-		// The plaintext is bounded by pk.N, independently of NTilde's width.
-		z = modNTilde.Mul(common.NewCTModInt(NTilde).ExpCTWithBitLen(h1, m, pk.N.BitLen()), modNTilde.Exp(h2, rho))
+		// m is a curve-order scalar, a narrower public bound than the
+		// auxiliary modulus; pad to that width so the constant-time
+		// exponentiation does not run the wider modulus width.
+		z = modNTilde.Mul(common.NewCTModInt(NTilde).ExpCTWithBitLen(h1, m, q.BitLen()), modNTilde.Exp(h2, rho))
 	} else {
 		z = modNTilde.Exp(h1, m)
 		z = modNTilde.Mul(z, modNTilde.Exp(h2, rho))
@@ -144,21 +156,8 @@ func (pf *RangeProofAlice) Verify(ec elliptic.Curve, pk *paillier.PublicKey, NTi
 		NTilde == nil || h1 == nil || h2 == nil || c == nil {
 		return false
 	}
-	// Width policy: reject caller-supplied moduli wider than the shared
-	// ceiling before any ProbablyPrime call or modulus-sized work is run
-	// against them.
-	if common.ExceedsUnknownOrderModulusCeiling(pk.N) ||
-		common.ExceedsUnknownOrderModulusCeiling(NTilde) {
-		return false
-	}
-	if !common.IsUsableUnknownOrderModulus(pk.N, common.MinUnknownOrderModulusBitLen) ||
-		!common.IsUsableUnknownOrderModulus(NTilde, common.MinUnknownOrderModulusBitLen) {
-		return false
-	}
-	if !common.IsCanonicalGenerator(NTilde, h1) || !common.IsCanonicalGenerator(NTilde, h2) || h1.Cmp(h2) == 0 {
-		return false
-	}
-	if !common.IsCanonicalPaillierCiphertext(c, pk.N) {
+	// Shared modulus/generator/ciphertext preamble.
+	if !validateVerifierParams(pk, NTilde, h1, h2, c) {
 		return false
 	}
 

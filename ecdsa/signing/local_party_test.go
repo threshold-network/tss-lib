@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/ipfs/go-log"
@@ -88,7 +89,16 @@ func newStoreMessageTestParty(t *testing.T) (*LocalParty, tss.SortedPartyIDs) {
 	return lp, pIDs
 }
 
+// TestE2EConcurrent runs a full signing ceremony in each protocol mode with
+// constant-time operations on and off. Constant-time operations are a
+// hardening, not a correctness requirement, so every combination must
+// complete and deliver a valid signature.
 func TestE2EConcurrent(t *testing.T) {
+	msgData, err := hex.DecodeString("00f163ee51bcaeff9cdff5e0e3c1a646abd19885fffbab0b3b4236e0cf95c9f5")
+	if err != nil {
+		panic(err)
+	}
+	msgInt := new(big.Int).SetBytes(msgData)
 	for _, testCase := range []struct {
 		name string
 		mode tss.ProtocolMode
@@ -96,24 +106,48 @@ func TestE2EConcurrent(t *testing.T) {
 		{"legacy", tss.ProtocolModeLegacy},
 		{"security-v2", tss.ProtocolModeSecurityV2},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			testE2EConcurrent(t, testCase.mode)
-		})
+		for _, ct := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/CT=%t", testCase.name, ct), func(t *testing.T) {
+				setSigningCTMode(t, ct)
+				testE2EConcurrent(t, testCase.mode, msgInt, len(msgData))
+			})
+		}
 	}
 }
 
-func testE2EConcurrent(t *testing.T, mode tss.ProtocolMode) {
+// setSigningCTMode sets the process-wide constant-time mode for one test and
+// restores the previous mode when the test ends.
+func setSigningCTMode(t *testing.T, enabled bool) {
+	t.Helper()
+	previous := common.IsConstantTimeEnabled()
+	t.Cleanup(func() {
+		if previous {
+			common.EnableConstantTimeOps()
+		} else {
+			common.DisableConstantTimeOps()
+		}
+	})
+	if enabled {
+		common.EnableConstantTimeOps()
+	} else {
+		common.DisableConstantTimeOps()
+	}
+	assert.Equal(t, enabled, common.IsConstantTimeEnabled())
+}
+
+// testE2EConcurrent runs a signing ceremony for the given message and encoding width.
+// The msg is copied into each party so caller mutation cannot affect the ceremony.
+// On completion it verifies the delivered signature: R/S encoding, recovery byte,
+// message width, low-S, ECDSA verification, pubkey recovery, and deep-copy isolation.
+func testE2EConcurrent(t *testing.T, mode tss.ProtocolMode, msg *big.Int, fullBytesLen int) {
 	setUp("info")
 	threshold := testThreshold
 
-	// PHASE: load keygen fixtures
 	keys, signPIDs, err := keygen.LoadKeygenTestFixturesRandomSet(testThreshold+1, testParticipants)
 	assert.NoError(t, err, "should load keygen fixtures")
 	assert.Equal(t, testThreshold+1, len(keys))
 	assert.Equal(t, testThreshold+1, len(signPIDs))
 
-	// PHASE: signing
-	// use a shuffled selection of the list of parties for this test
 	p2pCtx := tss.NewPeerContext(signPIDs)
 	parties := make([]*LocalParty, 0, len(signPIDs))
 
@@ -123,20 +157,15 @@ func testE2EConcurrent(t *testing.T, mode tss.ProtocolMode) {
 
 	updater := test.SharedPartyUpdater
 
-	msgData, err := hex.DecodeString("00f163ee51bcaeff9cdff5e0e3c1a646abd19885fffbab0b3b4236e0cf95c9f5")
-	assert.NoError(t, err)
-	msgInt := new(big.Int).SetBytes(msgData)
-
-	// init the parties
 	ceremonyNonce := big.NewInt(1)
-	for i := 0; i < len(signPIDs); i++ {
+	for i := range len(signPIDs) {
 		params := tss.NewParameters(tss.S256(), p2pCtx, signPIDs[i], len(signPIDs), threshold)
 		params.SetProtocolMode(mode)
 		if mode == tss.ProtocolModeSecurityV2 {
 			params.SetSessionNonce(ceremonyNonce)
 		}
 
-		P := NewLocalParty(msgInt, params, keys[i], outCh, endCh, len(msgData)).(*LocalParty)
+		P := NewLocalParty(msg, params, keys[i], outCh, endCh, fullBytesLen).(*LocalParty)
 		parties = append(parties, P)
 		go func(P *LocalParty) {
 			if err := P.Start(); err != nil {
@@ -145,11 +174,16 @@ func testE2EConcurrent(t *testing.T, mode tss.ProtocolMode) {
 		}(P)
 	}
 
+	delivered := make([]*common.SignatureData, 0, len(signPIDs))
 	var ended int32
+	deadline := time.After(10 * time.Minute)
 signing:
 	for {
 		fmt.Printf("ACTIVE GOROUTINES: %d\n", runtime.NumGoroutine())
 		select {
+		case <-deadline:
+			t.Fatalf("signing ceremony did not finish within the deadline; %d of %d parties ended", atomic.LoadInt32(&ended), len(signPIDs))
+
 		case err := <-errCh:
 			common.Logger.Errorf("Error: %s", err)
 			assert.FailNow(t, err.Error())
@@ -171,41 +205,17 @@ signing:
 				go updater(parties[dest[0].Index], msg, errCh)
 			}
 
-		case <-endCh:
+		case sd := <-endCh:
+			delivered = append(delivered, sd)
 			atomic.AddInt32(&ended, 1)
 			if atomic.LoadInt32(&ended) == int32(len(signPIDs)) {
 				t.Logf("Done. Received signature data from %d participants", ended)
-				R := parties[0].temp.bigR
-				r := parties[0].temp.rx
-				fmt.Printf("sign result: R(%s, %s), r=%s\n", R.X().String(), R.Y().String(), r.String())
-
-				modN := common.ModInt(tss.S256().Params().N)
-
-				// BEGIN check s correctness
-				sumS := big.NewInt(0)
-				for _, p := range parties {
-					sumS = modN.Add(sumS, p.temp.si)
-				}
-				fmt.Printf("S: %s\n", sumS.String())
-				// END check s correctness
-
-				// BEGIN ECDSA verify
-				pkX, pkY := keys[0].ECDSAPub.X(), keys[0].ECDSAPub.Y()
-				pk := ecdsa.PublicKey{
-					Curve: tss.EC(),
-					X:     pkX,
-					Y:     pkY,
-				}
-				ok := ecdsa.Verify(&pk, msgData, R.X(), sumS)
-				assert.True(t, ok, "ecdsa verify must pass")
-				assert.Equal(t, msgData, parties[0].data.M)
-				t.Log("ECDSA signing test done.")
-				// END ECDSA verify
-
 				break signing
 			}
 		}
 	}
+
+	verifyDeliveredSignatureData(t, delivered, parties, keys, msg, fullBytesLen)
 }
 
 func TestE2EWithHDKeyDerivation(t *testing.T) {

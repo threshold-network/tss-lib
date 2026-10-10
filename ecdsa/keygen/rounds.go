@@ -122,7 +122,9 @@ func (round *base) proofContext(index int) [][]byte {
 	return nil
 }
 
-// getSSID derives the session-binding identifier for keygen.
+// getSSID derives the security-v2 session-binding identifier for keygen.
+// Legacy mode does not call this helper and retains the historical
+// untagged proof transcript.
 //
 // Callers must invoke this exactly once, in round 1, and store the result in
 // round.temp.ssid for the rest of the protocol — round.number is hashed in

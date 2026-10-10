@@ -21,10 +21,11 @@ import (
 )
 
 // TestProveBobRejectsOutOfDomainWitnesses pins the exported Bob prover guard:
-// negative or over-wide x/y must return an error (no panic) under both CT
-// settings, through both the with-check and without-check constructors. The
-// historical y < N path stays valid, so the boundary witness y = N-1 keeps
-// proving.
+// x must sit in the curve-order domain and y in the Paillier plaintext
+// domain; negative or over-wide witnesses must return an error (no panic)
+// under both CT settings, through both the with-check and without-check
+// constructors. The historical y < N path stays valid, so the boundary
+// witness y = N-1 keeps proving.
 func TestProveBobRejectsOutOfDomainWitnesses(t *testing.T) {
 	key := mtaFixtureKey(t)
 	pk := &key.PublicKey
@@ -41,21 +42,31 @@ func TestProveBobRejectsOutOfDomainWitnesses(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
 			setMTAProofTestMode(t, enabled)
-			// Invalid x/y (negative or over-wide) must error, not panic,
-			// in both the without-check and with-check constructors.
-			for _, w := range []*big.Int{big.NewInt(-1), new(big.Int).Set(pk.N), new(big.Int).Add(pk.N, one)} {
+			q := ec.Params().N
+			// Invalid x (negative or ≥ q) must error, not panic, in both
+			// the without-check and with-check constructors.
+			for _, wx := range []*big.Int{big.NewInt(-1), q, new(big.Int).Set(pk.N)} {
 				assert.NotPanics(t, func() {
-					p, e := ProveBob(ec, pk, NTilde, h1, h2, c1, c1, w, big.NewInt(3), r)
+					p, e := ProveBob(ec, pk, NTilde, h1, h2, c1, c1, wx, big.NewInt(3), r)
 					assert.Error(t, e)
 					assert.Nil(t, p)
 				})
 				assert.NotPanics(t, func() {
-					p, e := ProveBob(ec, pk, NTilde, h1, h2, c1, c1, big.NewInt(3), w, r)
+					p, e := ProveBobWC(ec, pk, NTilde, h1, h2, c1, c1, wx, big.NewInt(3), r, X)
+					assert.Error(t, e)
+					assert.Nil(t, p)
+				})
+			}
+			// Invalid y (negative or ≥ N) must error, not panic, in both
+			// the without-check and with-check constructors.
+			for _, wy := range []*big.Int{big.NewInt(-1), new(big.Int).Set(pk.N), new(big.Int).Add(pk.N, one)} {
+				assert.NotPanics(t, func() {
+					p, e := ProveBob(ec, pk, NTilde, h1, h2, c1, c1, big.NewInt(3), wy, r)
 					assert.Error(t, e)
 					assert.Nil(t, p)
 				})
 				assert.NotPanics(t, func() {
-					p, e := ProveBobWC(ec, pk, NTilde, h1, h2, c1, c1, w, big.NewInt(3), r, X)
+					p, e := ProveBobWC(ec, pk, NTilde, h1, h2, c1, c1, big.NewInt(3), wy, r, X)
 					assert.Error(t, e)
 					assert.Nil(t, p)
 				})
@@ -95,8 +106,9 @@ func TestProveRangeAliceRejectsOutOfDomainWitness(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
 			setMTAProofTestMode(t, enabled)
-			// Negative and over-wide m must error, not panic.
-			for _, m := range []*big.Int{big.NewInt(-1), new(big.Int).Set(pk.N), new(big.Int).Add(pk.N, one)} {
+			q := ec.Params().N
+			// Negative or curve-external m must error, not panic.
+			for _, m := range []*big.Int{big.NewInt(-1), q, new(big.Int).Set(pk.N), new(big.Int).Add(pk.N, one)} {
 				assert.NotPanics(t, func() {
 					p, e := ProveRangeAlice(ec, pk, c, NTilde, h1, h2, m, r)
 					assert.Error(t, e)

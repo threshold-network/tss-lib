@@ -20,7 +20,7 @@ import (
 // mtaFixturePaillierSK mirrors the committed keygen fixture format
 // (test/_ecdsa_fixtures/keygen_data_*.json). The mta package is an internal
 // test, so it cannot import the paillier package's test-only loader; reading
-// the JSON directly here is the sanctioned small-helper path (D10).
+// the JSON directly here is the sanctioned small-helper path.
 type mtaFixturePaillierSK struct {
 	N, LambdaN, PhiN *big.Int
 }

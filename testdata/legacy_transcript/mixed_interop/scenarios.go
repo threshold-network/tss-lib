@@ -237,7 +237,7 @@ func verifyPerProofIndependently(result *scenarioResult, capturedBobR2 *signing.
 // The exchange is deliberately bounded to round 8: this repository's own
 // existing round3Fixture (ecdsa/signing/round_3_test.go) and
 // historicalBobProofForWitnessY (crypto/mta/legacy_bob_historical_witness_test.go)
-// already establish the precedent of driving a 2-of-20 minimal subset of the
+// already establish the precedent of driving a 2-signer subset of the 20-party
 // test/_ecdsa_fixtures keygen fixtures (threshold=1, not the fixture set's
 // real threshold=10) for exactly this kind of round-level interop check.
 // That minimal subset is sufficient for every per-peer MtA/Schnorr check

@@ -286,3 +286,73 @@ func TestShareProtocolWCConstantTime(t *testing.T) {
 	aTimesBPlusBetaModQ := new(big.Int).Mod(aTimesBPlusBeta, q)
 	assert.Equal(t, 0, alpha.Cmp(aTimesBPlusBetaModQ), "constant-time MtA must yield alpha = ab + betaPrm")
 }
+
+// TestMtaProversAtCurveOrderEdge pins the constant-time exponent widths at
+// the top of the curve-order witness domain: x = q-1 for ProveBob and
+// ProveBobWC, m = q-1 for ProveRangeAlice, and b = q-1 for BobMid and
+// BobMidWC. These witnesses use the full q.BitLen() width, so an exponent
+// padded to fewer bits panics or gives a wrong result.
+func TestMtaProversAtCurveOrderEdge(t *testing.T) {
+	key := mtaFixtureKey(t)
+	pk := &key.PublicKey
+	NTildei, h1i, h2i, err := keygen.LoadNTildeH1H2FromTestFixture(0)
+	require.NoError(t, err)
+	NTildej, h1j, h2j, err := keygen.LoadNTildeH1H2FromTestFixture(1)
+	require.NoError(t, err)
+	ec := tss.EC()
+	q := ec.Params().N
+	qMinus1 := new(big.Int).Sub(q, one)
+	require.Equal(t, q.BitLen(), qMinus1.BitLen())
+
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("CT=%t", enabled), func(t *testing.T) {
+			setMTAProofTestMode(t, enabled)
+
+			t.Run("ProveRangeAlice m = q-1", func(t *testing.T) {
+				c, r, err := key.EncryptAndReturnRandomness(qMinus1)
+				require.NoError(t, err)
+				proof, err := ProveRangeAlice(ec, pk, c, NTildei, h1i, h2i, qMinus1, r)
+				require.NoError(t, err)
+				assert.True(t, proof.Verify(ec, pk, NTildei, h1i, h2i, c))
+			})
+
+			t.Run("ProveBob and ProveBobWC x = q-1", func(t *testing.T) {
+				y, r := big.NewInt(11), firstSmallUnit(pk.N, 2)
+				c1 := fixedPaillierEncryption(pk, big.NewInt(5), firstSmallUnit(pk.N, 3))
+				c2 := c2ForWitness(t, ec, pk, c1, qMinus1, y, r)
+				X := crypto.ScalarBaseMult(ec, qMinus1)
+				proofBob, err := ProveBob(ec, pk, NTildei, h1i, h2i, c1, c2, qMinus1, y, r)
+				require.NoError(t, err)
+				assert.True(t, proofBob.Verify(ec, pk, NTildei, h1i, h2i, c1, c2), "ProveBob")
+				proofBobWC, err := ProveBobWC(ec, pk, NTildei, h1i, h2i, c1, c2, qMinus1, y, r, X)
+				require.NoError(t, err)
+				assert.True(t, proofBobWC.Verify(ec, pk, NTildei, h1i, h2i, c1, c2, X), "ProveBobWC")
+			})
+
+			t.Run("BobMid and BobMidWC b = q-1", func(t *testing.T) {
+				a := big.NewInt(424242)
+				cA, pfA, err := AliceInit(ec, pk, a, NTildej, h1j, h2j)
+				require.NoError(t, err)
+				// Alice's share must equal a*b + betaPrm mod q.
+				want := func(betaPrm *big.Int) *big.Int {
+					v := new(big.Int).Mul(a, qMinus1)
+					v.Add(v, betaPrm)
+					return v.Mod(v, q)
+				}
+
+				_, cB, betaPrm, pfB, err := BobMid(ec, pk, pfA, qMinus1, cA, NTildei, h1i, h2i, NTildej, h1j, h2j)
+				require.NoError(t, err)
+				alpha, err := AliceEnd(ec, pk, pfB, h1i, h2i, cA, cB, NTildei, key)
+				require.NoError(t, err)
+				assert.Zero(t, alpha.Cmp(want(betaPrm)), "BobMid share")
+
+				B := crypto.ScalarBaseMult(ec, qMinus1)
+				_, cBWC, betaPrmWC, pfBWC, err := BobMidWC(ec, pk, pfA, qMinus1, cA, NTildei, h1i, h2i, NTildej, h1j, h2j, B)
+				require.NoError(t, err)
+				alphaWC, err := AliceEndWC(ec, pk, pfBWC, B, cA, cBWC, NTildei, h1i, h2i, key)
+				require.NoError(t, err)
+				assert.Zero(t, alphaWC.Cmp(want(betaPrmWC)), "BobMidWC share")
+			})
+		})
+	}
+}

@@ -11,14 +11,16 @@
 // secret-exponent operations enumerated below, using filippo.io/bigmod (the same
 // constant-time core used by Go's crypto/rsa).
 //
-// COVERAGE: Enabled by default, the bigmod path is applied
-// to modular exponentiations/multiplications whose operand is a long-term secret,
-// witness, trapdoor, or secret plaintext/scalar: Paillier Decrypt / Encrypt (gamma^m) /
-// HomoMult, the Paillier mod- and factor-proofs, the DLN proof, the ring-Pedersen
-// trapdoor setup in keygen, the MtA range and regular proofs, the Schnorr proof
-// responses (crypto/schnorr), and ECDSA signing rounds 3-5 (thelta/sigma/thetaInverse/si).
-// This is limited coverage: conversion, reduction, and other surrounding math/big
-// operations remain variable-time. It does not make the whole protocol constant-time.
+// COVERAGE: enabled by default, the bigmod path is applied to
+// exponentiations/multiplications whose operand is a long-term secret,
+// witness, trapdoor, or secret plaintext/scalar: Paillier Decrypt / Encrypt
+// (the m*N term of gamma^m) / HomoMult, the Paillier mod- and factor-proofs,
+// the DLN proof, the ring-Pedersen trapdoor setup in keygen, the MtA range
+// and regular proofs, the Schnorr proof responses (crypto/schnorr), and ECDSA
+// signing rounds 3-5 (thelta/sigma/thetaInverse/si).
+// This is limited coverage: conversion, reduction, and other surrounding
+// math/big operations remain variable-time; the protocol is not fully
+// constant-time.
 //
 // Deliberately NOT hardened (left on math/big), and the reasons:
 //   - Public-exponent operations, where the timing reveals only public data: x^N in
@@ -29,13 +31,22 @@
 //     leaving them on math/big is a pragmatic deferral, NOT a safety guarantee.
 //   - Exponentiations modulo an even value (e.g. inverses mod phi(N)): bigmod requires
 //     an odd modulus, so these stay on math/big.
-//   - crypto/mta.AliceEnd/AliceEndWC's Paillier decrypt: upstream (BNB 3709c25) protects
-//     this with a *different* mechanism entirely -- a sleep-based response-time
-//     normalization wrapper (NewTimingProtection, ~200ms target + jitter), not a bigmod
-//     constant-time path. This gap predates the current extension and is tracked
-//     separately; it was not addressed here because adding that primitive would
-//     inject a fixed ~200ms delay into every MtA share round, a real latency/throughput
-//     cost nobody has signed off on.
+//   - crypto/mta.AliceEnd/AliceEndWC's Paillier decrypt: c^LambdaN and the
+//     inverse of LambdaN mod N run in constant time, but the steps around
+//     them stay on math/big: the LambdaN mod N reduction before the inverse,
+//     the L(u) = (u-1)/N division, the math/big multiplication of L(u) by the
+//     inverse mod N, and decryptShare's reduction of the secret plaintext
+//     mod q. The only known mitigation is a sleep-based response-time
+//     normalization (~200ms target plus jitter), which was not adopted
+//     because it would add about 200ms to every MtA share round, a latency
+//     cost not signed off on. The gap remains open.
+//   - Elliptic-curve scalar multiplication on secp256k1: tss.S256() uses the
+//     variable-time btcec/v2 (Decred) routines, so secret scalars such as
+//     Schnorr nonces and key shares are multiplied in variable time.
+//   - The keygen ring-Pedersen inverse beta = alpha^-1 mod p*q: the inverse
+//     itself is constant-time, but ModInverseCT first reduces the secret
+//     alpha (sampled below NTilde, so wider than p*q) mod p*q with math/big.
+//     This happens once per keygen.
 //
 // Reference: https://github.com/golang/go/issues/20654
 
@@ -124,21 +135,25 @@ func NewCTModInt(mod *big.Int) *CTModInt {
 	if mod.Bit(0) == 0 {
 		panic("NewCTModInt: modulus must be odd")
 	}
+	// Pre-compute mod-2 for Fermat inverse: a^(-1) = a^(mod-2) mod mod
+	return newCTModInt(mod, new(big.Int).Sub(mod, big.NewInt(2)))
+}
+
+// newCTModInt builds the shared CTModInt state for an odd modulus with a
+// precomputed inverse exponent: mod-2 for prime moduli (Fermat inverse) or
+// groupExponent-1 for composite moduli (Euler inverse).
+func newCTModInt(mod, inverseExp *big.Int) *CTModInt {
 	modBytes := mod.Bytes()
 	m, err := bigmod.NewModulus(modBytes)
 	if err != nil {
 		// Fallback: should not happen for valid modulus
 		panic(err)
 	}
-
-	// Pre-compute mod-2 for Fermat inverse: a^(-1) = a^(mod-2) mod mod
-	modMinusTwo := new(big.Int).Sub(mod, big.NewInt(2))
-
 	byteLen := len(modBytes)
 	return &CTModInt{
 		mod:        m,
 		modBigInt:  new(big.Int).Set(mod),
-		inverseExp: leftPad(modMinusTwo.Bytes(), byteLen),
+		inverseExp: leftPad(inverseExp.Bytes(), byteLen),
 		byteLen:    byteLen,
 		bytePool: sync.Pool{
 			New: func() interface{} {
@@ -154,18 +169,22 @@ func NewCTModInt(mod *big.Int) *CTModInt {
 // suitable for bigmod.Nat.SetBytes. The caller must pass the returned
 // pointer to releasePadded (typically via defer) to return the same pooled
 // buffer instead of leaking it.
-// NOTE: big.Int.Mod is not constant-time, but it is applied unconditionally (no
-// secret-dependent branch) and the bases reduced here are public or already in range
-// at every call site. A caller passing a secret base near the modulus should be aware
-// the reduction's timing depends on the value. One exception: in
-// `ecdsa/signing/round_5.go`, the operand `rx = R.X()` is a field-prime (mod p)
-// coordinate that is not yet reduced mod the curve order N when fed into
-// `MulCT(rx, sigma)`. The reduction is correctness-required (both the CT and non-CT
-// paths always performed it), pre-existing (not introduced by the CT branch),
-// and `rx` is still secret here — it becomes the public signature `r` component
-// only in round 10 (finalize.go:60), five rounds later. The variable-time
-// reduction of a secret value is a bounded timing leak; making this reduction
-// constant-time is a tracked follow-up.
+// NOTE: big.Int.Mod is not constant-time, but it is applied unconditionally
+// (no secret-dependent branch) and, with one exception, the values reduced
+// here are public or already in range. A caller passing a secret value at
+// or above the modulus should know that the reduction's timing depends on
+// the value.
+// The exception is the keygen ring-Pedersen inverse in
+// `ecdsa/keygen/prepare.go`: ModInverseCT(alpha) reduces the secret alpha,
+// sampled below NTilde, mod p*q here. This is a known gap.
+// An example of a safe reduction of a public value: in
+// `ecdsa/signing/round_5.go`, `rx = R.X()` is a field-prime (mod p)
+// coordinate that is not yet reduced mod the curve order N when it goes into
+// `MulCT(rx, sigma)`. The reduction is required for correctness (both the CT
+// and non-CT paths always did it), and `rx` comes from public values: R is
+// built from the round-4 decommitted Gamma_j points and delta (the sum of the
+// theta_i values broadcast in round 3). So the variable-time reduction mod N
+// leaks nothing secret.
 func (ct *CTModInt) reduceToPaddedBytes(val *big.Int) *[]byte {
 	reduced := new(big.Int).Mod(val, ct.modBigInt)
 
@@ -289,6 +308,9 @@ var ctModIntCache sync.Map // key: mod.Bytes() string -> *CTModInt
 // The modulus must be odd. Repeated calls with the same modulus value return
 // the same *CTModInt, so the per-call bigmod.NewModulus construction and
 // sync.Pool setup are paid once per distinct modulus rather than every call.
+// Only for a small fixed set of public moduli (e.g. curve orders); entries
+// are never evicted and modulus bytes are retained for the process lifetime.
+// Use NewCTModInt for per-key or secret moduli.
 func GetCTModInt(mod *big.Int) *CTModInt {
 	if mod.Bit(0) == 0 {
 		panic("GetCTModInt: modulus must be odd")
@@ -311,26 +333,6 @@ func NewCTModIntWithPhi(mod, phiN *big.Int) *CTModInt {
 	if mod.Bit(0) == 0 {
 		panic("NewCTModIntWithPhi: modulus must be odd")
 	}
-	modBytes := mod.Bytes()
-	m, err := bigmod.NewModulus(modBytes)
-	if err != nil {
-		panic(err)
-	}
-
 	// For a unit a and known group exponent: a^(-1) = a^(phiN-1) mod n.
-	groupExponentMinusOne := new(big.Int).Sub(phiN, big.NewInt(1))
-
-	byteLen := len(modBytes)
-	return &CTModInt{
-		mod:        m,
-		modBigInt:  new(big.Int).Set(mod),
-		inverseExp: leftPad(groupExponentMinusOne.Bytes(), byteLen),
-		byteLen:    byteLen,
-		bytePool: sync.Pool{
-			New: func() interface{} {
-				buf := make([]byte, byteLen)
-				return &buf
-			},
-		},
-	}
+	return newCTModInt(mod, new(big.Int).Sub(phiN, big.NewInt(1)))
 }

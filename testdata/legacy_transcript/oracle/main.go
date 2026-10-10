@@ -305,11 +305,11 @@ func verifyDocument(path string) {
 	}
 }
 
-// compareDocuments proves the byte-compatibility statement the two checked-in
-// vectors are intended to make. Provenance differs by construction; every
-// other JSON value — fixed public input, challenge, proof scalar, and wire
-// message — must have the same canonical encoding.
-func compareDocuments(priorPath, r1Path string) {
+// compareDocuments checks that two legacy vectors are byte-compatible.
+// Provenance may differ; every other JSON value (fixed public input,
+// challenge, proof scalar, and wire message) must have the same canonical
+// encoding.
+func compareDocuments(firstPath, secondPath string) {
 	canonical := func(path string) []byte {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -329,8 +329,8 @@ func compareDocuments(priorPath, r1Path string) {
 		return encoded
 	}
 
-	if !bytes.Equal(canonical(priorPath), canonical(r1Path)) {
-		fmt.Fprintln(os.Stderr, "PRIOR and R1 legacy vectors differ outside provenance")
+	if !bytes.Equal(canonical(firstPath), canonical(secondPath)) {
+		fmt.Fprintf(os.Stderr, "legacy vectors %s and %s differ outside provenance\n", firstPath, secondPath)
 		os.Exit(1)
 	}
 	fmt.Println("canonical_legacy_vectors_equal=true")

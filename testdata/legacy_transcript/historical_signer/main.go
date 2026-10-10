@@ -19,7 +19,7 @@
 //	signer -> host: {"event":"error","message":"<diagnostic text, not asserted on>"}
 //	signer -> host: {"event":"turn_done"}
 //
-// The signer always plays party index 1 in a fixed 2-of-2 ceremony built from
+// The signer always plays party index 1 in a fixed 2-signer subset built from
 // the existing test/_ecdsa_fixtures/keygen_data_{0,1}.json fixtures (byte
 // identical between this historical commit and current dev), so both sides
 // derive identical PartyIDs and key material independently without needing to
