@@ -1,0 +1,51 @@
+name: PR description
+
+# Checks that the pull request description answers the template's required
+# questions: exactly one "Breaking change" box and exactly one "Security" box.
+# Pull requests opened before the template existed are skipped unless their
+# description already uses the template.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions: {}
+
+jobs:
+  required-answers:
+    if: github.event.pull_request.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required answers
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          CREATED_AT: ${{ github.event.pull_request.created_at }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          readonly template_marker='<!-- pr-template: v1 -->'
+          readonly adopted_at='2026-10-15T00:00:00Z'
+
+          if [[ "$CREATED_AT" < "$adopted_at" && "$BODY" != *"$template_marker"* ]]; then
+            echo "Opened before the template was adopted and not using it; skipping."
+            exit 0
+          fi
+
+          count_ticked() {
+            printf '%s\n' "$BODY" | grep -c -E "^[[:space:]]*[-*] \[[xX]\] \*\*($1)\*\*" || true
+          }
+
+          breaking="$(count_ticked 'No|Yes, coordinated activation|Yes, cutover|Not applicable')"
+          security="$(count_ticked 'Not security-related|Security fix')"
+
+          failed=0
+          if [[ "$breaking" -ne 1 ]]; then
+            echo "::error::Tick exactly one box under \"Breaking change\" (found $breaking)."
+            failed=1
+          fi
+          if [[ "$security" -ne 1 ]]; then
+            echo "::error::Tick exactly one box under \"Security\" (found $security)."
+            failed=1
+          fi
+          exit "$failed"

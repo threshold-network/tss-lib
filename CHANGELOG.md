@@ -3,13 +3,17 @@
 All notable changes to this fork (`threshold-network/tss-lib`) are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-This fork follows the upstream [`bnb-chain/tss-lib`](https://github.com/bnb-chain/tss-lib)
-SemVer line for provenance but has not yet published its own tagged release; all changes
-below are therefore listed under `[Unreleased]`.
+This fork tracks the upstream [`bnb-chain/tss-lib`](https://github.com/bnb-chain/tss-lib)
+line for provenance but has not yet published its own tagged release; all changes
+below are therefore listed under `[Unreleased]`. The first release is `v1.4.0`, after
+upstream's `v1.3.5`; the version rules are in
+[`docs/release-policy.md`](docs/release-policy.md).
 The module path has no `/vN` suffix (the upstream `/v2` path bump was not ported;
 see Not ported / deferred), so a Go-consumable release tag must stay on the `v0.x`
-or `v1.x` line — for example `v1.4.0-threshold.1` — because the `go` command
-rejects `v2`-and-later tags for this module path.
+or `v1.x` line, for example `v1.4.0`, because the `go` command rejects `v2`-and-later
+tags for this module path. Do not add a pre-release suffix (such as `-threshold.1`)
+to a release tag: `go get ...@latest` prefers a release over a pre-release, so it
+would select the older upstream `v1.3.5` instead.
 
 Provenance notation. Each entry carries two kinds of reference:
 - **Upstream source** — `BNB #NNN` / `BNB <sha>` is the upstream pull request or commit the
