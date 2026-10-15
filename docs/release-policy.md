@@ -39,7 +39,7 @@ flowchart LR
 
 - The module path is `github.com/bnb-chain/tss-lib`, without a `/vN` suffix. The `go` command accepts only `v0.x` and `v1.x` tags for this path, so releases stay on the `v1.x` line. The `v2.x` and `v3.x` tags in this repository belong to upstream's `/v2` and `/v3` modules; do not reuse those numbers.
 - The first release of this fork is `v1.4.0`, after upstream's `v1.3.5`.
-- Use plain release versions (`v1.4.0`, `v1.4.1`). Do not add a pre-release suffix such as `-threshold.1` to a release: `go get ...@latest` prefers a release over a pre-release, so it would select the older upstream `v1.3.5`.
+- Use plain release versions (`v1.4.0`, `v1.4.1`). Do not add a pre-release suffix such as `-threshold.1` to a release: a pre-release sorts below the plain release and `go get ...@latest` skips pre-releases when a release exists. Consumers that pin the fork with `replace` take the exact version they name.
 - A minor version (`v1.5.0`) carries new features and breaking changes; a patch version (`v1.4.1`) carries only class R and T changes. A major version would need a module-path change, which needs a decision by the maintainers. Every breaking change is listed under "Breaking changes" in `CHANGELOG.md`.
 - A tag is never moved or deleted (a ruleset enforces this). A bad release is fixed by a new version.
 
@@ -54,7 +54,7 @@ flowchart LR
 - Every change reaches `dev` and `master` through a PR. CI must pass.
 - A PR into `dev` or `master` needs an approval from a reviewer who is not its author.
 - A release tag needs an explicit go from a release owner. A hotfix needs a go from both release owners.
-- Only organization admins can create a `v*` tag (a ruleset enforces this). A release owner who is not an admin asks an admin to push the tag after giving the go.
+- A release owner gives the go for a `v*` tag, and an organization admin pushes it.
 
 ## Security fixes
 

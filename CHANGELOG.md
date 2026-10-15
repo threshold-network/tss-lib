@@ -12,8 +12,9 @@ The module path has no `/vN` suffix (the upstream `/v2` path bump was not ported
 see Not ported / deferred), so a Go-consumable release tag must stay on the `v0.x`
 or `v1.x` line, for example `v1.4.0`, because the `go` command rejects `v2`-and-later
 tags for this module path. Do not add a pre-release suffix (such as `-threshold.1`)
-to a release tag: `go get ...@latest` prefers a release over a pre-release, so it
-would select the older upstream `v1.3.5` instead.
+to a release tag: a pre-release sorts below the plain release, and `go get ...@latest`
+skips pre-releases when a release exists. Consumers that pin this fork with `replace`
+take the exact version they name.
 
 Provenance notation. Each entry carries two kinds of reference:
 - **Upstream source** — `BNB #NNN` / `BNB <sha>` is the upstream pull request or commit the

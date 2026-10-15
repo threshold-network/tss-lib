@@ -33,7 +33,7 @@ Merge the stream branch into `master` through the parent PR. Use a merge commit 
 
 ## 3. Tag the release commit (release owner)
 
-Tags live on `master` and never move. Only organization admins can create a `v*` tag, so a release owner who is not an admin gives the go and an admin pushes. Tag the merge commit from step 2:
+Tags live on `master` and never move. A release owner gives the go and an organization admin pushes the `v*` tag. Tag the merge commit from step 2:
 
 ```bash
 git checkout master
@@ -50,7 +50,7 @@ A pushed `v*` tag starts `.github/workflows/release.yml`. It extracts the `## [<
 
 ## 5. Check the release
 
-Open the Releases page and confirm the new release shows the version and the changelog section. If the workflow failed, the tag stays in place (a tag is never deleted); fix `CHANGELOG.md` and re-run the workflow, or, if the notes are still wrong, cut the next patch version.
+Open the Releases page and confirm the new release shows the version and the changelog section. If the workflow failed because the section is missing, the tag stays in place (a tag is never deleted) and a re-run would check out the same tagged commit, so it fails again. Edit the release body by hand in the GitHub UI, or cut the next patch version with the corrected `CHANGELOG.md`. Prevent this by finishing step 1 before the tag.
 
 ## 6. Repin the consumer
 
