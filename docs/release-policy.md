@@ -52,8 +52,9 @@ flowchart LR
 ## Approvals
 
 - Every change reaches `dev` and `master` through a PR. CI must pass.
-- A PR into `master` needs an approval from a reviewer who is not its author.
+- A PR into `dev` or `master` needs an approval from a reviewer who is not its author.
 - A release tag needs an explicit go from a release owner. A hotfix needs a go from both release owners.
+- Only organization admins can create a `v*` tag (a ruleset enforces this). A release owner who is not an admin asks an admin to push the tag after giving the go.
 
 ## Security fixes
 
@@ -70,4 +71,4 @@ flowchart LR
 
 - One stream: the `dev` line into `master`. Parent PR: #37.
 - Release: `v1.4.0`, tagged on `master` after #37 merges. Consumer: the keep-core pin.
-- Release owners: not yet named. Until they are named, a release tag needs a go from a repository admin.
+- Release owners: `piotr-roslaniec` and `lrsaturnino`.

@@ -33,7 +33,7 @@ Merge the stream branch into `master` through the parent PR. Use a merge commit 
 
 ## 3. Tag the release commit (release owner)
 
-Tags live on `master` and never move. Tag the merge commit from step 2:
+Tags live on `master` and never move. Only organization admins can create a `v*` tag, so a release owner who is not an admin gives the go and an admin pushes. Tag the merge commit from step 2:
 
 ```bash
 git checkout master
