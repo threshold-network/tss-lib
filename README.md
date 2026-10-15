@@ -215,6 +215,11 @@ Additionally, there should be a mechanism in your transport to allow for "reliab
 
 Timeouts and errors should be handled by your application. The method `WaitingFor` may be called on a `Party` to get the set of other parties that it is still waiting for messages from. You may also get the set of culprit parties that caused an error from a `*tss.Error`.
 
+## Releases
+This fork releases on the `v1.x` line. The first release is `v1.4.0`, after upstream's `v1.3.5`. The version rules, the compatibility classes, and the current cycle are in [`docs/release-policy.md`](docs/release-policy.md). The process that sorts a change into a release stream is in [`docs/release-streams.md`](docs/release-streams.md), and the steps to tag a release are in [`docs/release-process.md`](docs/release-process.md).
+
+A release never breaks a mixed-version ceremony: a change that old and new parties cannot share ships switched off, and the keep-core pin switches it on for the fleet.
+
 ## Security Audit
 A full review of this library was carried out by Kudelski Security and their final report was made available in October, 2019. A copy of this report [`audit-binance-tss-lib-final-20191018.pdf`](https://github.com/bnb-chain/tss-lib/releases/download/v1.0.0/audit-binance-tss-lib-final-20191018.pdf) may be found in the v1.0.0 release notes of this repository. That audit predates this fork's changes; the hardening listed in `CHANGELOG.md` has not had an independent audit.
 
