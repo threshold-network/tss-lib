@@ -50,11 +50,19 @@ A pushed `v*` tag starts `.github/workflows/release.yml`. It extracts the `## [<
 
 ## 5. Check the release
 
-Open the Releases page and confirm the new release shows the version and the changelog section. If the workflow failed because the section is missing, the tag stays in place (a tag is never deleted) and a re-run would check out the same tagged commit, so it fails again. Edit the release body by hand in the GitHub UI, or cut the next patch version with the corrected `CHANGELOG.md`. Prevent this by finishing step 1 before the tag.
+Open the Releases page and confirm the new release shows the version and the changelog section. If the workflow failed because the section is missing, the tag stays in place (a tag is never moved or deleted) and a re-run would check out the same tagged commit, so it fails again: cut the next patch version (`v1.4.1`) with the corrected `CHANGELOG.md`. Prevent this by finishing step 1 before the tag.
 
 ## 6. Repin the consumer
 
 keep-core pins this library by version in `go.mod`. After the release, update the pin to the new tag and open the pin PR there. That PR carries the cutover decision for the fleet.
+
+In the keep-core checkout, confirm the module actually resolves to this fork at the new tag before opening the pin PR:
+
+```bash
+go list -m -json github.com/bnb-chain/tss-lib
+```
+
+The output must carry `Replace.Path` of `github.com/threshold-network/tss-lib` and `Replace.Version` of the new tag. Anything else resolves upstream or a stale commit.
 
 ## Rollback
 

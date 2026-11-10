@@ -7,11 +7,11 @@ Agents use the `release-streams` skill (`.claude/skills/release-streams/SKILL.md
 ## 1. Terms
 
 - **Stream**: one line of work that ships as one release. A stream has one branch and one parent PR.
-- **Parent PR**: a PR from the stream's branch into `master` that tracks the stream. It has the `release-stream-parent` label. It merges only at convergence, after the stream's release.
+- **Parent PR**: a PR from the stream's branch into `master` that tracks the stream. It has the `release-stream-parent` label. It merges through the [release process](release-process.md), and a release owner tags the merge commit.
 - **Child PR**: a normal PR that merges into a stream's branch (or into a branch of a stack on that line).
 - **Breaking change**: a change that old and new versions cannot run side by side. Classes A and X in the policy.
 - **Activation switch**: the caller selection that turns a class A or X change on (for example `tss.ProtocolModeSecurityV2`). The change is off in this library and on only when keep-core selects it.
-- **Convergence**: merging the stream branch back into `master` after the release.
+- **Convergence**: merging the stream branch into `master` through the parent PR, then the release owner tags the merge commit. That tag is the release.
 
 ## 2. The process at a glance
 
@@ -24,8 +24,8 @@ flowchart TD
   NR --> PP[Child PR merges into the stream branch]
   BR --> PP
   PP --> UP[Update the parent PR body and the changelog]
-  UP --> REL[Release: a release owner tags]
-  REL --> CV[Convergence into master; the parent PR merges]
+  UP --> REL[Release: the release owner tags the merge commit]
+  REL --> CV[Convergence: the tag is published by the release workflow]
 ```
 
 ## 3. Keep the number of streams small
@@ -42,7 +42,7 @@ flowchart TD
 2. Before keep-core switches it on, a node with the change behaves exactly like a node without it. A mixed-version test proves this.
 3. All breaking changes of one release are switched on at one agreed point in keep-core.
 4. keep-core sets that point last, after the library release is tagged and after a rehearsal on the test network with a ceremony that straddles the switch, with operator notice on the keep-core side. This library sets no block height: it has no chain.
-5. Before the tag, check that the release branch contains the mixed-version test for every breaking change it carries. A branch that carries a breaking change without its mixed-version test can break a mixed fleet as soon as a consumer selects it.
+5. Before the release owner tags, check that the stream branch contains the mixed-version test for every breaking change it carries. A branch that carries a breaking change without its mixed-version test can break a mixed fleet as soon as a consumer selects it.
 
 ## 5. Describe every change in its PR
 

@@ -21,7 +21,7 @@ Exactly one class per PR (policy table "Compatibility classes"):
 | X | protocol messages, proof transcripts, Fiat-Shamir challenges, session binding, key-share or pre-parameter serialization, or a public Go API break for keep-core | Yes, cutover |
 | T | CI, docs, tests | Not applicable |
 
-- A dependency bump that changes a value a peer computes and must agree on is A or X. One that only changes local behavior is R.
+- A dependency bump that changes a value inside a transcript, a hash or a curve operation that peers must agree on is X. One that only changes local behavior is R.
 - Two classes in one PR: split it.
 
 ## 2. Pick the stream and the base branch
