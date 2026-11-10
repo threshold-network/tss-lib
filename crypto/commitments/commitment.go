@@ -57,7 +57,8 @@ func (cmt *HashCommitDecommit) Verify() bool {
 		return false
 	}
 	C, D := cmt.C, cmt.D
-	if C == nil || D == nil {
+	// D contains randomness followed by at least one committed value.
+	if C == nil || len(D) < 2 {
 		return false
 	}
 	for _, part := range D {

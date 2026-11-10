@@ -1,0 +1,338 @@
+// Copyright © 2019-2024 Binance
+//
+// This file is part of Binance. The full Binance copyright notice, including
+// terms governing use, modification, and redistribution, is contained in the
+// file LICENSE at the root of the source code distribution tree.
+
+// Package common provides constant-time big integer helpers for cryptographic use.
+//
+// SECURITY NOTE: Go's math/big package is NOT constant-time and should not be used
+// with secret values. This module provides constant-time helpers for the
+// secret-exponent operations enumerated below, using filippo.io/bigmod (the same
+// constant-time core used by Go's crypto/rsa).
+//
+// COVERAGE: enabled by default, the bigmod path is applied to
+// exponentiations/multiplications whose operand is a long-term secret,
+// witness, trapdoor, or secret plaintext/scalar: Paillier Decrypt / Encrypt
+// (the m*N term of gamma^m) / HomoMult, the Paillier mod- and factor-proofs,
+// the DLN proof, the ring-Pedersen trapdoor setup in keygen, the MtA range
+// and regular proofs, the Schnorr proof responses (crypto/schnorr), and ECDSA
+// signing rounds 3-5 (thelta/sigma/thetaInverse/si).
+// This is limited coverage: conversion, reduction, and other surrounding
+// math/big operations remain variable-time; the protocol is not fully
+// constant-time.
+//
+// Deliberately NOT hardened (left on math/big), and the reasons:
+//   - Public-exponent operations, where the timing reveals only public data: x^N in
+//     Encrypt, r^e, and every verifier-side exponentiation (challenges and proof
+//     responses are public).
+//   - One-time random per-proof blinds (e.g. h2^rho, h1^alpha in the MtA proofs). These
+//     are the same class as the secrets but are fresh, single-use auxiliary randomness;
+//     leaving them on math/big is a pragmatic deferral, NOT a safety guarantee.
+//   - Exponentiations modulo an even value (e.g. inverses mod phi(N)): bigmod requires
+//     an odd modulus, so these stay on math/big.
+//   - crypto/mta.AliceEnd/AliceEndWC's Paillier decrypt: c^LambdaN and the
+//     inverse of LambdaN mod N run in constant time, but the steps around
+//     them stay on math/big: the LambdaN mod N reduction before the inverse,
+//     the L(u) = (u-1)/N division, the math/big multiplication of L(u) by the
+//     inverse mod N, and decryptShare's reduction of the secret plaintext
+//     mod q. The only known mitigation is a sleep-based response-time
+//     normalization (~200ms target plus jitter), which was not adopted
+//     because it would add about 200ms to every MtA share round, a latency
+//     cost not signed off on. The gap remains open.
+//   - Elliptic-curve scalar multiplication on secp256k1: tss.S256() uses the
+//     variable-time btcec/v2 (Decred) routines, so secret scalars such as
+//     Schnorr nonces and key shares are multiplied in variable time.
+//   - The keygen ring-Pedersen inverse beta = alpha^-1 mod p*q: the inverse
+//     itself is constant-time, but ModInverseCT first reduces the secret
+//     alpha (sampled below NTilde, so wider than p*q) mod p*q with math/big.
+//     This happens once per keygen.
+//
+// Reference: https://github.com/golang/go/issues/20654
+
+package common
+
+import (
+	"math/big"
+	"sync"
+	"sync/atomic"
+
+	"filippo.io/bigmod"
+)
+
+// constantTimeEnabled controls whether constant-time operations are used.
+// The covered operations use the bigmod path by default.
+var constantTimeEnabled int32 = 1
+
+// EnableConstantTimeOps enables the covered bigmod operations (the default).
+// Configure the mode at application startup. An operation snapshots its mode;
+// changing it does not retroactively change an operation already in progress.
+func EnableConstantTimeOps() {
+	atomic.StoreInt32(&constantTimeEnabled, 1)
+}
+
+// DisableConstantTimeOps selects the variable-time math/big path for the covered
+// operations. This explicit opt-out can be used for compatibility or comparison.
+func DisableConstantTimeOps() {
+	atomic.StoreInt32(&constantTimeEnabled, 0)
+}
+
+// IsConstantTimeEnabled returns true if constant-time operations are enabled.
+func IsConstantTimeEnabled() bool {
+	return atomic.LoadInt32(&constantTimeEnabled) == 1
+}
+
+// CTModInt provides constant-time modular arithmetic backed by filippo.io/bigmod
+// (the same constant-time core used by Go's crypto/rsa and crypto/ecdsa).
+type CTModInt struct {
+	mod        *bigmod.Modulus
+	modBigInt  *big.Int
+	inverseExp []byte // Exponent for modular inverse: p-2 (prime) or groupExponent-1 (composite)
+	byteLen    int
+	// bytePool holds *[]byte to avoid interface boxing allocations on the hot path
+	// (SA6002: storing a slice value in sync.Pool causes a heap allocation per Put).
+	bytePool sync.Pool
+}
+
+// leftPad returns b left-padded with zero bytes to width; if b is already at least
+// width bytes it is returned unchanged.
+func leftPad(b []byte, width int) []byte {
+	if len(b) >= width {
+		return b
+	}
+	padded := make([]byte, width)
+	copy(padded[width-len(b):], b)
+	return padded
+}
+
+// padExponent encodes a nonnegative exponent in exactly the public bit bound's
+// byte width. Reject overflow instead of increasing bigmod.Exp's work according
+// to the secret exponent's magnitude. Leading zero bytes preserve the result.
+func padExponent(exp *big.Int, bitLen int) []byte {
+	if exp.Sign() < 0 {
+		panic("ExpCT: negative exponents are not supported; use ModInverseCT explicitly")
+	}
+	if bitLen <= 0 {
+		panic("ExpCT: public exponent bit length must be positive")
+	}
+	if exp.BitLen() > bitLen {
+		panic("ExpCT: exponent exceeds public bit length; use a sufficient public bound")
+	}
+	byteLen := bitLen / 8
+	if bitLen%8 != 0 {
+		byteLen++
+	}
+	return exp.FillBytes(make([]byte, byteLen))
+}
+
+// NewCTModInt creates a constant-time modular context using bigmod.
+// The modulus must be odd (a requirement of bigmod's Exp); this is asserted here so
+// the failure surfaces at construction rather than at the first ExpCT call.
+// Use GetCTModInt instead for a modulus that is reused across calls (e.g. a curve
+// order): it returns a cached shared *CTModInt so the bigmod.NewModulus setup and
+// sync.Pool allocation happen once per modulus, not per call.
+func NewCTModInt(mod *big.Int) *CTModInt {
+	if mod.Bit(0) == 0 {
+		panic("NewCTModInt: modulus must be odd")
+	}
+	// Pre-compute mod-2 for Fermat inverse: a^(-1) = a^(mod-2) mod mod
+	return newCTModInt(mod, new(big.Int).Sub(mod, big.NewInt(2)))
+}
+
+// newCTModInt builds the shared CTModInt state for an odd modulus with a
+// precomputed inverse exponent: mod-2 for prime moduli (Fermat inverse) or
+// groupExponent-1 for composite moduli (Euler inverse).
+func newCTModInt(mod, inverseExp *big.Int) *CTModInt {
+	modBytes := mod.Bytes()
+	m, err := bigmod.NewModulus(modBytes)
+	if err != nil {
+		// Fallback: should not happen for valid modulus
+		panic(err)
+	}
+	byteLen := len(modBytes)
+	return &CTModInt{
+		mod:        m,
+		modBigInt:  new(big.Int).Set(mod),
+		inverseExp: leftPad(inverseExp.Bytes(), byteLen),
+		byteLen:    byteLen,
+		bytePool: sync.Pool{
+			New: func() interface{} {
+				buf := make([]byte, byteLen)
+				return &buf
+			},
+		},
+	}
+}
+
+// reduceToPaddedBytes reduces val into [0, modulus) and returns a pooled
+// pointer to a zero-padded big-endian byte slice of length ct.byteLen
+// suitable for bigmod.Nat.SetBytes. The caller must pass the returned
+// pointer to releasePadded (typically via defer) to return the same pooled
+// buffer instead of leaking it.
+// NOTE: big.Int.Mod is not constant-time, but it is applied unconditionally
+// (no secret-dependent branch) and, with one exception, the values reduced
+// here are public or already in range. A caller passing a secret value at
+// or above the modulus should know that the reduction's timing depends on
+// the value.
+// The exception is the keygen ring-Pedersen inverse in
+// `ecdsa/keygen/prepare.go`: ModInverseCT(alpha) reduces the secret alpha,
+// sampled below NTilde, mod p*q here. This is a known gap.
+// An example of a safe reduction of a public value: in
+// `ecdsa/signing/round_5.go`, `rx = R.X()` is a field-prime (mod p)
+// coordinate that is not yet reduced mod the curve order N when it goes into
+// `MulCT(rx, sigma)`. The reduction is required for correctness (both the CT
+// and non-CT paths always did it), and `rx` comes from public values: R is
+// built from the round-4 decommitted Gamma_j points and delta (the sum of the
+// theta_i values broadcast in round 3). So the variable-time reduction mod N
+// leaks nothing secret.
+func (ct *CTModInt) reduceToPaddedBytes(val *big.Int) *[]byte {
+	reduced := new(big.Int).Mod(val, ct.modBigInt)
+
+	bufPtr := ct.bytePool.Get().(*[]byte)
+	buf := *bufPtr
+	for i := range buf {
+		buf[i] = 0
+	}
+	b := reduced.Bytes()
+	copy(buf[ct.byteLen-len(b):], b)
+	return bufPtr
+}
+
+// releasePadded clears the buffer behind bufPtr (as obtained from
+// reduceToPaddedBytes) and returns that same pointer to the pool. Putting
+// back the identical *[]byte -- rather than re-wrapping the dereferenced
+// slice in a new local pointer -- is what keeps this allocation-free: taking
+// the address of a fresh local would itself escape to the heap on every
+// call, just relocating the SA6002 allocation instead of removing it.
+func (ct *CTModInt) releasePadded(bufPtr *[]byte) {
+	buf := *bufPtr
+	for i := range buf {
+		buf[i] = 0
+	}
+	ct.bytePool.Put(bufPtr)
+}
+
+// ExpCT performs constant-time modular exponentiation using bigmod.
+// The exponent is padded to the modulus's byte width. Negative exponents and
+// exponents exceeding that width panic. Use ExpCTWithBitLen when the exponent's
+// public bound is wider than the arithmetic modulus. The modulus must be odd.
+func (ct *CTModInt) ExpCT(base, exp *big.Int) *big.Int {
+	return ct.ExpCTWithBitLen(base, exp, ct.byteLen*8)
+}
+
+// ExpCTWithBitLen performs constant-time modular exponentiation, padding every
+// exponent (including zero) to ceil(bitLen/8) bytes. bitLen must come from a
+// public bound, never exp.BitLen(). It must be positive, and exp must be
+// nonnegative and fit within bitLen bits; violations panic without truncation
+// or reduction. The temporary encoding owned by this method is wiped before it
+// returns. The arithmetic modulus must be odd.
+func (ct *CTModInt) ExpCTWithBitLen(base, exp *big.Int, bitLen int) *big.Int {
+	expBytes := padExponent(exp, bitLen)
+	defer zeroBytes(expBytes)
+
+	paddedBase := ct.reduceToPaddedBytes(base)
+	defer ct.releasePadded(paddedBase)
+
+	baseNat := bigmod.NewNat()
+	baseNat.SetBytes(*paddedBase, ct.mod)
+	return ct.expCTFromPaddedBase(baseNat, expBytes)
+}
+
+// ModInverseCT computes the modular inverse in constant time using Fermat's little theorem.
+// For a prime modulus p: a^(-1) = a^(p-2) mod p
+// For a composite modulus n with known group exponent e: a^(-1) = a^(e-1) mod n.
+// The Euler totient phi(n) and Carmichael function lambda(n) are both valid e.
+// The exponentiation uses bigmod; conversion, reduction, and inverse validation
+// also perform variable-time math/big operations.
+// Note: The modulus should be prime for this to work correctly. For composite moduli,
+// use NewCTModIntWithPhi to provide a group exponent.
+//
+// PERFORMANCE: for a prime modulus this is a full 256-bit-class modexp
+// (bigmod.Exp), which is ~10-20x slower than math/big.ModInverse's extended
+// Euclidean algorithm at the same size (see BenchmarkModInverseCT vs
+// BenchmarkModInverseStandard in constant_time_test.go). That cost is the price
+// of the constant-time path; the non-CT branch keeps the cheap Euclidean inverse.
+func (ct *CTModInt) ModInverseCT(a *big.Int) *big.Int {
+	if a.Sign() == 0 {
+		return nil
+	}
+
+	paddedA := ct.reduceToPaddedBytes(a)
+	defer ct.releasePadded(paddedA)
+
+	aNat := bigmod.NewNat()
+	aNat.SetBytes(*paddedA, ct.mod)
+
+	result := bigmod.NewNat()
+	result.Exp(aNat, ct.inverseExp, ct.mod)
+	inv := new(big.Int).SetBytes(result.Bytes(ct.mod))
+
+	// The Fermat/Euler inverse a^(mod-2) (or a^(groupExponent-1)) is only the true inverse when
+	// gcd(a, mod) == 1; for non-coprime a it returns a well-defined but WRONG value
+	// rather than failing. Verify a*inv == 1 and return nil otherwise, so this matches
+	// math/big.ModInverse's nil-on-no-inverse contract and both code paths agree.
+	if ct.MulCT(a, inv).Cmp(big.NewInt(1)) != 0 {
+		return nil
+	}
+	return inv
+}
+
+// MulCT performs constant-time modular multiplication using bigmod.
+func (ct *CTModInt) MulCT(x, y *big.Int) *big.Int {
+	paddedX := ct.reduceToPaddedBytes(x)
+	paddedY := ct.reduceToPaddedBytes(y)
+	defer ct.releasePadded(paddedX)
+	defer ct.releasePadded(paddedY)
+
+	xNat := bigmod.NewNat()
+	yNat := bigmod.NewNat()
+	xNat.SetBytes(*paddedX, ct.mod)
+	yNat.SetBytes(*paddedY, ct.mod)
+
+	xNat.Mul(yNat, ct.mod)
+
+	return new(big.Int).SetBytes(xNat.Bytes(ct.mod))
+}
+
+// ctModIntCache memoizes *CTModInt instances by modulus byte string so that
+// repeated calls for a constant modulus (e.g. a curve order across signing
+// rounds) reuse one bigmod.NewModulus + sync.Pool instead of reallocating.
+// NewCTModInt is retained for one-shot / test use; GetCTModInt is the shared,
+// cached accessor: it amortizes the bigmod.NewModulus and sync.Pool setup to
+// once per distinct modulus. It is not itself allocation-free -- deriving the
+// cache key (mod.Bytes, then a string conversion) allocates on every call,
+// cache hit or miss.
+var ctModIntCache sync.Map // key: mod.Bytes() string -> *CTModInt
+
+// GetCTModInt returns a shared, cached constant-time modular context for mod.
+// The modulus must be odd. Repeated calls with the same modulus value return
+// the same *CTModInt, so the per-call bigmod.NewModulus construction and
+// sync.Pool setup are paid once per distinct modulus rather than every call.
+// Only for a small fixed set of public moduli (e.g. curve orders); entries
+// are never evicted and modulus bytes are retained for the process lifetime.
+// Use NewCTModInt for per-key or secret moduli.
+func GetCTModInt(mod *big.Int) *CTModInt {
+	if mod.Bit(0) == 0 {
+		panic("GetCTModInt: modulus must be odd")
+	}
+	key := string(mod.Bytes())
+	if v, ok := ctModIntCache.Load(key); ok {
+		return v.(*CTModInt)
+	}
+	constructed := NewCTModInt(mod)
+	actual, _ := ctModIntCache.LoadOrStore(key, constructed)
+	return actual.(*CTModInt)
+}
+
+// NewCTModIntWithPhi creates a constant-time modular context for composite moduli.
+// The phiN argument must be a positive group exponent: every unit a modulo mod
+// must satisfy a^phiN = 1. For n = p*q with distinct primes, either the Euler
+// totient (p-1)*(q-1) or the Carmichael exponent lcm(p-1, q-1) can be used.
+// The parameter name is retained for compatibility; inversion uses a^(phiN-1).
+func NewCTModIntWithPhi(mod, phiN *big.Int) *CTModInt {
+	if mod.Bit(0) == 0 {
+		panic("NewCTModIntWithPhi: modulus must be odd")
+	}
+	// For a unit a and known group exponent: a^(-1) = a^(phiN-1) mod n.
+	return newCTModInt(mod, new(big.Int).Sub(phiN, big.NewInt(1)))
+}

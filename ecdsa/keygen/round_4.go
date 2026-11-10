@@ -10,7 +10,6 @@ import (
 	"errors"
 
 	"github.com/bnb-chain/tss-lib/common"
-	"github.com/bnb-chain/tss-lib/crypto/paillier"
 	"github.com/bnb-chain/tss-lib/tss"
 )
 
@@ -39,7 +38,13 @@ func (round *round4) Start() *tss.Error {
 			continue
 		}
 		r3msg := msg.Content().(*KGRound3Message)
-		go func(prf paillier.Proof, j int, ch chan<- bool) {
+		go func(j int, ch chan<- bool) {
+			prf, err := r3msg.UnmarshalProofInts()
+			if err != nil {
+				common.Logger.Error(round.WrapError(err, Ps[j]).Error())
+				ch <- false
+				return
+			}
 			ppk := round.save.PaillierPKs[j]
 			ok, err := prf.Verify(ppk.N, PIDs[j], ecdsaPub)
 			if err != nil {
@@ -48,7 +53,7 @@ func (round *round4) Start() *tss.Error {
 				return
 			}
 			ch <- ok
-		}(r3msg.UnmarshalProofInts(), j, chs[j])
+		}(j, chs[j])
 	}
 
 	// consume unbuffered channels (end the goroutines)

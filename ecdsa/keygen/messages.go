@@ -7,6 +7,7 @@
 package keygen
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/bnb-chain/tss-lib/common"
@@ -221,8 +222,11 @@ func (m *KGRound2Message1) UnmarshalShare() *big.Int {
 	return new(big.Int).SetBytes(m.Share)
 }
 
-func (m *KGRound2Message1) UnmarshalFactorProof() *paillier.FactorProof {
+func (m *KGRound2Message1) UnmarshalFactorProof() (*paillier.FactorProof, error) {
 	proof := m.GetFacproof()
+	if proof == nil {
+		return nil, fmt.Errorf("KGRound2Message1.UnmarshalFactorProof: nil factor proof sub-message")
+	}
 	return &paillier.FactorProof{
 		P:     common.UnmarshalSigned(proof.P),
 		Q:     common.UnmarshalSigned(proof.Q),
@@ -235,11 +239,14 @@ func (m *KGRound2Message1) UnmarshalFactorProof() *paillier.FactorProof {
 		W1:    common.UnmarshalSigned(proof.W1),
 		W2:    common.UnmarshalSigned(proof.W2),
 		V:     common.UnmarshalSigned(proof.V),
-	}
+	}, nil
 }
 
-func (m *KGRound2Message1) UnmarshalFactorProofTilde() *paillier.FactorProof {
+func (m *KGRound2Message1) UnmarshalFactorProofTilde() (*paillier.FactorProof, error) {
 	proof := m.GetFacproofTilde()
+	if proof == nil {
+		return nil, fmt.Errorf("KGRound2Message1.UnmarshalFactorProofTilde: nil factor proof sub-message")
+	}
 	return &paillier.FactorProof{
 		P:     common.UnmarshalSigned(proof.P),
 		Q:     common.UnmarshalSigned(proof.Q),
@@ -252,7 +259,7 @@ func (m *KGRound2Message1) UnmarshalFactorProofTilde() *paillier.FactorProof {
 		W1:    common.UnmarshalSigned(proof.W1),
 		W2:    common.UnmarshalSigned(proof.W2),
 		V:     common.UnmarshalSigned(proof.V),
-	}
+	}, nil
 }
 
 func (proof *KGRound2Message1_FactorProof) ValidateBasic() bool {
@@ -327,11 +334,14 @@ func (m *KGRound3Message) ValidateBasic() bool {
 		common.NonEmptyMultiBytes(m.GetPaillierProof(), paillier.ProofIters)
 }
 
-func (m *KGRound3Message) UnmarshalProofInts() paillier.Proof {
-	var pf paillier.Proof
+func (m *KGRound3Message) UnmarshalProofInts() (paillier.Proof, error) {
 	proofBzs := m.GetPaillierProof()
+	if !common.NonEmptyMultiBytes(proofBzs, paillier.ProofIters) {
+		return paillier.Proof{}, fmt.Errorf("KGRound3Message.UnmarshalProofInts: expected %d non-empty byte parts, got %d", paillier.ProofIters, len(proofBzs))
+	}
+	var pf paillier.Proof
 	for i := range pf {
 		pf[i] = new(big.Int).SetBytes(proofBzs[i])
 	}
-	return pf
+	return pf, nil
 }

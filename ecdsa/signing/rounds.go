@@ -7,6 +7,7 @@
 package signing
 
 import (
+	"errors"
 	"math/big"
 
 	"github.com/bnb-chain/tss-lib/common"
@@ -26,7 +27,7 @@ type (
 		data    *common.SignatureData
 		temp    *localTempData
 		out     chan<- tss.Message
-		end     chan<- common.SignatureData
+		end     chan<- *common.SignatureData
 		ok      []bool // `ok` tracks parties which have been verified by Update()
 		started bool
 		number  int
@@ -125,7 +126,25 @@ func (round *base) resetOK() {
 	}
 }
 
-// getSSID derives the session-binding identifier for signing.
+// proofContext returns the immutable transcript selection in variadic-call
+// form. Legacy parties pass no session and therefore reproduce the historical
+// untagged challenges. Security-v2 parties bind every proof to the ceremony
+// SSID and the producing party.
+func (round *base) proofContext(index int) [][]byte {
+	if round.ProtocolMode() == tss.ProtocolModeSecurityV2 {
+		return [][]byte{
+			common.AppendUint64ToBytesSlice(
+				round.temp.ssid,
+				uint64(index),
+			),
+		}
+	}
+	return nil
+}
+
+// getSSID derives the security-v2 session-binding identifier for signing,
+// including the message and its fixed-width encoding. Legacy mode does not
+// call this helper and retains the historical untagged proof transcript.
 //
 // Callers must invoke this exactly once, in round 1, and store the result in
 // round.temp.ssid for the rest of the protocol — round.number is hashed in
@@ -133,6 +152,9 @@ func (round *base) resetOK() {
 // different SSID that no peer would agree with. The current call site is
 // round1.Start; if you move it, make sure round.number is still 1 at the call.
 func (round *base) getSSID() ([]byte, error) {
+	if round.temp.m == nil {
+		return nil, errors.New("message to sign is not set")
+	}
 	ssidList := []*big.Int{
 		round.EC().Params().P,
 		round.EC().Params().N,
@@ -151,5 +173,8 @@ func (round *base) getSSID() ([]byte, error) {
 	ssidList = append(ssidList, round.key.H2j...)
 	ssidList = append(ssidList, big.NewInt(int64(round.number)))
 	ssidList = append(ssidList, round.temp.ssidNonce)
+	ssidList = append(ssidList, round.temp.m)
+	// The integer magnitude alone does not capture leading zero bytes.
+	ssidList = append(ssidList, big.NewInt(int64(round.temp.fullBytesLen)))
 	return common.SHA512_256i(ssidList...).FillBytes(make([]byte, 32)), nil
 }

@@ -40,10 +40,16 @@ func NewECPointNoCurveCheck(curve elliptic.Curve, X, Y *big.Int) *ECPoint {
 }
 
 func (p *ECPoint) X() *big.Int {
+	if p == nil || p.coords[0] == nil {
+		panic(errors.New("ECPoint.X: nil point or nil X coordinate"))
+	}
 	return new(big.Int).Set(p.coords[0])
 }
 
 func (p *ECPoint) Y() *big.Int {
+	if p == nil || p.coords[1] == nil {
+		panic(errors.New("ECPoint.Y: nil point or nil Y coordinate"))
+	}
 	return new(big.Int).Set(p.coords[1])
 }
 
@@ -76,6 +82,9 @@ func (p *ECPoint) ToECDSAPubKey() *ecdsa.PublicKey {
 }
 
 func (p *ECPoint) IsOnCurve() bool {
+	if p == nil {
+		return false
+	}
 	return isOnCurve(p.curve, p.coords[0], p.coords[1])
 }
 
@@ -111,6 +120,9 @@ func sameBigInt(lhs, rhs *big.Int) bool {
 
 func (p *ECPoint) Equals(p2 *ECPoint) bool {
 	if p == nil || p2 == nil {
+		return false
+	}
+	if p.coords[0] == nil || p.coords[1] == nil || p2.coords[0] == nil || p2.coords[1] == nil {
 		return false
 	}
 	return p.X().Cmp(p2.X()) == 0 && p.Y().Cmp(p2.Y()) == 0
@@ -210,6 +222,9 @@ func UnFlattenECPoints(curve elliptic.Curve, in []*big.Int, noCurveCheck ...bool
 // Gob helpers for if you choose to encode messages with Gob.
 
 func (p *ECPoint) GobEncode() ([]byte, error) {
+	if p == nil {
+		return nil, errors.New("ECPoint.GobEncode: nil point")
+	}
 	buf := &bytes.Buffer{}
 	x, err := p.coords[0].GobEncode()
 	if err != nil {
@@ -240,6 +255,10 @@ func (p *ECPoint) GobDecode(buf []byte) error {
 	if err := binary.Read(reader, binary.LittleEndian, &length); err != nil {
 		return err
 	}
+	// A coordinate's declared length must fit before reserving its buffer.
+	if uint64(length) > uint64(reader.Len()) {
+		return fmt.Errorf("gob decode failed: coordinate length exceeds remaining bytes")
+	}
 	x := make([]byte, length)
 	n, err := reader.Read(x)
 	if n != int(length) || err != nil {
@@ -247,6 +266,9 @@ func (p *ECPoint) GobDecode(buf []byte) error {
 	}
 	if err := binary.Read(reader, binary.LittleEndian, &length); err != nil {
 		return err
+	}
+	if uint64(length) > uint64(reader.Len()) {
+		return fmt.Errorf("gob decode failed: coordinate length exceeds remaining bytes")
 	}
 	y := make([]byte, length)
 	n, err = reader.Read(y)

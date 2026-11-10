@@ -71,32 +71,30 @@ func (round *round2) Start() *tss.Error {
 		wg.Add(4)
 		_j := j
 		_msg := msg
-		contextJ := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(j))
-
 		verifier.VerifyDLNProof1(r1msg, H1j, H2j, NTildej, func(isValid bool) {
 			if !isValid {
 				dlnProof1FailCulprits[_j] = _msg.GetFrom()
 			}
 			wg.Done()
-		}, round.temp.ssid)
+		}, round.proofSession()...)
 		verifier.VerifyDLNProof2(r1msg, H2j, H1j, NTildej, func(isValid bool) {
 			if !isValid {
 				dlnProof2FailCulprits[_j] = _msg.GetFrom()
 			}
 			wg.Done()
-		}, round.temp.ssid)
+		}, round.proofSession()...)
 		verifier.VerifyModProof(r1msg, paillierPKj.N, func(isValid bool) {
 			if !isValid {
 				modProofFailCulprits[_j] = _msg.GetFrom()
 			}
 			wg.Done()
-		}, contextJ)
+		}, round.proofContext(j)...)
 		verifier.VerifyModProofTilde(r1msg, NTildej, func(isValid bool) {
 			if !isValid {
 				modProofTildeFailCulprits[_j] = _msg.GetFrom()
 			}
 			wg.Done()
-		}, contextJ)
+		}, round.proofContext(j)...)
 	}
 	wg.Wait()
 	for _, culprit := range append(dlnProof1FailCulprits, dlnProof2FailCulprits...) {
@@ -129,7 +127,6 @@ func (round *round2) Start() *tss.Error {
 
 	// 5. p2p send share ij to Pj
 	shares := round.temp.shares
-	contextI := common.AppendUint64ToBytesSlice(round.temp.ssid, uint64(i))
 	for j, Pj := range round.Parties().IDs() {
 		// do not send to this Pj, but store for round 3
 		if j == i {
@@ -137,8 +134,18 @@ func (round *round2) Start() *tss.Error {
 			continue
 		}
 		H1j, H2j, NTildej := round.save.H1j[j], round.save.H2j[j], round.save.NTildej[j]
-		facProof := round.save.LocalPreParams.PaillierSK.FactorProof(NTildej, H1j, H2j, contextI)
-		facProofTilde := round.temp.skTilde.FactorProof(NTildej, H1j, H2j, contextI)
+		facProof := round.save.LocalPreParams.PaillierSK.FactorProof(
+			NTildej,
+			H1j,
+			H2j,
+			round.proofContext(i)...,
+		)
+		facProofTilde := round.temp.skTilde.FactorProof(
+			NTildej,
+			H1j,
+			H2j,
+			round.proofContext(i)...,
+		)
 
 		r2msg1 := NewKGRound2Message1(Pj, round.PartyID(), shares[j], facProof, facProofTilde)
 		round.out <- r2msg1

@@ -1,10 +1,8 @@
 package paillier
 
 import (
-	"context"
 	"math/big"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -19,25 +17,27 @@ var (
 	badPublicKey  *PublicKey
 )
 
+// facSetUp loads pre-generated 2048-bit Paillier key pairs from the
+// committed test fixtures instead of generating two inline: party 1's key is
+// the primary pair, party 2's is the auxiliary pair, so the two moduli are
+// distinct exactly as the generated pairs were. The bad key pair remains
+// constructed analytically.
 func facSetUp(t *testing.T) {
 	if privateKey != nil && publicKey != nil && auxPrime != nil && s != nil && tt != nil {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-	defer cancel()
-
 	var err error
-	privateKey, publicKey, err = GenerateKeyPair(ctx, testPaillierKeyLength)
+	privateKey, publicKey, err = loadFixturePaillierKey(1)
 	if err != nil {
-		t.Fatalf("failed to generate Paillier key pair: %v", err)
+		t.Fatalf("failed to load fixture Paillier key pair: %v", err)
 	}
 
 	var err2 error
 	var auxSecret *PrivateKey
-	auxSecret, auxPrime, err2 = GenerateKeyPair(ctx, testPaillierKeyLength)
+	auxSecret, auxPrime, err2 = loadFixturePaillierKey(2)
 	if err2 != nil {
-		t.Fatalf("failed to generate auxiliary Paillier key pair: %v", err2)
+		t.Fatalf("failed to load auxiliary fixture Paillier key pair: %v", err2)
 	}
 
 	lambda := common.GetRandomPositiveInt(auxSecret.PhiN)

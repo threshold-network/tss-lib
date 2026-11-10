@@ -29,24 +29,32 @@ var (
 	publicKey  *PublicKey
 )
 
+// setUp loads the pre-generated 2048-bit Paillier key pair committed in
+// test/_ecdsa_fixtures (party 0), so the package tests do not pay for
+// fresh safe-prime generation on every run. The generator path stays
+// covered by TestGenerateKeyPair, the one test that still calls
+// GenerateKeyPair inline.
 func setUp(t *testing.T) {
 	if privateKey != nil && publicKey != nil {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
 	var err error
-	privateKey, publicKey, err = GenerateKeyPair(ctx, testPaillierKeyLength)
+	privateKey, publicKey, err = loadFixturePaillierKey(0)
 	assert.NoError(t, err)
 }
 
 func TestGenerateKeyPair(t *testing.T) {
-	setUp(t)
-	assert.NotZero(t, publicKey)
-	assert.NotZero(t, privateKey)
-	t.Log(privateKey)
+	// The only paillier-package test that still generates a fresh 2048-bit
+	// key pair inline, keeping the generator path covered.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	sk, pk, err := GenerateKeyPair(ctx, testPaillierKeyLength)
+	assert.NoError(t, err)
+	assert.NotZero(t, pk)
+	assert.NotZero(t, sk)
+	t.Log(sk)
 }
 
 func TestEncrypt(t *testing.T) {
@@ -155,6 +163,7 @@ func TestGenerateXs(t *testing.T) {
 }
 
 func TestGetPQGeneric(t *testing.T) {
+	setUp(t)
 	p, q := privateKey.GetPQ()
 
 	n := new(big.Int).Mul(p, q)

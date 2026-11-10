@@ -98,7 +98,33 @@ func (round *base) resetOK() {
 	}
 }
 
-// getSSID derives the session-binding identifier for keygen.
+// proofSession returns the immutable per-party proof transcript selection in
+// variadic-call form. Legacy parties deliberately pass no session so the
+// proof primitives reproduce their historical challenges byte for byte.
+func (round *base) proofSession() [][]byte {
+	if round.ProtocolMode() == tss.ProtocolModeSecurityV2 {
+		return [][]byte{round.temp.ssid}
+	}
+	return nil
+}
+
+// proofContext extends the security-v2 session with the producing party's
+// index. Legacy proofs predate these per-party transcript contexts.
+func (round *base) proofContext(index int) [][]byte {
+	if round.ProtocolMode() == tss.ProtocolModeSecurityV2 {
+		return [][]byte{
+			common.AppendUint64ToBytesSlice(
+				round.temp.ssid,
+				uint64(index),
+			),
+		}
+	}
+	return nil
+}
+
+// getSSID derives the security-v2 session-binding identifier for keygen.
+// Legacy mode does not call this helper and retains the historical
+// untagged proof transcript.
 //
 // Callers must invoke this exactly once, in round 1, and store the result in
 // round.temp.ssid for the rest of the protocol — round.number is hashed in

@@ -48,18 +48,44 @@ func (privateKey *PrivateKey) ModProof(session ...[]byte) *ModProof {
 	var b [PARAM_M]bool
 	var z [PARAM_M]*big.Int
 
+	// invN = N^(-1) mod phiN. phiN is even, so this inverse stays on math/big (bigmod
+	// requires an odd modulus); it is a prover-side value, never transmitted. Only the
+	// Exp mod N (odd) below carries the secret exponent and gets the constant-time
+	// path, reusing the context's pre-encoded fixed-width invN encoding across all
+	// iterations.
+	invN := new(big.Int).ModInverse(N, phiN)
+	// One snapshot for context creation and every use, even if the global
+	// toggle changes while this proof is being generated.
+	useCT := common.IsConstantTimeEnabled()
+	// The p/q/N contexts and the key's secret-derived exponents are built
+	// once per proof and shared by every PARAM_M iteration; sharing only
+	// removes repeated setup and does not change any proof byte. The
+	// wipe below is deferred so it also runs if a later step aborts.
+	ctx := newModProofCTContext(p, q, N, phiN, invN, useCT)
+	defer ctx.wipeExponentEncodings()
+	if modProofTestHook != nil {
+		modProofTestHook(ctx)
+	}
+
 	for i, y_i := range y {
-		a_i, b_i, x_i := defineXi(w, y_i, p, q, N, phiN)
+		a_i, b_i, x_i := ctx.defineXi(w, y_i, p, q, N)
 		x[i] = x_i
 		a[i] = a_i
 		b[i] = b_i
 
-		z_i := new(big.Int).ModInverse(N, phiN)
-		z_i.Exp(y_i, z_i, N)
+		var z_i *big.Int
+		if useCT {
+			// y_i is in [0, N) (HashToN / sampleYModN outputs), so the
+			// canonical in-range exponentiation avoids the per-iteration
+			// operand reduction; invNExp is the context's pre-encoded,
+			// proof-owned encoding of the invariant secret exponent.
+			z_i = ctx.ctN.ExpCTCanonicalWithBytes(y_i, ctx.invNExp)
+		} else {
+			z_i = new(big.Int).Exp(y_i, invN, N)
+		}
 
 		z[i] = z_i
 	}
-
 	return &ModProof{
 		W: w,
 		X: x,
@@ -78,8 +104,8 @@ func (pf ModProof) ModVerify(N *big.Int, session ...[]byte) (bool, error) {
 		return false, fmt.Errorf("mod proof verify: nil inputs in proof")
 	}
 
-	if !common.IsUsableUnknownOrderModulus(N, verifyMinModulusBitLen) {
-		return false, fmt.Errorf("mod proof verify: invalid modulus %d", N)
+	if !common.IsUsableUnknownOrderModulus(N, common.MinUnknownOrderModulusBitLen) {
+		return false, fmt.Errorf("mod proof verify: invalid modulus (bit length %d)", N.BitLen())
 	}
 
 	if !common.Gt(pf.W, zero) || !common.Lt(pf.W, N) {
@@ -184,9 +210,115 @@ func sampleYModN(tag []byte, N *big.Int, inputs ...*big.Int) *big.Int {
 	}
 }
 
-// Determine values a_i and b_i so that a valid x_i exists,
-// and return a_i, b_i and x_i.
-func defineXi(w, y_i, p, q, N, phiN *big.Int) (bool, bool, *big.Int) {
+// modProofTestHook lets a test observe the context ModProof creates, after
+// the deferred wipe is registered. It is nil outside tests.
+var modProofTestHook func(*modProofCTContext)
+
+// modProofCTContext is the precomputed state ModProof shares across all
+// PARAM_M iterations: the p, q and N modular contexts, the key's
+// secret-derived exponents ((p-1)/2, (q-1)/2 and the fourth-root
+// exponent (phiN+4)/8), and the key's invN = N^(-1) mod phiN. Built once
+// per proof and shared by every iteration, it only removes repeated
+// setup; the proof bytes do not depend on the sharing.
+//
+// On the constant-time path the context also owns fixed-width encodings
+// of those exponents (psPExp, psQExp, rootExpExp, invNExp), reused
+// across every iteration instead of being re-encoded each time;
+// wipeExponentEncodings zeroes them before the proof is returned.
+type modProofCTContext struct {
+	useCT bool
+	ctP   *common.CTModInt
+	ctQ   *common.CTModInt
+	ctN   *common.CTModInt
+
+	psP     *big.Int // (p-1)/2: Euler's-criterion exponent mod p
+	psQ     *big.Int // (q-1)/2: Euler's-criterion exponent mod q
+	rootExp *big.Int // (phiN+4)/8: fourth-root exponent mod N
+
+	// Owned fixed-width encodings of the secret-derived exponents
+	// above plus invN, created only on the constant-time path.
+	psPExp, psQExp, rootExpExp, invNExp []byte
+}
+
+// fixedWidthExponentBytes encodes a nonnegative exponent as a
+// big-endian byte string at the modulus public byte width
+// (len(mod.Bytes()), the same width the public bigmod path pads to).
+func fixedWidthExponentBytes(exp, mod *big.Int) []byte {
+	return exp.FillBytes(make([]byte, len(mod.Bytes())))
+}
+
+// wipeExponentEncodings zeroes the secret-derived fixed-width exponent
+// encodings owned by this context. Call it when proof generation
+// finishes (or aborts); the fields keep pointing at the zeroed arrays.
+func (ctx *modProofCTContext) wipeExponentEncodings() {
+	for _, enc := range [][]byte{ctx.psPExp, ctx.psQExp, ctx.rootExpExp, ctx.invNExp} {
+		for i := range enc {
+			enc[i] = 0
+		}
+	}
+}
+
+func newModProofCTContext(p, q, N, phiN, invN *big.Int, useCT bool) *modProofCTContext {
+	ctx := &modProofCTContext{
+		useCT:   useCT,
+		psP:     new(big.Int).Div(new(big.Int).Sub(p, big.NewInt(1)), big.NewInt(2)),
+		psQ:     new(big.Int).Div(new(big.Int).Sub(q, big.NewInt(1)), big.NewInt(2)),
+		rootExp: new(big.Int).Div(new(big.Int).Add(phiN, big.NewInt(4)), big.NewInt(8)),
+	}
+	if useCT {
+		// SECURITY: p and q are secret primes and the exponents are
+		// secret-derived; build the constant-time contexts and pre-encode
+		// the invariant exponents once here instead of re-creating or
+		// re-encoding them inside every iteration.
+		ctx.ctP = common.NewCTModInt(p)
+		ctx.ctQ = common.NewCTModInt(q)
+		ctx.ctN = common.NewCTModInt(N)
+		ctx.psPExp = fixedWidthExponentBytes(ctx.psP, p)
+		ctx.psQExp = fixedWidthExponentBytes(ctx.psQ, q)
+		ctx.rootExpExp = fixedWidthExponentBytes(ctx.rootExp, N)
+		ctx.invNExp = fixedWidthExponentBytes(invN, N)
+	}
+	return ctx
+}
+
+// isQuadResidueModPrime is x^ps == 1 mod prime, where ps is the precomputed
+// (prime-1)/2 exponent of this context. The CT path reuses the pre-encoded
+// fixed-width exponent psExp; x is reduced modulo prime by the generic
+// reducing path because x may exceed prime (it is reduced mod N, not mod
+// prime).
+func (ctx *modProofCTContext) isQuadResidueModPrime(x, prime *big.Int, ct *common.CTModInt, ps *big.Int, psExp []byte) bool {
+	if ctx.useCT {
+		return common.Eq(ct.ExpCTWithBytes(x, psExp), one)
+	}
+	return common.Eq(new(big.Int).Exp(x, ps, prime), one)
+}
+
+// x is a quadratic residue modulo pq iff x is one modulo p and q
+func (ctx *modProofCTContext) isQuadResidueModComposite(x, p, q *big.Int) bool {
+	return ctx.isQuadResidueModPrime(x, p, ctx.ctP, ctx.psP, ctx.psPExp) &&
+		ctx.isQuadResidueModPrime(x, q, ctx.ctQ, ctx.psQ, ctx.psQExp)
+}
+
+// fourthRoot computes the fourth root of a quadratic residue x modulo
+// n = pq by squaring x^((phiN+4)/8) twice. The CT path reuses the
+// pre-encoded fixed-width root exponent; both bases are in [0, n)
+// (x comes from defineXi's reduction mod n, and res is the mod-n
+// exponentiation output), so the canonical in-range path is used and no
+// operand reduction is needed.
+func (ctx *modProofCTContext) fourthRoot(x, n *big.Int) *big.Int {
+	if ctx.useCT {
+		// SECURITY: rootExp derives from secret phiN; the modulus n is odd,
+		// so both square-root steps stay on the constant-time path.
+		res := ctx.ctN.ExpCTCanonicalWithBytes(x, ctx.rootExpExp)
+		return ctx.ctN.ExpCTCanonicalWithBytes(res, ctx.rootExpExp)
+	}
+	res := new(big.Int).Exp(x, ctx.rootExp, n)
+	return res.Exp(res, ctx.rootExp, n)
+}
+
+// defineXi determines values a_i and b_i so that a valid x_i exists,
+// and returns a_i, b_i and x_i.
+func (ctx *modProofCTContext) defineXi(w, y_i, p, q, N *big.Int) (bool, bool, *big.Int) {
 	bools := [...]bool{false, true}
 
 	for _, a := range bools {
@@ -203,38 +335,13 @@ func defineXi(w, y_i, p, q, N, phiN *big.Int) (bool, bool, *big.Int) {
 
 			yy_i.Mod(yy_i, N)
 
-			if isQuadResidueModComposite(yy_i, p, q) {
-				return a, b, quadResidueModComposite(yy_i, p, q, N, phiN)
+			if ctx.isQuadResidueModComposite(yy_i, p, q) {
+				return a, b, ctx.fourthRoot(yy_i, N)
 			}
 		}
 	}
 
 	panic("no root found") // this should not be reached with n=pq for safe primes p, q
-}
-
-// x is quadratic residue modulo pq if x is a quadratic residue modulo p and q
-func isQuadResidueModComposite(x, p, q *big.Int) bool {
-	return isQuadResidueModPrime(x, p) && isQuadResidueModPrime(x, q)
-}
-
-// x is a quadratic residue modulo p if x^((p-1)/2) = 1
-func isQuadResidueModPrime(x, p *big.Int) bool {
-	ps := new(big.Int).Sub(p, big.NewInt(1))
-	ps = ps.Div(ps, big.NewInt(2))
-
-	return common.Eq(new(big.Int).Exp(x, ps, p), big.NewInt(1))
-}
-
-// the square root of x can be calculated as x^((phiN+4)/8)
-// apply this twice to get the 4th root
-func quadResidueModComposite(x, p, q, n, phiN *big.Int) *big.Int {
-	e := new(big.Int).Add(phiN, big.NewInt(4))
-	e = e.Div(e, big.NewInt(8))
-
-	res := new(big.Int).Exp(x, e, n)
-	res = res.Exp(res, e, n)
-
-	return res
 }
 
 func UnmarshalModProof(ws []byte, xs [][]byte, as []bool, bs []bool, zs [][]byte) (*ModProof, error) {
