@@ -11,7 +11,7 @@ Agents use the `release-streams` skill (`.claude/skills/release-streams/SKILL.md
 - **Child PR**: a normal PR that merges into a stream's branch (or into a branch of a stack on that line).
 - **Breaking change**: a change that old and new versions cannot run side by side. Classes A and X in the policy.
 - **Activation switch**: the caller selection that turns a class A or X change on (for example `tss.ProtocolModeSecurityV2`). The change is off in this library and on only when keep-core selects it.
-- **Convergence**: merging the stream branch into `master` through the parent PR, then the release owner tags the merge commit. That tag is the release.
+- **Convergence**: merging the stream branch into `master` through the parent PR. The release owner then tags the merge commit; that tag is the release.
 
 ## 2. The process at a glance
 
@@ -93,7 +93,7 @@ Update rule: when a child PR merges, closes or opens, the parent body is updated
 
 ## 8. Changelog and breaking-change notes
 
-- `CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The PR that changes behavior adds its line under `## [Unreleased]` (Added, Changed, Fixed, Security, Removed), ending with the PR number. The release commit moves `[Unreleased]` to the version heading. Security lines describe the behavior, never the finding.
+- `CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The PR that changes behavior adds its line under `## [Unreleased]` (Added, Changed, Fixed, Security, Removed), ending with the PR number. A changelog PR into `dev` renames `[Unreleased]` to the version heading. Security lines describe the behavior, never the finding.
 - Every breaking change is listed under "Breaking changes" in `CHANGELOG.md`, with the caller selection that enables it and the upgrade path for the keep-core consumer.
 
 ## 9. Checklist for a new PR
