@@ -24,8 +24,9 @@ flowchart TD
   NR --> PP[Child PR merges into the stream branch]
   BR --> PP
   PP --> UP[Update the parent PR body and the changelog]
-  UP --> REL[Release: the release owner tags the merge commit]
-  REL --> CV[Convergence: the tag is published by the release workflow]
+  UP --> CV[Convergence: the parent PR merges into master]
+  CV --> REL[Release: the release owner tags the merge commit]
+  REL --> PUB[The release workflow publishes it]
 ```
 
 ## 3. Keep the number of streams small
