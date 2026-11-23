@@ -73,6 +73,7 @@ belongs to PR #2 (the base BNB hardening integration) unless it is tagged with a
 - **PR #38** — stop caching private-key Paillier decryption state; go directive CI check.
 - **PR #39** — signing delivers `*common.SignatureData` instead of a by-value protobuf message.
 - **PR #40** — changelog and README completed for the `dev` integration.
+- **PR #43** — signing round 4 refuses a non-canonical peer theta (`BNB e47faf8`).
 - Review fixes `873b8ad`..`fa6ef4d` — pushed directly to `dev` during the review of the
   `dev` -> `master` PR (#37); recorded in that PR's comments.
 
@@ -661,6 +662,12 @@ rejecting input that an honest caller would previously have produced.
 - **ECDSA signing round-4 nil theta-inverse guard (PR #4):** a non-invertible theta
   (`ModInverse` returning nil) is rejected with a clean error instead of propagating nil
   (`ecdsa/signing/round_4.go`). _Provenance: `BNB #332`, PR #4._
+- **ECDSA signing round-4 canonical peer theta (PR #43):** round 4 refuses a peer's round-3
+  `theta` whose encoding is longer than the curve order or whose value is not below it, and
+  names the sender, instead of reducing it modulo the curve order. An honest `theta` leaves
+  round 3 through a modular addition and `big.Int.Bytes`, on this branch and on the
+  historical `2e712689` release, so it is always in `[0, q)`; no wire or transcript change
+  (`ecdsa/signing/round_4.go`). _Provenance: `BNB #332` (`BNB e47faf8`), PR #43._
 - **Shared cryptographic input validators (PR #6):** `common/validation.go` adds reusable
   canonical checks for unknown-order moduli, generators, and Paillier ciphertexts, wired into
   the proof verifiers and round handlers. _Provenance: `BNB #252`/`BNB #332`, PR #6._
