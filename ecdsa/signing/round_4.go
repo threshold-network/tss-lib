@@ -28,15 +28,32 @@ func (round *round4) Start() *tss.Error {
 	theta := *round.temp.theta
 	thetaInverse := &theta
 
-	modN := common.ModInt(round.Params().EC().Params().N)
+	q := round.Params().EC().Params().N
+	modN := common.ModInt(q)
 
-	for j := range round.Parties().IDs() {
+	// Reject a non-canonical peer theta instead of reducing it (BNB e47faf8).
+	// Round 3 produces theta through modN.Mul/modN.Add and encodes it with
+	// big.Int.Bytes, on this branch and on the historical 2e712689 release
+	// alike, so an honest theta is always in [0, q) and never longer than the
+	// curve order. The length test bounds what SetBytes materialises; the
+	// range test stops two encodings of one scalar from both being accepted.
+	// The bound depends on the curve, which SignRound3Message.ValidateBasic
+	// does not have, so the check lives here.
+	qBytes := (q.BitLen() + 7) / 8
+	for j, Pj := range round.Parties().IDs() {
 		if j == round.PartyID().Index {
 			continue
 		}
 		r3msg := round.temp.signRound3Messages[j].Content().(*SignRound3Message)
 		theltaJ := r3msg.GetTheta()
-		thetaInverse = modN.Add(thetaInverse, new(big.Int).SetBytes(theltaJ))
+		if len(theltaJ) > qBytes {
+			return round.WrapError(errors.New("theta is longer than the curve order"), Pj)
+		}
+		thetaJ := new(big.Int).SetBytes(theltaJ)
+		if thetaJ.Cmp(q) >= 0 {
+			return round.WrapError(errors.New("theta is not a canonical scalar"), Pj)
+		}
+		thetaInverse = modN.Add(thetaInverse, thetaJ)
 	}
 
 	// compute the multiplicative inverse thelta mod q
